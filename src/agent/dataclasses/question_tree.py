@@ -12,6 +12,7 @@ class QuestionNode(BaseModel):
     sub_nodes: list[QuestionNode] = Field(default_factory=list)
 
     aspect: Optional[str] = None
+    provenance: Optional[dict] = None
 
 
 class QuestionTree(BaseModel):

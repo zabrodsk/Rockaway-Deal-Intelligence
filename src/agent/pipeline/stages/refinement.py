@@ -18,14 +18,10 @@ from openai import RateLimitError
 from agent.common.llm_config import get_llm
 from agent.common.utils import format_qa_pairs_with_index
 from agent.dataclasses.argument import Argument
+from agent.prompt_library.manager import get_prompt
 from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
 from agent.pipeline.state.schemas import IndividualRefinedArgumentOutput
-from agent.prompts import (
-    REFINE_CONTRA_ARGUMENT_SYSTEM_PROMPT,
-    REFINE_CONTRA_ARGUMENTS_USER_PROMPT,
-    REFINE_PRO_ARGUMENT_SYSTEM_PROMPT,
-    REFINE_PRO_ARGUMENTS_USER_PROMPT,
-)
+from agent.rate_limit import gather_with_concurrency
 
 # Initialize LLM
 llm = get_llm(temperature=0.5)
@@ -35,13 +31,17 @@ llm = get_llm(temperature=0.5)
     backoff.expo, RateLimitError, max_tries=5, max_time=60, jitter=backoff.full_jitter
 )
 async def _refine_individual_pro_argument(
-    argument: Argument, qa_pairs_formatted: str
+    argument: Argument,
+    qa_pairs_formatted: str,
+    prompt_overrides: dict | None = None,
 ) -> IndividualRefinedArgumentOutput:
     """Refine a single pro argument using its critique and feedback.
 
     Uses the argument's feedback scores to guide improvement,
     focusing on low-scoring criteria.
     """
+    pro_system_prompt = get_prompt("refinement.pro_system", prompt_overrides)
+    pro_user_prompt = get_prompt("refinement.pro_user", prompt_overrides)
     llm_with_structured_output = llm.with_structured_output(
         IndividualRefinedArgumentOutput
     )
@@ -49,9 +49,9 @@ async def _refine_individual_pro_argument(
     refined_argument: IndividualRefinedArgumentOutput = (
         await llm_with_structured_output.ainvoke(
             [
-                SystemMessage(content=REFINE_PRO_ARGUMENT_SYSTEM_PROMPT),
+                SystemMessage(content=pro_system_prompt),
                 HumanMessage(
-                    content=REFINE_PRO_ARGUMENTS_USER_PROMPT.format(
+                    content=pro_user_prompt.format(
                         argument=argument.content,
                         argument_feedback=argument.argument_feedback,
                         questions_and_answers=qa_pairs_formatted,
@@ -68,13 +68,17 @@ async def _refine_individual_pro_argument(
     backoff.expo, RateLimitError, max_tries=5, max_time=60, jitter=backoff.full_jitter
 )
 async def _refine_individual_contra_argument(
-    argument: Argument, qa_pairs_formatted: str
+    argument: Argument,
+    qa_pairs_formatted: str,
+    prompt_overrides: dict | None = None,
 ) -> IndividualRefinedArgumentOutput:
     """Refine a single contra argument using its critique and feedback.
 
     Uses the argument's feedback scores to guide improvement,
     focusing on low-scoring criteria.
     """
+    contra_system_prompt = get_prompt("refinement.contra_system", prompt_overrides)
+    contra_user_prompt = get_prompt("refinement.contra_user", prompt_overrides)
     llm_with_structured_output = llm.with_structured_output(
         IndividualRefinedArgumentOutput
     )
@@ -82,9 +86,9 @@ async def _refine_individual_contra_argument(
     refined_argument: IndividualRefinedArgumentOutput = (
         await llm_with_structured_output.ainvoke(
             [
-                SystemMessage(content=REFINE_CONTRA_ARGUMENT_SYSTEM_PROMPT),
+                SystemMessage(content=contra_system_prompt),
                 HumanMessage(
-                    content=REFINE_CONTRA_ARGUMENTS_USER_PROMPT.format(
+                    content=contra_user_prompt.format(
                         argument=argument.content,
                         argument_feedback=argument.argument_feedback,
                         questions_and_answers=qa_pairs_formatted,
@@ -117,11 +121,15 @@ async def refine_pro_arguments(
     formatted_qa_pairs = format_qa_pairs_with_index(qa_pairs)
 
     refinement_tasks = [
-        _refine_individual_pro_argument(arg, formatted_qa_pairs)
+        _refine_individual_pro_argument(
+            arg,
+            formatted_qa_pairs,
+            prompt_overrides=state.prompt_overrides,
+        )
         for arg in pro_arguments_with_critiques
     ]
 
-    refined_results = await asyncio.gather(*refinement_tasks)
+    refined_results = await gather_with_concurrency(refinement_tasks)
 
     # Update arguments with refined content
     for arg, refined_result in zip(pro_arguments_with_critiques, refined_results):
@@ -156,11 +164,15 @@ async def refine_contra_arguments(
     formatted_qa_pairs = format_qa_pairs_with_index(qa_pairs)
 
     refinement_tasks = [
-        _refine_individual_contra_argument(arg, formatted_qa_pairs)
+        _refine_individual_contra_argument(
+            arg,
+            formatted_qa_pairs,
+            prompt_overrides=state.prompt_overrides,
+        )
         for arg in contra_arguments_with_critiques
     ]
 
-    refined_results = await asyncio.gather(*refinement_tasks)
+    refined_results = await gather_with_concurrency(refinement_tasks)
 
     # Update arguments with refined content
     for arg, refined_result in zip(contra_arguments_with_critiques, refined_results):

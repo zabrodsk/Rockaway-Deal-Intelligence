@@ -12,14 +12,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.common.llm_config import get_llm
 from agent.common.utils import format_qa_pairs_with_index
+from agent.prompt_library.manager import get_prompt
 from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
 from agent.pipeline.state.schemas import ArgumentsOutput
 from agent.pipeline.utils.helpers import convert_llm_arguments_to_objects
-from agent.prompts import (
-    ARGUMENT_GENERATION_SYSTEM_PROMPT,
-    CONTRA_ARGUMENTS_USER_PROMPT,
-    PRO_ARGUMENTS_USER_PROMPT,
-)
 
 # Initialize LLM
 llm = get_llm(temperature=0.5)
@@ -64,13 +60,15 @@ def generate_pro_arguments(
     # Use all_qa_pairs from the answering stage
     qa_pairs = state.all_qa_pairs
     formatted_qa_pairs = format_qa_pairs_with_index(qa_pairs)
+    system_prompt = get_prompt("generation.system", state.prompt_overrides)
+    pro_user_prompt = get_prompt("generation.pro_user", state.prompt_overrides)
 
     llm_with_structured_output = llm.with_structured_output(ArgumentsOutput)
     arguments: ArgumentsOutput = llm_with_structured_output.invoke(
         [
-            SystemMessage(content=ARGUMENT_GENERATION_SYSTEM_PROMPT),
+            SystemMessage(content=system_prompt),
             HumanMessage(
-                content=PRO_ARGUMENTS_USER_PROMPT.format(
+                content=pro_user_prompt.format(
                     n_pro_arguments=state.config.n_pro_arguments,
                     questions_and_answers=formatted_qa_pairs,
                 )
@@ -109,13 +107,15 @@ def generate_contra_arguments(
     # Use all_qa_pairs from the answering stage
     qa_pairs = state.all_qa_pairs
     formatted_qa_pairs = format_qa_pairs_with_index(qa_pairs)
+    system_prompt = get_prompt("generation.system", state.prompt_overrides)
+    contra_user_prompt = get_prompt("generation.contra_user", state.prompt_overrides)
 
     llm_with_structured_output = llm.with_structured_output(ArgumentsOutput)
     arguments: ArgumentsOutput = llm_with_structured_output.invoke(
         [
-            SystemMessage(content=ARGUMENT_GENERATION_SYSTEM_PROMPT),
+            SystemMessage(content=system_prompt),
             HumanMessage(
-                content=CONTRA_ARGUMENTS_USER_PROMPT.format(
+                content=contra_user_prompt.format(
                     n_contra_arguments=state.config.n_contra_arguments,
                     questions_and_answers=formatted_qa_pairs,
                 )

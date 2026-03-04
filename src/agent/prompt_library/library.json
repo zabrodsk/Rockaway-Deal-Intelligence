@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "id": "questions.general_company",
+      "title": "General Company Alignment Question",
+      "stage": "questions",
+      "category": "Root Questions",
+      "source_path": "src/agent/pipeline/stages/constants.py",
+      "description": "Top-level question for strategy, stage, and geography fit.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "Do the company's sector, development stage, and operating geography align with the VC's investment strategy?",
+      "value": "Do the company's sector, development stage, and operating geography align with the VC's investment strategy?"
+    },
+    {
+      "id": "questions.market",
+      "title": "Market Question",
+      "stage": "questions",
+      "category": "Root Questions",
+      "source_path": "src/agent/pipeline/stages/constants.py",
+      "description": "Top-level question for market size, growth, and unmet needs.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "What is the current size, historical growth rate, and forecast growth of the target market and which specific customer needs or market gaps does the company address?",
+      "value": "What is the current size, historical growth rate, and forecast growth of the target market and which specific customer needs or market gaps does the company address?"
+    },
+    {
+      "id": "questions.product",
+      "title": "Product Question",
+      "stage": "questions",
+      "category": "Root Questions",
+      "source_path": "src/agent/pipeline/stages/constants.py",
+      "description": "Top-level question for product features and defensibility.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "What are the product's core features, underlying technology, and existing forms of protection?",
+      "value": "What are the product's core features, underlying technology, and existing forms of protection?"
+    },
+    {
+      "id": "questions.team",
+      "title": "Team Question",
+      "stage": "questions",
+      "category": "Root Questions",
+      "source_path": "src/agent/pipeline/stages/constants.py",
+      "description": "Top-level question for founder and team quality.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "Who are the key members of the founding team, and what relevant experience and track record do they have?",
+      "value": "Who are the key members of the founding team, and what relevant experience and track record do they have?"
+    },
+    {
+      "id": "decomposition.system",
+      "title": "Decomposition System Prompt",
+      "stage": "decomposition",
+      "category": "Question Decomposition",
+      "source_path": "src/agent/prompts/question_answering.py",
+      "description": "System instructions for generating hierarchical sub-question trees.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "\nYou are good at decomposing a complex question into a hierarchical question decomposition tree (HQDT).\n",
+      "value": "\nYou are good at decomposing a complex question into a hierarchical question decomposition tree (HQDT).\n"
+    },
+    {
+      "id": "decomposition.user",
+      "title": "Decomposition User Prompt",
+      "stage": "decomposition",
+      "category": "Question Decomposition",
+      "source_path": "src/agent/prompts/question_answering.py",
+      "description": "Template used to decompose each root question by industry.",
+      "type": "text",
+      "required_placeholders": [
+        "{question}",
+        "{industry}"
+      ],
+      "default_value": "\nPlease generate a hierarchical question decomposition tree (HQDT) with json format for a given question. In this tree, the root node is the original complex question, and each non-root node is a sub-question of its parent.\n\nQ: How large is the company's market opportunity (TAM, SAM, SOM)?\nA: {{\n  \"How large is the company's market opportunity (TAM, SAM, SOM)?\": [\n    \"What is the Total Addressable Market (TAM)?\",\n    \"What is the Serviceable Available Market (SAM)?\",\n    \"What is the Serviceable Obtainable Market (SOM)?\"\n  ],\n  \"What is the Total Addressable Market (TAM)?\": [\n    \"What customer segments are included in the broadest market?\",\n    \"What is the total number of potential customers?\",\n    \"What is the total industry revenue across those segments?\"\n  ],\n  \"What is the Serviceable Available Market (SAM)?\": [\n    \"Which subset of TAM does the company's product or service directly target?\",\n    \"What portion of customers can realistically be reached given geography, regulations, or product scope?\",\n    \"What is the annual spending of these customers?\"\n  ],\n  \"What is the Serviceable Obtainable Market (SOM)?\": [\n    \"What portion of SAM can the company realistically capture in the next 3–5 years?\",\n    \"What customer acquisition assumptions support this share?\",\n    \"What expected adoption rate drives this forecast?\",\n    \"What annual revenue corresponds to this achievable market share?\"\n  ]\n}}\n\nQ: What is the competitive landscape, and how is the company positioned within it?\nA: {{\n  \"What is the competitive landscape, and how is the company positioned within it?\": [\n    \"What is the competitive landscape?\",\n    \"How is the company positioned within the competitive landscape?\"\n  ],\n  \"What is the competitive landscape?\": [\n    \"Who are the direct competitors?\",\n    \"Who are the indirect competitors or substitutes?\",\n    \"What are the major trends shaping competition in this space?\"\n  ],\n  \"How is the company positioned within the competitive landscape?\": [\n    \"What is the company's relative pricing strategy?\",\n    \"What is the company's market share or traction compared to peers?\",\n    \"Does the company occupy a niche or broader category?\",\n    \"What barriers to entry protect the company's position?\"\n  ]\n}}\n\nQ: What is the company's product differentiation and value proposition?\nA: {{\n  \"What is the company's product differentiation and value proposition?\": [\n    \"What is the company's product differentiation?\",\n    \"What is the company's value proposition?\"\n  ],\n  \"What is the company's product differentiation?\": [\n    \"What features or technologies distinguish the product?\",\n    \"How is the product better than alternatives?\",\n    \"What intellectual property (e.g., patents, proprietary tech) supports defensibility?\"\n  ],\n  \"What is the company's value proposition?\": [\n    \"What problem does the product solve for customers?\",\n    \"What measurable benefits (e.g., cost savings, time savings, revenue uplift) does it deliver?\",\n    \"Why would customers choose this company over competitors?\"\n  ]\n}}\n\nHere is the question to decompose:\nQ: {question}\n\nGenerate its HQDT customized for a company in the {industry} industry.\n",
+      "value": "\nPlease generate a hierarchical question decomposition tree (HQDT) with json format for a given question. In this tree, the root node is the original complex question, and each non-root node is a sub-question of its parent.\n\nQ: How large is the company's market opportunity (TAM, SAM, SOM)?\nA: {{\n  \"How large is the company's market opportunity (TAM, SAM, SOM)?\": [\n    \"What is the Total Addressable Market (TAM)?\",\n    \"What is the Serviceable Available Market (SAM)?\",\n    \"What is the Serviceable Obtainable Market (SOM)?\"\n  ],\n  \"What is the Total Addressable Market (TAM)?\": [\n    \"What customer segments are included in the broadest market?\",\n    \"What is the total number of potential customers?\",\n    \"What is the total industry revenue across those segments?\"\n  ],\n  \"What is the Serviceable Available Market (SAM)?\": [\n    \"Which subset of TAM does the company's product or service directly target?\",\n    \"What portion of customers can realistically be reached given geography, regulations, or product scope?\",\n    \"What is the annual spending of these customers?\"\n  ],\n  \"What is the Serviceable Obtainable Market (SOM)?\": [\n    \"What portion of SAM can the company realistically capture in the next 3–5 years?\",\n    \"What customer acquisition assumptions support this share?\",\n    \"What expected adoption rate drives this forecast?\",\n    \"What annual revenue corresponds to this achievable market share?\"\n  ]\n}}\n\nQ: What is the competitive landscape, and how is the company positioned within it?\nA: {{\n  \"What is the competitive landscape, and how is the company positioned within it?\": [\n    \"What is the competitive landscape?\",\n    \"How is the company positioned within the competitive landscape?\"\n  ],\n  \"What is the competitive landscape?\": [\n    \"Who are the direct competitors?\",\n    \"Who are the indirect competitors or substitutes?\",\n    \"What are the major trends shaping competition in this space?\"\n  ],\n  \"How is the company positioned within the competitive landscape?\": [\n    \"What is the company's relative pricing strategy?\",\n    \"What is the company's market share or traction compared to peers?\",\n    \"Does the company occupy a niche or broader category?\",\n    \"What barriers to entry protect the company's position?\"\n  ]\n}}\n\nQ: What is the company's product differentiation and value proposition?\nA: {{\n  \"What is the company's product differentiation and value proposition?\": [\n    \"What is the company's product differentiation?\",\n    \"What is the company's value proposition?\"\n  ],\n  \"What is the company's product differentiation?\": [\n    \"What features or technologies distinguish the product?\",\n    \"How is the product better than alternatives?\",\n    \"What intellectual property (e.g., patents, proprietary tech) supports defensibility?\"\n  ],\n  \"What is the company's value proposition?\": [\n    \"What problem does the product solve for customers?\",\n    \"What measurable benefits (e.g., cost savings, time savings, revenue uplift) does it deliver?\",\n    \"Why would customers choose this company over competitors?\"\n  ]\n}}\n\nHere is the question to decompose:\nQ: {question}\n\nGenerate its HQDT customized for a company in the {industry} industry.\n"
+    },
+    {
+      "id": "evidence.grounded.system",
+      "title": "Evidence Grounded System Prompt",
+      "stage": "evidence",
+      "category": "Evidence Answering",
+      "source_path": "src/agent/evidence_answering.py",
+      "description": "System prompt for document-only grounded answers.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You are an investment analyst answering due-diligence questions about a startup.\n\nRules:\n- Answer ONLY using the evidence chunks provided below.\n- Cite chunks by their IDs, e.g. [chunk_12], [chunk_44].\n- Keep answers concise (under 80 words) and data-backed.\n- If the provided evidence does not contain enough information to answer, respond with \"Unknown from provided documents.\"\n- Do NOT invent facts or use external knowledge.\n",
+      "value": "You are an investment analyst answering due-diligence questions about a startup.\n\nRules:\n- Answer ONLY using the evidence chunks provided below.\n- Cite chunks by their IDs, e.g. [chunk_12], [chunk_44].\n- Keep answers concise (under 80 words) and data-backed.\n- If the provided evidence does not contain enough information to answer, respond with \"Unknown from provided documents.\"\n- Do NOT invent facts or use external knowledge.\n"
+    },
+    {
+      "id": "evidence.grounded.user",
+      "title": "Evidence Grounded User Prompt",
+      "stage": "evidence",
+      "category": "Evidence Answering",
+      "source_path": "src/agent/evidence_answering.py",
+      "description": "User prompt template for grounded answers using retrieved chunks.",
+      "type": "text",
+      "required_placeholders": [
+        "{company_summary}",
+        "{question}",
+        "{chunks_text}"
+      ],
+      "default_value": "Company: {company_summary}\n\nQuestion: {question}\n\nEvidence chunks:\n{chunks_text}\n",
+      "value": "Company: {company_summary}\n\nQuestion: {question}\n\nEvidence chunks:\n{chunks_text}\n"
+    },
+    {
+      "id": "evidence.hybrid.system",
+      "title": "Evidence Hybrid System Prompt",
+      "stage": "evidence",
+      "category": "Evidence Answering",
+      "source_path": "src/agent/evidence_answering.py",
+      "description": "System prompt for document + web fallback answering.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You are an investment analyst answering due-diligence questions about a startup.\n\nYou have TWO sources of information:\n1. Document evidence chunks from the startup's own materials (cite as [chunk_XX]) — this is the PRIMARY source. Insider info from pitch decks, financials, and spreadsheets is critical and authoritative.\n2. Web search results (cite as [web]) — ONLY a fallback when documents lack the answer.\n\nRules:\n- Prioritize document evidence ALWAYS. It is the main source.\n- Use web search results ONLY to fill gaps when documents cannot answer.\n- Keep answers concise (under 100 words) and data-backed.\n- Always indicate which source you are citing.\n- If neither source has enough information, say \"Insufficient information available.\"\n",
+      "value": "You are an investment analyst answering due-diligence questions about a startup.\n\nYou have TWO sources of information:\n1. Document evidence chunks from the startup's own materials (cite as [chunk_XX]) — this is the PRIMARY source. Insider info from pitch decks, financials, and spreadsheets is critical and authoritative.\n2. Web search results (cite as [web]) — ONLY a fallback when documents lack the answer.\n\nRules:\n- Prioritize document evidence ALWAYS. It is the main source.\n- Use web search results ONLY to fill gaps when documents cannot answer.\n- Keep answers concise (under 100 words) and data-backed.\n- Always indicate which source you are citing.\n- If neither source has enough information, say \"Insufficient information available.\"\n"
+    },
+    {
+      "id": "evidence.hybrid.user",
+      "title": "Evidence Hybrid User Prompt",
+      "stage": "evidence",
+      "category": "Evidence Answering",
+      "source_path": "src/agent/evidence_answering.py",
+      "description": "User prompt template for hybrid document and web contexts.",
+      "type": "text",
+      "required_placeholders": [
+        "{company_summary}",
+        "{question}",
+        "{chunks_text}",
+        "{web_results}"
+      ],
+      "default_value": "Company: {company_summary}\n\nQuestion: {question}\n\n=== Document Evidence ===\n{chunks_text}\n\n=== Web Search Results ===\n{web_results}\n",
+      "value": "Company: {company_summary}\n\nQuestion: {question}\n\n=== Document Evidence ===\n{chunks_text}\n\n=== Web Search Results ===\n{web_results}\n"
+    },
+    {
+      "id": "generation.system",
+      "title": "Argument Generation System Prompt",
+      "stage": "generation",
+      "category": "Argument Generation",
+      "source_path": "src/agent/prompts/argument_generation.py",
+      "description": "System instruction for generating investment arguments.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You are a very experienced investor at a top‑tier VC fund. You are also a great storyteller and can tell a compelling story.\n\n",
+      "value": "You are a very experienced investor at a top‑tier VC fund. You are also a great storyteller and can tell a compelling story.\n\n"
+    },
+    {
+      "id": "generation.pro_user",
+      "title": "Pro Argument User Prompt",
+      "stage": "generation",
+      "category": "Argument Generation",
+      "source_path": "src/agent/prompts/argument_generation.py",
+      "description": "Template for generating pro-investment arguments.",
+      "type": "text",
+      "required_placeholders": [
+        "{n_pro_arguments}",
+        "{questions_and_answers}"
+      ],
+      "default_value": "Generate {n_pro_arguments} pro arguments why this company is a good investment opportunity.\n\nEach argument should be concise (max. 100 words) and backed by specific data from the questions and answers.\n\nA good argument provides a unique perspective on the investment opportunity that addresses the following criteria:\n1. Local Acceptability - Are the premises believable and factually plausible given the provided Q&A facts?\n2. Local Relevance - Do the premises clearly contribute to supporting or rejecting the conclusion about investment?\n3. Local Sufficiency - Do the premises provide enough support to justify the conclusion?\n4. Cogency - Does the argument have premises that are acceptable, relevant, and sufficient to support the investment conclusion?\n5. Credibility - Does the argument make the author appear credible and trustworthy to VC investors?\n6. Emotional Appeal - Does the argument create emotions that make the VC investors more receptive?\n7. Clarity - Does the argument use correct and widely unambiguous language as well as avoid deviation from the issue?\n8. Appropriateness - Is the style of reasoning and language suitable for a professional VC investment discussion?\n9. Arrangement - Is the argument well-structured, with a logical order of premises and conclusion?\n10. Effectiveness - Does the argument succeed in persuading the VC investors toward or against investing?\n11. Global Acceptability - Would most VCs consider it a valid/legitimate argument?\n12. Global Relevance - Does the argument meaningfully contribute to resolving the overall investment question?\n13. Global Sufficiency - Does the argument adequately anticipate and rebut the main counterarguments from the argument's stance?\n14. Reasonableness - Does the argument resolve the issue in a way acceptable to the VC investors, balancing global acceptability, relevance, and sufficiency?\n\nHere are the questions and answers about the company:\n{questions_and_answers}\n\nProvide the qa_indices that were used to generate the argument but never show them in the argument text.\n",
+      "value": "Generate {n_pro_arguments} pro arguments why this company is a good investment opportunity.\n\nEach argument should be concise (max. 100 words) and backed by specific data from the questions and answers.\n\nA good argument provides a unique perspective on the investment opportunity that addresses the following criteria:\n1. Local Acceptability - Are the premises believable and factually plausible given the provided Q&A facts?\n2. Local Relevance - Do the premises clearly contribute to supporting or rejecting the conclusion about investment?\n3. Local Sufficiency - Do the premises provide enough support to justify the conclusion?\n4. Cogency - Does the argument have premises that are acceptable, relevant, and sufficient to support the investment conclusion?\n5. Credibility - Does the argument make the author appear credible and trustworthy to VC investors?\n6. Emotional Appeal - Does the argument create emotions that make the VC investors more receptive?\n7. Clarity - Does the argument use correct and widely unambiguous language as well as avoid deviation from the issue?\n8. Appropriateness - Is the style of reasoning and language suitable for a professional VC investment discussion?\n9. Arrangement - Is the argument well-structured, with a logical order of premises and conclusion?\n10. Effectiveness - Does the argument succeed in persuading the VC investors toward or against investing?\n11. Global Acceptability - Would most VCs consider it a valid/legitimate argument?\n12. Global Relevance - Does the argument meaningfully contribute to resolving the overall investment question?\n13. Global Sufficiency - Does the argument adequately anticipate and rebut the main counterarguments from the argument's stance?\n14. Reasonableness - Does the argument resolve the issue in a way acceptable to the VC investors, balancing global acceptability, relevance, and sufficiency?\n\nHere are the questions and answers about the company:\n{questions_and_answers}\n\nProvide the qa_indices that were used to generate the argument but never show them in the argument text.\n"
+    },
+    {
+      "id": "generation.contra_user",
+      "title": "Contra Argument User Prompt",
+      "stage": "generation",
+      "category": "Argument Generation",
+      "source_path": "src/agent/prompts/argument_generation.py",
+      "description": "Template for generating contra-investment arguments.",
+      "type": "text",
+      "required_placeholders": [
+        "{n_contra_arguments}",
+        "{questions_and_answers}"
+      ],
+      "default_value": "Generate {n_contra_arguments} contra arguments why this company is a bad investment opportunity.\n\nEach argument should be concise (2-3 sentences) and backed by specific data from the questions and answers.\nLack of data is not a good contra argument.\n\nA good argument provides a unique perspective on the investment opportunity that addresses the following criteria:\n1. Local Acceptability - Are the premises believable and factually plausible given the provided Q&A facts?\n2. Local Relevance - Do the premises clearly contribute to supporting or rejecting the conclusion about investment?\n3. Local Sufficiency - Do the premises provide enough support to justify the conclusion?\n4. Cogency - Does the argument have premises that are acceptable, relevant, and sufficient to support the investment conclusion?\n5. Credibility - Does the argument make the author appear credible and trustworthy to VC investors?\n6. Emotional Appeal - Does the argument create emotions that make the VC investors more receptive?\n7. Clarity - Does the argument use correct and widely unambiguous language as well as avoid deviation from the issue?\n8. Appropriateness - Is the style of reasoning and language suitable for a professional VC investment discussion?\n9. Arrangement - Is the argument well-structured, with a logical order of premises and conclusion?\n10. Effectiveness - Does the argument succeed in persuading the VC investors toward or against investing?\n11. Global Acceptability - Would most VCs consider it a valid/legitimate argument?\n12. Global Relevance - Does the argument meaningfully contribute to resolving the overall investment question?\n13. Global Sufficiency - Does the argument adequately anticipate and rebut the main counterarguments from the argument's stance?\n14. Reasonableness - Does the argument resolve the issue in a way acceptable to the VC investors, balancing global acceptability, relevance, and sufficiency?\n\nHere are the questions and answers about the company:\n{questions_and_answers}\n\nProvide the qa_indices that were used to generate the argument but never show them in the argument text.\n",
+      "value": "Generate {n_contra_arguments} contra arguments why this company is a bad investment opportunity.\n\nEach argument should be concise (2-3 sentences) and backed by specific data from the questions and answers.\nLack of data is not a good contra argument.\n\nA good argument provides a unique perspective on the investment opportunity that addresses the following criteria:\n1. Local Acceptability - Are the premises believable and factually plausible given the provided Q&A facts?\n2. Local Relevance - Do the premises clearly contribute to supporting or rejecting the conclusion about investment?\n3. Local Sufficiency - Do the premises provide enough support to justify the conclusion?\n4. Cogency - Does the argument have premises that are acceptable, relevant, and sufficient to support the investment conclusion?\n5. Credibility - Does the argument make the author appear credible and trustworthy to VC investors?\n6. Emotional Appeal - Does the argument create emotions that make the VC investors more receptive?\n7. Clarity - Does the argument use correct and widely unambiguous language as well as avoid deviation from the issue?\n8. Appropriateness - Is the style of reasoning and language suitable for a professional VC investment discussion?\n9. Arrangement - Is the argument well-structured, with a logical order of premises and conclusion?\n10. Effectiveness - Does the argument succeed in persuading the VC investors toward or against investing?\n11. Global Acceptability - Would most VCs consider it a valid/legitimate argument?\n12. Global Relevance - Does the argument meaningfully contribute to resolving the overall investment question?\n13. Global Sufficiency - Does the argument adequately anticipate and rebut the main counterarguments from the argument's stance?\n14. Reasonableness - Does the argument resolve the issue in a way acceptable to the VC investors, balancing global acceptability, relevance, and sufficiency?\n\nHere are the questions and answers about the company:\n{questions_and_answers}\n\nProvide the qa_indices that were used to generate the argument but never show them in the argument text.\n"
+    },
+    {
+      "id": "critique.pro_system",
+      "title": "Critique Pro System Prompt",
+      "stage": "critique",
+      "category": "Devil's Advocate Critique",
+      "source_path": "src/agent/prompts/argument_critique.py",
+      "description": "System role for critiquing pro arguments.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You are a very experienced VC investor against investing in the company. However, your colleague thinks it is a good investment opportunity.\nYour job is to criticize the pro argument given by your colleague using the questions and answers about the company and defend your position.\nBe direct to persuade your colleague not to invest in the company.\n",
+      "value": "You are a very experienced VC investor against investing in the company. However, your colleague thinks it is a good investment opportunity.\nYour job is to criticize the pro argument given by your colleague using the questions and answers about the company and defend your position.\nBe direct to persuade your colleague not to invest in the company.\n"
+    },
+    {
+      "id": "critique.pro_user",
+      "title": "Critique Pro User Prompt",
+      "stage": "critique",
+      "category": "Devil's Advocate Critique",
+      "source_path": "src/agent/prompts/argument_critique.py",
+      "description": "Template for critiquing pro arguments using Q&A.",
+      "type": "text",
+      "required_placeholders": [
+        "{questions_and_answers}",
+        "{argument}"
+      ],
+      "default_value": "Here are the questions and answers about the company:\n{questions_and_answers}\n\nHere is the argument you have to criticize to persuade the colleague not to invest in the company:\n{argument}\n\nKeep your critique concise in 3-4 sentences.\n",
+      "value": "Here are the questions and answers about the company:\n{questions_and_answers}\n\nHere is the argument you have to criticize to persuade the colleague not to invest in the company:\n{argument}\n\nKeep your critique concise in 3-4 sentences.\n"
+    },
+    {
+      "id": "critique.contra_system",
+      "title": "Critique Contra System Prompt",
+      "stage": "critique",
+      "category": "Devil's Advocate Critique",
+      "source_path": "src/agent/prompts/argument_critique.py",
+      "description": "System role for critiquing contra arguments.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You are a very experienced VC investor in favor of investing in the company. However, your colleague thinks it is a bad investment opportunity.\nYour job is to criticize the given contra argument given by your colleague using the questions and answers about the company and defend your position.\nBe direct to persuade your colleague to invest in the company.\n",
+      "value": "You are a very experienced VC investor in favor of investing in the company. However, your colleague thinks it is a bad investment opportunity.\nYour job is to criticize the given contra argument given by your colleague using the questions and answers about the company and defend your position.\nBe direct to persuade your colleague to invest in the company.\n"
+    },
+    {
+      "id": "critique.contra_user",
+      "title": "Critique Contra User Prompt",
+      "stage": "critique",
+      "category": "Devil's Advocate Critique",
+      "source_path": "src/agent/prompts/argument_critique.py",
+      "description": "Template for critiquing contra arguments using Q&A.",
+      "type": "text",
+      "required_placeholders": [
+        "{questions_and_answers}",
+        "{argument}"
+      ],
+      "default_value": "Here are the questions and answers about the company:\n{questions_and_answers}\n\nHere is the argument you have to criticize to persuade the colleague to invest in the company:\n{argument}\n\nKeep your critique concise in 3-4 sentences.\n",
+      "value": "Here are the questions and answers about the company:\n{questions_and_answers}\n\nHere is the argument you have to criticize to persuade the colleague to invest in the company:\n{argument}\n\nKeep your critique concise in 3-4 sentences.\n"
+    },
+    {
+      "id": "evaluation.criteria_mapping",
+      "title": "Evaluation Criteria Mapping",
+      "stage": "evaluation",
+      "category": "Argument Evaluation",
+      "source_path": "src/agent/prompts/argument_evaluation.py",
+      "description": "List of 14 criterion names used in evaluation and feedback formatting.",
+      "type": "list",
+      "required_placeholders": [],
+      "default_value": [
+        "Local Acceptability",
+        "Local Relevance",
+        "Local Sufficiency",
+        "Cogency",
+        "Credibility",
+        "Emotional Appeal",
+        "Clarity",
+        "Appropriateness",
+        "Arrangement",
+        "Effectiveness",
+        "Global Acceptability",
+        "Global Relevance",
+        "Global Sufficiency",
+        "Reasonableness"
+      ],
+      "value": [
+        "Local Acceptability",
+        "Local Relevance",
+        "Local Sufficiency",
+        "Cogency",
+        "Credibility",
+        "Emotional Appeal",
+        "Clarity",
+        "Appropriateness",
+        "Arrangement",
+        "Effectiveness",
+        "Global Acceptability",
+        "Global Relevance",
+        "Global Sufficiency",
+        "Reasonableness"
+      ]
+    },
+    {
+      "id": "evaluation.system",
+      "title": "Evaluation System Prompt",
+      "stage": "evaluation",
+      "category": "Argument Evaluation",
+      "source_path": "src/agent/prompts/argument_evaluation.py",
+      "description": "System instruction for scoring arguments on 14 criteria.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You are an impartial LLM judge to evaluate the quality of an argument in the VC investment context. The goal of the argument is to support or reject a startup investment decision in a persuasive way.\nThe quality of an argument in the venture capital investment context should be evaluated along the following 14 dimensions. For each dimension, assign a score from 1 (Low) to 7 (High), and provide a short feedback (1 sentence) how to improve the score.\n\n14 Dimensions:\n1. Local Acceptability - Are the premises believable and factually plausible given the provided Q&A facts?\n2. Local Relevance - Do the premises clearly contribute to supporting or rejecting the conclusion about investment?\n3. Local Sufficiency - Do the premises provide enough support to justify the conclusion?\n4. Cogency - Does the argument have premises that are acceptable, relevant, and sufficient to support the investment conclusion?\n5. Credibility - Does the argument make the author appear credible and trustworthy to VC investors?\n6. Emotional Appeal - Does the argument create emotions that make the VC investors more receptive?\n7. Clarity - Does the argument use correct and widely unambiguous language as well as avoid deviation from the issue?\n8. Appropriateness - Is the style of reasoning and language suitable for a professional VC investment discussion?\n9. Arrangement - Is the argument well-structured, with a logical order of premises and conclusion?\n10. Effectiveness - Does the argument succeed in persuading the VC investors toward or against investing?\n11. Global Acceptability - Would most VCs consider it a valid/legitimate argument?\n12. Global Relevance - Does the argument meaningfully contribute to resolving the overall investment question?\n13. Global Sufficiency - Does the argument adequately anticipate and rebut the main counterarguments from the argument's stance?\n14. Reasonableness - Does the argument resolve the issue in a way acceptable to the VC investors, balancing global acceptability, relevance, and sufficiency?\n",
+      "value": "You are an impartial LLM judge to evaluate the quality of an argument in the VC investment context. The goal of the argument is to support or reject a startup investment decision in a persuasive way.\nThe quality of an argument in the venture capital investment context should be evaluated along the following 14 dimensions. For each dimension, assign a score from 1 (Low) to 7 (High), and provide a short feedback (1 sentence) how to improve the score.\n\n14 Dimensions:\n1. Local Acceptability - Are the premises believable and factually plausible given the provided Q&A facts?\n2. Local Relevance - Do the premises clearly contribute to supporting or rejecting the conclusion about investment?\n3. Local Sufficiency - Do the premises provide enough support to justify the conclusion?\n4. Cogency - Does the argument have premises that are acceptable, relevant, and sufficient to support the investment conclusion?\n5. Credibility - Does the argument make the author appear credible and trustworthy to VC investors?\n6. Emotional Appeal - Does the argument create emotions that make the VC investors more receptive?\n7. Clarity - Does the argument use correct and widely unambiguous language as well as avoid deviation from the issue?\n8. Appropriateness - Is the style of reasoning and language suitable for a professional VC investment discussion?\n9. Arrangement - Is the argument well-structured, with a logical order of premises and conclusion?\n10. Effectiveness - Does the argument succeed in persuading the VC investors toward or against investing?\n11. Global Acceptability - Would most VCs consider it a valid/legitimate argument?\n12. Global Relevance - Does the argument meaningfully contribute to resolving the overall investment question?\n13. Global Sufficiency - Does the argument adequately anticipate and rebut the main counterarguments from the argument's stance?\n14. Reasonableness - Does the argument resolve the issue in a way acceptable to the VC investors, balancing global acceptability, relevance, and sufficiency?\n"
+    },
+    {
+      "id": "evaluation.user",
+      "title": "Evaluation User Prompt",
+      "stage": "evaluation",
+      "category": "Argument Evaluation",
+      "source_path": "src/agent/prompts/argument_evaluation.py",
+      "description": "Template for evaluating a single argument and optional critique context.",
+      "type": "text",
+      "required_placeholders": [
+        "{argument}",
+        "{critique}"
+      ],
+      "default_value": "Argument to evaluate:\n{argument}\n{critique}\n",
+      "value": "Argument to evaluate:\n{argument}\n{critique}\n"
+    },
+    {
+      "id": "refinement.pro_system",
+      "title": "Refinement Pro System Prompt",
+      "stage": "refinement",
+      "category": "Argument Refinement",
+      "source_path": "src/agent/prompts/argument_refinement.py",
+      "description": "System instruction for refining pro arguments.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You are a very experienced investor at a top‑tier VC fund. You are sure that the company is a good investment opportunity.\nYour job is to revise your argument to reach better argument quality scores.\n",
+      "value": "You are a very experienced investor at a top‑tier VC fund. You are sure that the company is a good investment opportunity.\nYour job is to revise your argument to reach better argument quality scores.\n"
+    },
+    {
+      "id": "refinement.pro_user",
+      "title": "Refinement Pro User Prompt",
+      "stage": "refinement",
+      "category": "Argument Refinement",
+      "source_path": "src/agent/prompts/argument_refinement.py",
+      "description": "Template for refining pro arguments with score feedback.",
+      "type": "text",
+      "required_placeholders": [
+        "{questions_and_answers}",
+        "{argument}",
+        "{argument_feedback}"
+      ],
+      "default_value": "Here are the Q&A facts about the company:\n{questions_and_answers}\n\nHere is your previous argument:\n{argument}\n\nHere are the argument quality scores (1-7) to your previous argument:\n{argument_feedback}\n\nRefine your argument by improving argument quality scores.\n\nOutput format:\n{{\n    \"refined_argument\": \"Refined Argument without qa_indices (one paragraph in max. 2 sentences)\",\n    \"qa_indices\": \"List of indices referencing which questions and answers from the provided Q&A pairs were used to support this argument\"\n}}\n",
+      "value": "Here are the Q&A facts about the company:\n{questions_and_answers}\n\nHere is your previous argument:\n{argument}\n\nHere are the argument quality scores (1-7) to your previous argument:\n{argument_feedback}\n\nRefine your argument by improving argument quality scores.\n\nOutput format:\n{{\n    \"refined_argument\": \"Refined Argument without qa_indices (one paragraph in max. 2 sentences)\",\n    \"qa_indices\": \"List of indices referencing which questions and answers from the provided Q&A pairs were used to support this argument\"\n}}\n"
+    },
+    {
+      "id": "refinement.contra_system",
+      "title": "Refinement Contra System Prompt",
+      "stage": "refinement",
+      "category": "Argument Refinement",
+      "source_path": "src/agent/prompts/argument_refinement.py",
+      "description": "System instruction for refining contra arguments.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You are a very experienced investor at a top‑tier VC fund. You are sure that the company is a bad investment opportunity.\nYour job is to revise your argument to reach better argument quality scores.\n",
+      "value": "You are a very experienced investor at a top‑tier VC fund. You are sure that the company is a bad investment opportunity.\nYour job is to revise your argument to reach better argument quality scores.\n"
+    },
+    {
+      "id": "refinement.contra_user",
+      "title": "Refinement Contra User Prompt",
+      "stage": "refinement",
+      "category": "Argument Refinement",
+      "source_path": "src/agent/prompts/argument_refinement.py",
+      "description": "Template for refining contra arguments with score feedback.",
+      "type": "text",
+      "required_placeholders": [
+        "{questions_and_answers}",
+        "{argument}",
+        "{argument_feedback}"
+      ],
+      "default_value": "Here are the Q&A facts about the company:\n{questions_and_answers}\n\nHere are the argument quality scores (1-7) to your previous argument:\n{argument_feedback}\n\nHere is your previous argument:\n{argument}\n\nRefine your argument by improving argument quality scores.\n\nOutput format:\n{{\n    \"refined_argument\": \"Refined Argument without qa_indices (one paragraph in max. 2 sentences)\",\n    \"qa_indices\": \"List of indices referencing which questions and answers from the provided Q&A pairs were used to support this argument\"\n}}\n",
+      "value": "Here are the Q&A facts about the company:\n{questions_and_answers}\n\nHere are the argument quality scores (1-7) to your previous argument:\n{argument_feedback}\n\nHere is your previous argument:\n{argument}\n\nRefine your argument by improving argument quality scores.\n\nOutput format:\n{{\n    \"refined_argument\": \"Refined Argument without qa_indices (one paragraph in max. 2 sentences)\",\n    \"qa_indices\": \"List of indices referencing which questions and answers from the provided Q&A pairs were used to support this argument\"\n}}\n"
+    },
+    {
+      "id": "preprocess.extract_company.system",
+      "title": "Company Extraction System Prompt",
+      "stage": "preprocess",
+      "category": "Pre-Evaluation Metadata Extraction",
+      "source_path": "src/agent/batch.py",
+      "description": "System instruction for extracting company metadata from documents.",
+      "type": "text",
+      "required_placeholders": [],
+      "default_value": "You extract structured company metadata from documents.",
+      "value": "You extract structured company metadata from documents."
+    },
+    {
+      "id": "preprocess.extract_company.user",
+      "title": "Company Extraction User Prompt",
+      "stage": "preprocess",
+      "category": "Pre-Evaluation Metadata Extraction",
+      "source_path": "src/agent/batch.py",
+      "description": "Template for extracting company metadata fields from text excerpts.",
+      "type": "text",
+      "required_placeholders": [
+        "{text}"
+      ],
+      "default_value": "Extract the company name, industry, tagline (if any), and a brief description from the following document excerpts. If something is not mentioned, leave it blank.\n\nExcerpts:\n{text}\n",
+      "value": "Extract the company name, industry, tagline (if any), and a brief description from the following document excerpts. If something is not mentioned, leave it blank.\n\nExcerpts:\n{text}\n"
+    }
+  ]
+}

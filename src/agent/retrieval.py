@@ -39,4 +39,36 @@ def retrieve_chunks(
     top_k = min(k, len(store.chunks))
     top_indices = similarities.argsort()[::-1][:top_k]
 
-    return [store.chunks[i] for i in top_indices if similarities[i] > 0.0]
+    result = [store.chunks[i] for i in top_indices if similarities[i] > 0.0]
+    return result
+
+
+def retrieve_chunks_with_similarity(
+    query: str,
+    store: EvidenceStore,
+    k: int = 8,
+) -> tuple[list[Chunk], float]:
+    """Retrieve top-k chunks and return the top similarity score.
+
+    Returns:
+        (chunks, top_similarity) where top_similarity is the highest cosine
+        similarity (0.0 if no chunks). Used for evidence-gating web search.
+    """
+    if not store.chunks:
+        return ([], 0.0)
+
+    corpus = store.texts
+    vectorizer = TfidfVectorizer(stop_words="english")
+    tfidf_matrix = vectorizer.fit_transform(corpus + [query])
+
+    query_vec = tfidf_matrix[-1]
+    doc_vecs = tfidf_matrix[:-1]
+
+    similarities = cosine_similarity(query_vec, doc_vecs).flatten()
+
+    top_k = min(k, len(store.chunks))
+    top_indices = similarities.argsort()[::-1][:top_k]
+
+    chunks = [store.chunks[i] for i in top_indices if similarities[i] > 0.0]
+    top_sim = float(similarities[top_indices[0]]) if len(top_indices) > 0 else 0.0
+    return (chunks, top_sim)

@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Startup Ranker — Rockaway Capital</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-dark: #0A0A0A;
+      --bg-card: #111111;
+      --bg-card-hover: #161616;
+      --border: #1A1A1A;
+      --border-subtle: #1F1F1F;
+      --green: #00D26A;
+      --green-bg: #0A2E14;
+      --green-border: rgba(0, 210, 106, 0.2);
+      --red: #FF6B6B;
+      --red-bg: #2E1A0A;
+      --red-border: rgba(255, 107, 107, 0.2);
+      --text-white: #FFFFFF;
+      --text-light: #CCCCCC;
+      --text-mid: #AAAAAA;
+      --text-gray: #808080;
+      --text-dim: #555555;
+      --text-dark: #333333;
+      --font-display: 'Playfair Display', Georgia, serif;
+      --font-body: 'Inter', -apple-system, sans-serif;
+    }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg-dark);
+      color: var(--text-white);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .screen { display: none; min-height: 100vh; flex-direction: column; }
+    .screen.active { display: flex; }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+      padding: 0 48px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .logo { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+    .logo-icon {
+      width: 28px; height: 28px;
+      background: var(--green);
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo-icon svg { width: 16px; height: 16px; stroke: var(--bg-dark); }
+    .logo-text {
+      font-size: 14px; font-weight: 400;
+      letter-spacing: 4px; color: var(--text-white);
+      text-transform: lowercase;
+    }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .btn-ghost {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 20px;
+      border: 1px solid var(--text-dark);
+      border-radius: 6px;
+      background: none;
+      color: var(--text-gray);
+      font: 13px var(--font-body);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-ghost:hover { border-color: var(--text-gray); color: var(--text-light); }
+    .btn-ghost svg { width: 14px; height: 14px; }
+
+    /* ── Password Screen ── */
+    #password-screen {
+      align-items: center; justify-content: center;
+      background: var(--bg-dark);
+    }
+    .password-card {
+      width: 400px;
+      padding: 48px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--bg-card);
+      text-align: center;
+    }
+    .password-card .logo { justify-content: center; margin-bottom: 32px; }
+    .password-card h2 {
+      font-family: var(--font-display);
+      font-size: 24px; font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .password-card p {
+      font-size: 14px; color: var(--text-gray);
+      margin-bottom: 32px;
+    }
+    .password-input {
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-white);
+      font: 15px var(--font-body);
+      text-align: center;
+      letter-spacing: 8px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .password-input:focus { border-color: var(--green); }
+    .password-input::placeholder { letter-spacing: 2px; color: var(--text-dim); }
+    .password-error {
+      color: var(--red);
+      font-size: 13px;
+      margin-top: 12px;
+      min-height: 20px;
+    }
+    .btn-green {
+      display: inline-flex;
+      align-items: center; justify-content: center; gap: 10px;
+      padding: 14px 40px;
+      background: var(--green);
+      border: none; border-radius: 8px;
+      color: var(--bg-dark);
+      font: 600 15px var(--font-body);
+      cursor: pointer;
+      transition: opacity 0.2s;
+      width: 100%;
+      margin-top: 16px;
+    }
+    .btn-green:hover { opacity: 0.9; }
+    .btn-green:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-green svg { width: 18px; height: 18px; }
+
+    /* ── Upload Screen ── */
+    .main-content {
+      flex: 1;
+      display: flex; flex-direction: column;
+      align-items: center;
+      padding: 80px 48px;
+      gap: 48px;
+    }
+    .hero-text { text-align: center; max-width: 700px; }
+    .hero-text h1 {
+      font-family: var(--font-display);
+      font-size: 52px; font-weight: 700;
+      line-height: 1.1;
+      margin-bottom: 16px;
+    }
+    .hero-text p {
+      font-size: 17px; color: var(--text-gray);
+      line-height: 1.6; max-width: 560px; margin: 0 auto;
+    }
+
+    .upload-zone {
+      width: 640px;
+      padding: 48px;
+      border: 1px dashed var(--text-dark);
+      border-radius: 12px;
+      background: var(--bg-card);
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: var(--green);
+      background: var(--bg-card-hover);
+    }
+    .upload-icon {
+      width: 52px; height: 52px;
+      border-radius: 26px;
+      background: var(--bg-dark);
+      border: 1px solid #2A2A2A;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 20px;
+    }
+    .upload-icon svg { width: 22px; height: 22px; stroke: var(--green); }
+    .upload-text span { color: var(--text-gray); font-size: 15px; }
+    .upload-text a { color: var(--green); font-weight: 600; font-size: 15px; cursor: pointer; text-decoration: none; }
+    .upload-hint { color: var(--text-dim); font-size: 13px; margin-top: 8px; }
+
+    .files-section { width: 640px; }
+    .files-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 16px;
+    }
+    .files-header .label {
+      font-size: 12px; font-weight: 600;
+      color: var(--text-gray); letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .files-header .clear {
+      font-size: 13px; color: var(--text-dim);
+      cursor: pointer; background: none; border: none;
+      transition: color 0.2s;
+    }
+    .files-header .clear:hover { color: var(--red); }
+
+    .web-search-toggle {
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      transition: border-color 0.2s;
+    }
+    .web-search-toggle:has(input:checked) {
+      border-color: var(--green);
+    }
+    .toggle-row {
+      display: flex; align-items: flex-start; gap: 12px; cursor: pointer;
+    }
+    .toggle-switch {
+      position: relative; flex-shrink: 0;
+      width: 40px; height: 22px; margin-top: 1px;
+    }
+    .toggle-switch input {
+      opacity: 0; width: 0; height: 0;
+    }
+    .toggle-slider {
+      position: absolute; inset: 0;
+      background: var(--border-subtle); border-radius: 22px;
+      transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: ""; position: absolute;
+      width: 16px; height: 16px; left: 3px; top: 3px;
+      background: var(--text-dim); border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: rgba(0,255,135,0.25);
+    }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(18px);
+      background: var(--green);
+    }
+    .toggle-label { display: flex; flex-direction: column; gap: 2px; }
+    .toggle-title {
+      font-size: 14px; font-weight: 600; color: var(--text-light);
+      display: flex; align-items: center;
+    }
+    .toggle-desc {
+      font-size: 12px; color: var(--text-dim); line-height: 1.4;
+    }
+
+    .file-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 16px; height: 48px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+    .file-left { display: flex; align-items: center; gap: 12px; }
+    .file-left svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .file-left .name { font-size: 13px; color: var(--text-light); }
+    .file-right { display: flex; align-items: center; gap: 12px; }
+    .file-right .size { font-size: 12px; color: var(--text-dim); }
+    .file-remove {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-dim); display: flex;
+      transition: color 0.2s;
+    }
+    .file-remove:hover { color: var(--red); }
+    .file-remove svg { width: 14px; height: 14px; }
+
+    input[type="file"] { display: none; }
+
+    /* ── Processing Screen ── */
+    #processing-screen { align-items: center; justify-content: center; }
+    .processing-card {
+      text-align: center;
+      max-width: 500px;
+    }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 3px solid var(--border);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 24px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .processing-card h2 {
+      font-family: var(--font-display);
+      font-size: 28px; margin-bottom: 12px;
+    }
+    .processing-card .status {
+      font-size: 15px; color: var(--text-gray);
+      line-height: 1.6;
+    }
+    .processing-steps {
+      margin-top: 32px; text-align: left;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .step {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 14px; color: var(--text-dim);
+    }
+    .step.active { color: var(--green); }
+    .step.done { color: var(--text-gray); }
+    .step-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .step.active .step-dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .step.done .step-dot { background: var(--text-gray); }
+
+    /* ── Results Screen ── */
+    .results-body { flex: 1; padding: 48px; }
+    .results-title-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 40px;
+    }
+    .results-title h1 {
+      font-family: var(--font-display);
+      font-size: 32px; font-weight: 700;
+    }
+    .results-title p { font-size: 14px; color: var(--text-gray); margin-top: 8px; }
+
+    .stats-row {
+      display: flex; gap: 16px;
+      margin-bottom: 40px;
+    }
+    .stat-card {
+      flex: 1;
+      padding: 24px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .stat-value {
+      font-family: var(--font-display);
+      font-size: 36px; font-weight: 700;
+    }
+    .stat-value.green { color: var(--green); }
+    .stat-label { font-size: 13px; color: var(--text-gray); margin-top: 4px; }
+
+    .rankings-label {
+      font-size: 12px; font-weight: 600;
+      color: var(--text-dim); letter-spacing: 2px;
+      margin-bottom: 16px;
+    }
+
+    .rank-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 16px;
+    }
+    .rank-top {
+      display: flex; align-items: center; gap: 16px;
+      margin-bottom: 16px; flex-wrap: wrap;
+    }
+    .rank-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font: bold 12px var(--font-body);
+    }
+    .rank-badge.first { background: var(--green); color: var(--bg-dark); }
+    .rank-badge.other {
+      background: var(--bg-dark);
+      border: 1px solid var(--text-dark);
+      color: var(--text-gray);
+    }
+    .rank-name {
+      font-family: var(--font-display);
+      font-size: 22px; font-weight: 700;
+    }
+    .decision-badge {
+      padding: 4px 12px;
+      border-radius: 4px;
+      font: bold 11px var(--font-body);
+      letter-spacing: 1px;
+    }
+    .decision-badge.invest {
+      background: var(--green-bg);
+      border: 1px solid var(--green-border);
+      color: var(--green);
+    }
+    .decision-badge.pass {
+      background: var(--red-bg);
+      border: 1px solid var(--red-border);
+      color: var(--red);
+    }
+
+    .score-row {
+      display: flex; gap: 24px;
+      margin-bottom: 20px;
+    }
+    .score-item {
+      padding: 12px 20px;
+      background: var(--bg-dark);
+      border-radius: 8px;
+    }
+    .score-item .value {
+      font-family: var(--font-display);
+      font-size: 28px; font-weight: 700;
+    }
+    .score-item .value.green { color: var(--green); }
+    .score-item .value.red { color: var(--red); }
+    .score-item .label { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+    .args-row { display: flex; gap: 16px; }
+    .args-col { flex: 1; }
+    .args-col .title {
+      font-size: 11px; font-weight: 600;
+      letter-spacing: 1px; margin-bottom: 8px;
+    }
+    .args-col .title.pro { color: var(--green); }
+    .args-col .title.contra { color: var(--red); }
+    .arg-item {
+      font-size: 13px; color: var(--text-mid);
+      line-height: 1.5;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .arg-item:last-child { border-bottom: none; }
+    .arg-score {
+      font-size: 11px; font-weight: 600;
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      margin-right: 6px;
+    }
+    .arg-score.pro { background: var(--green-bg); color: var(--green); }
+    .arg-score.contra { background: var(--red-bg); color: var(--red); }
+
+    .footer {
+      display: flex; justify-content: space-between; align-items: center;
+      height: 56px; padding: 0 48px;
+      border-top: 1px solid var(--border);
+      font-size: 12px; color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .footer .engine { color: var(--text-dark); letter-spacing: 1px; }
+
+    @media (max-width: 768px) {
+      .header { padding: 0 20px; }
+      .main-content { padding: 40px 20px; }
+      .hero-text h1 { font-size: 32px; }
+      .upload-zone { width: 100%; padding: 32px 20px; }
+      .files-section { width: 100%; }
+      .results-body { padding: 24px 20px; }
+      .stats-row { flex-direction: column; }
+      .args-row { flex-direction: column; }
+      .score-row { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════ PASSWORD SCREEN ═══════════════════ -->
+<div id="password-screen" class="screen active">
+  <div class="password-card">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      </div>
+      <span class="logo-text">startup ranker</span>
+    </div>
+    <h2>Access Required</h2>
+    <p>Enter the password to continue</p>
+    <form id="login-form">
+      <input type="password" class="password-input" id="password-input" placeholder="••••" maxlength="20" autofocus>
+      <div class="password-error" id="password-error"></div>
+      <button type="submit" class="btn-green">Enter</button>
+    </form>
+  </div>
+</div>
+
+<!-- ═══════════════════ UPLOAD SCREEN ═══════════════════ -->
+<div id="upload-screen" class="screen">
+  <div class="header">
+    <a class="logo" href="/">
+      <div class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      </div>
+      <span class="logo-text">startup ranker</span>
+    </a>
+    <div class="header-right">
+      <span style="font-size:13px;color:var(--text-gray)">How it works</span>
+      <span style="font-size:13px;color:var(--text-gray)">Documentation</span>
+    </div>
+  </div>
+  <div class="main-content">
+    <div class="hero-text">
+      <h1>Rank your deal flow.</h1>
+      <p>Upload pitch decks, financials, and documents. Get structured investment rankings with pro and contra arguments in seconds.</p>
+    </div>
+
+    <div class="upload-zone" id="upload-zone">
+      <div class="upload-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div class="upload-text">
+        <span>Drag & drop files here, or </span><a id="browse-link">browse</a>
+      </div>
+      <div class="upload-hint">Supports PDF, PPTX, Word, Excel, CSV — or Specter company + people CSV exports</div>
+    </div>
+    <input type="file" id="file-input" multiple accept=".pdf,.pptx,.docx,.xlsx,.xls,.csv,.txt,.md">
+
+    <div class="files-section" id="files-section" style="display:none">
+      <div class="files-header">
+        <span class="label">Uploaded files</span>
+        <button class="clear" id="clear-files">Clear all</button>
+      </div>
+      <div id="specter-badge" style="display:none;margin-bottom:12px;padding:10px 14px;background:rgba(0,255,135,0.08);border:1px solid rgba(0,255,135,0.25);border-radius:8px;font-size:13px;color:var(--green);">
+        <strong>Specter mode detected</strong> — company & people CSVs will be parsed as structured data. All companies will be ranked in batch.
+      </div>
+      <div id="files-list"></div>
+
+      <div class="web-search-toggle" id="web-search-toggle" style="display:none;margin-top:16px;">
+        <label class="toggle-row" for="web-search-checkbox">
+          <div class="toggle-switch">
+            <input type="checkbox" id="web-search-checkbox">
+            <span class="toggle-slider"></span>
+          </div>
+          <div class="toggle-label">
+            <span class="toggle-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;vertical-align:middle;margin-right:6px"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              Enable web search
+            </span>
+            <span class="toggle-desc">Supplement uploaded documents with real-time web data on markets, competitors, and trends</span>
+          </div>
+        </label>
+      </div>
+
+      <button class="btn-green" id="analyze-btn" style="margin-top:16px">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        Analyze & Rank
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ PROCESSING SCREEN ═══════════════════ -->
+<div id="processing-screen" class="screen">
+  <div class="header">
+    <a class="logo" href="/">
+      <div class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      </div>
+      <span class="logo-text">startup ranker</span>
+    </a>
+  </div>
+  <div style="flex:1;display:flex;align-items:center;justify-content:center">
+    <div class="processing-card">
+      <div class="spinner"></div>
+      <h2>Analyzing...</h2>
+      <p class="status" id="processing-status">Uploading files and starting analysis...</p>
+      <div class="processing-steps">
+        <div class="step active" id="step-ingest"><div class="step-dot"></div> Ingesting documents & extracting text</div>
+        <div class="step" id="step-extract"><div class="step-dot"></div> Identifying company information</div>
+        <div class="step" id="step-qa"><div class="step-dot"></div> Decomposing questions & gathering evidence</div>
+        <div class="step" id="step-args"><div class="step-dot"></div> Generating and refining arguments</div>
+        <div class="step" id="step-rank"><div class="step-dot"></div> Scoring and ranking</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ RESULTS SCREEN ═══════════════════ -->
+<div id="results-screen" class="screen">
+  <div class="header">
+    <a class="logo" href="/">
+      <div class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      </div>
+      <span class="logo-text">startup ranker</span>
+    </a>
+    <div class="header-right">
+      <button class="btn-ghost" id="new-analysis-btn">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Analysis
+      </button>
+    </div>
+  </div>
+  <div class="results-body">
+    <div class="results-title-row">
+      <div class="results-title">
+        <h1>Analysis Results</h1>
+        <p id="results-subtitle"></p>
+      </div>
+      <button class="btn-green" id="download-btn" style="width:auto">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Excel
+      </button>
+    </div>
+
+    <div class="stats-row" id="stats-row"></div>
+    <div class="rankings-label">RANKINGS</div>
+    <div id="rankings-container"></div>
+  </div>
+  <div class="footer">
+    <span>Powered by Rockaway Capital</span>
+    <span class="engine">DIALECTIC Evaluation Engine v1.0</span>
+  </div>
+</div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+let sessionId = localStorage.getItem('session_id');
+let currentJobId = null;
+let uploadedFiles = [];
+
+function showScreen(id) {
+  $$('.screen').forEach(s => s.classList.remove('active'));
+  $(`#${id}`).classList.add('active');
+}
+
+function setCookie(name, value) {
+  document.cookie = `${name}=${value};path=/;SameSite=Strict`;
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(err.detail || 'Request failed');
+  }
+  return res.json();
+}
+
+// ── Password ──
+$('#login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pw = $('#password-input').value;
+  try {
+    const data = await api('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({ password: pw }),
+    });
+    sessionId = data.session_id;
+    localStorage.setItem('session_id', sessionId);
+    setCookie('session_id', sessionId);
+    showScreen('upload-screen');
+    checkWebSearchAvailable();
+  } catch (err) {
+    const msg = err.message === 'Wrong password' ? 'Wrong password. Try again.'
+      : err.message || 'Connection error. Is the server running?';
+    $('#password-error').textContent = msg;
+    $('#password-input').value = '';
+    $('#password-input').focus();
+  }
+});
+
+async function checkWebSearchAvailable() {
+  try {
+    const data = await api('/api/web-search-available');
+    const toggle = $('#web-search-toggle');
+    if (data.available) {
+      toggle.style.display = 'block';
+    } else {
+      toggle.style.display = 'none';
+      $('#web-search-checkbox').checked = false;
+    }
+  } catch {}
+}
+
+// Check existing session on load
+(async () => {
+  if (sessionId) {
+    setCookie('session_id', sessionId);
+    try {
+      const data = await api('/api/check-session');
+      if (data.authenticated) {
+        showScreen('upload-screen');
+        checkWebSearchAvailable();
+        return;
+      }
+    } catch {}
+  }
+  showScreen('password-screen');
+})();
+
+// ── File Upload ──
+const fileColors = {
+  '.pdf': '#FF6B6B', '.pptx': '#6366F1', '.docx': '#3B82F6',
+  '.xlsx': '#00D26A', '.xls': '#00D26A', '.csv': '#FCD34D',
+  '.txt': '#808080', '.md': '#808080',
+};
+
+function getExt(name) {
+  const idx = name.lastIndexOf('.');
+  return idx >= 0 ? name.substring(idx).toLowerCase() : '';
+}
+
+function formatSize(bytes) {
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+  if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  return bytes + ' B';
+}
+
+function renderFiles() {
+  const section = $('#files-section');
+  const list = $('#files-list');
+  if (uploadedFiles.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  list.innerHTML = uploadedFiles.map((f, i) => {
+    const ext = getExt(f.name);
+    const color = fileColors[ext] || '#808080';
+    return `<div class="file-item">
+      <div class="file-left">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span class="name">${f.name}</span>
+      </div>
+      <div class="file-right">
+        <span class="size">${formatSize(f.size)}</span>
+        <button class="file-remove" onclick="removeFile(${i})">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function isSpecterMode() {
+  const names = uploadedFiles.map(f => f.name.toLowerCase());
+  return names.some(n => n.includes('company') && n.includes('signal') && n.endsWith('.csv'))
+      && names.some(n => n.includes('people') && n.includes('signal') && n.endsWith('.csv'));
+}
+
+function addFiles(fileList) {
+  for (const f of fileList) {
+    if (!uploadedFiles.some(uf => uf.name === f.name)) {
+      uploadedFiles.push(f);
+    }
+  }
+  renderFiles();
+  const badge = $('#specter-badge');
+  badge.style.display = isSpecterMode() ? 'block' : 'none';
+}
+
+window.removeFile = (i) => { uploadedFiles.splice(i, 1); renderFiles(); };
+
+$('#clear-files').addEventListener('click', () => {
+  uploadedFiles = [];
+  renderFiles();
+  $('#specter-badge').style.display = 'none';
+});
+
+const uploadZone = $('#upload-zone');
+const fileInput = $('#file-input');
+
+$('#browse-link').addEventListener('click', (e) => {
+  e.stopPropagation();
+  fileInput.click();
+});
+uploadZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  addFiles(fileInput.files);
+  fileInput.value = '';
+});
+
+uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  addFiles(e.dataTransfer.files);
+});
+
+// ── Analyze ──
+$('#analyze-btn').addEventListener('click', async () => {
+  if (uploadedFiles.length === 0) return;
+
+  showScreen('processing-screen');
+  animateSteps();
+
+  const formData = new FormData();
+  for (const f of uploadedFiles) formData.append('files', f);
+
+  try {
+    const uploadResponse = await fetch('/api/upload', {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+    });
+
+    const uploadRes = await uploadResponse.json().catch(() => ({}));
+    if (!uploadResponse.ok) {
+      throw new Error(uploadRes.detail || 'Upload failed');
+    }
+
+    currentJobId = uploadRes.job_id;
+    if (!currentJobId) {
+      throw new Error('Upload did not return a job id.');
+    }
+
+    const useWebSearch = !!$('#web-search-checkbox')?.checked;
+    await api(`/api/analyze/${currentJobId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ use_web_search: useWebSearch }),
+    });
+    pollStatus();
+  } catch (err) {
+    $('#processing-status').textContent = 'Error: ' + err.message;
+  }
+});
+
+let stepTimer;
+function animateSteps() {
+  const steps = ['step-ingest', 'step-extract', 'step-qa', 'step-args', 'step-rank'];
+  let idx = 0;
+  clearInterval(stepTimer);
+  stepTimer = setInterval(() => {
+    steps.forEach((s, i) => {
+      const el = $(`#${s}`);
+      el.className = i < idx ? 'step done' : i === idx ? 'step active' : 'step';
+    });
+    if (idx < steps.length - 1) idx++;
+  }, 8000);
+}
+
+async function pollStatus() {
+  try {
+    const data = await api(`/api/status/${currentJobId}`);
+    $('#processing-status').textContent = data.progress;
+
+    if (data.status === 'done') {
+      clearInterval(stepTimer);
+      renderResults(data.results);
+      showScreen('results-screen');
+    } else if (data.status === 'error') {
+      clearInterval(stepTimer);
+      $('#processing-status').textContent = data.progress;
+      document.querySelector('.spinner').style.borderTopColor = 'var(--red)';
+    } else {
+      setTimeout(pollStatus, 3000);
+    }
+  } catch {
+    setTimeout(pollStatus, 5000);
+  }
+}
+
+// ── Results ──
+function renderResults(r) {
+  if (r.mode === 'batch') {
+    renderBatchResults(r);
+  } else {
+    renderSingleResult(r);
+  }
+}
+
+function renderSingleResult(r) {
+  $('#results-subtitle').textContent =
+    `${r.company_name} — ${r.industry} · ${r.num_documents} documents · ${r.num_arguments} arguments`;
+
+  $('#stats-row').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${r.num_documents}</div><div class="stat-label">Documents Processed</div></div>
+    <div class="stat-card"><div class="stat-value green">${r.total_score}</div><div class="stat-label">Total Score</div></div>
+    <div class="stat-card"><div class="stat-value">${r.num_chunks}</div><div class="stat-label">Evidence Chunks</div></div>
+    <div class="stat-card"><div class="stat-value">${r.num_arguments}</div><div class="stat-label">Arguments Generated</div></div>
+  `;
+
+  const isInvest = r.decision.toLowerCase().includes('invest') && !r.decision.toLowerCase().includes('not');
+  const decClass = isInvest ? 'invest' : 'pass';
+  const decText = isInvest ? 'INVEST' : 'PASS';
+
+  let proHtml = r.pro_arguments.map(a =>
+    `<div class="arg-item"><span class="arg-score pro">${a.score}</span>${a.text}</div>`
+  ).join('');
+
+  let conHtml = r.contra_arguments.map(a =>
+    `<div class="arg-item"><span class="arg-score contra">${a.score}</span>${a.text}</div>`
+  ).join('');
+
+  $('#rankings-container').innerHTML = `
+    <div class="rank-card">
+      <div class="rank-top">
+        <span class="rank-badge first">#1</span>
+        <span class="rank-name">${r.company_name}</span>
+        <span class="decision-badge ${decClass}">${decText}</span>
+      </div>
+      <div class="score-row">
+        <div class="score-item"><div class="value green">${r.total_score}</div><div class="label">Total Score</div></div>
+        <div class="score-item"><div class="value green">${r.avg_pro}</div><div class="label">Avg. Pro</div></div>
+        <div class="score-item"><div class="value red">${r.avg_contra}</div><div class="label">Avg. Contra</div></div>
+      </div>
+      <div class="args-row">
+        <div class="args-col">
+          <div class="title pro">TOP PRO ARGUMENTS</div>
+          ${proHtml || '<div class="arg-item">No pro arguments</div>'}
+        </div>
+        <div class="args-col">
+          <div class="title contra">TOP CONTRA ARGUMENTS</div>
+          ${conHtml || '<div class="arg-item">No contra arguments</div>'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderBatchResults(r) {
+  const rows = r.summary_rows || [];
+  const skipped = r.num_skipped || 0;
+  $('#results-subtitle').textContent =
+    `${rows.length} companies ranked${skipped ? ` (${skipped} skipped)` : ''} — Specter batch analysis`;
+
+  $('#stats-row').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${rows.length}</div><div class="stat-label">Companies Ranked</div></div>
+    <div class="stat-card"><div class="stat-value green">${rows.length > 0 ? rows[0].total_score : '—'}</div><div class="stat-label">Top Score</div></div>
+    <div class="stat-card"><div class="stat-value">${skipped}</div><div class="stat-label">Skipped</div></div>
+    <div class="stat-card"><div class="stat-value">${(r.argument_rows || []).length}</div><div class="stat-label">Total Arguments</div></div>
+  `;
+
+  let cardsHtml = rows.map((row, i) => {
+    const isInvest = (row.decision || '').toLowerCase().includes('invest') && !(row.decision || '').toLowerCase().includes('not');
+    const decClass = isInvest ? 'invest' : 'pass';
+    const decText = isInvest ? 'INVEST' : 'PASS';
+    const badge = i === 0 ? 'first' : (i === 1 ? 'second' : (i === 2 ? 'third' : ''));
+
+    let prosHtml = '';
+    for (let j = 1; j <= 3; j++) {
+      const t = row[`top_pro_${j}`];
+      const s = row[`top_pro_${j}_score`];
+      if (t) prosHtml += `<div class="arg-item"><span class="arg-score pro">${s}</span>${t}</div>`;
+    }
+    let consHtml = '';
+    for (let j = 1; j <= 3; j++) {
+      const t = row[`top_contra_${j}`];
+      const s = row[`top_contra_${j}_score`];
+      if (t) consHtml += `<div class="arg-item"><span class="arg-score contra">${s}</span>${t}</div>`;
+    }
+
+    return `
+      <div class="rank-card">
+        <div class="rank-top">
+          <span class="rank-badge ${badge}">#${i+1}</span>
+          <span class="rank-name">${row.company_name || row.startup_slug}</span>
+          <span class="decision-badge ${decClass}">${decText}</span>
+        </div>
+        <div class="score-row">
+          <div class="score-item"><div class="value green">${row.total_score}</div><div class="label">Total Score</div></div>
+          <div class="score-item"><div class="value green">${row.avg_pro}</div><div class="label">Avg. Pro</div></div>
+          <div class="score-item"><div class="value red">${row.avg_contra}</div><div class="label">Avg. Contra</div></div>
+        </div>
+        <div class="args-row">
+          <div class="args-col">
+            <div class="title pro">TOP PRO ARGUMENTS</div>
+            ${prosHtml || '<div class="arg-item">No pro arguments</div>'}
+          </div>
+          <div class="args-col">
+            <div class="title contra">TOP CONTRA ARGUMENTS</div>
+            ${consHtml || '<div class="arg-item">No contra arguments</div>'}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  $('#rankings-container').innerHTML = cardsHtml || '<p style="color:var(--text-dim)">No companies were successfully evaluated.</p>';
+}
+
+$('#download-btn').addEventListener('click', () => {
+  if (currentJobId) window.location.href = `/api/download/${currentJobId}`;
+});
+
+$('#new-analysis-btn').addEventListener('click', () => {
+  uploadedFiles = [];
+  renderFiles();
+  currentJobId = null;
+  showScreen('upload-screen');
+});
+</script>
+</body>
+</html>

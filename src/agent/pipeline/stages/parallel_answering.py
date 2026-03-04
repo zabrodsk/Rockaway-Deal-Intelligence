@@ -20,6 +20,7 @@ from agent.pipeline.stages.answering.tree import graph as answer_tree_graph
 from agent.pipeline.stages.cache import cache_answered_tree, get_cached_answered_tree
 from agent.pipeline.stages.constants import QuestionAspect
 from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
+from agent.rate_limit import gather_with_concurrency
 
 
 async def _answer_single_tree(
@@ -115,7 +116,7 @@ async def answer_all_trees(
     # Create tasks for answering all trees in parallel (with caching)
     tasks = []
     for aspect, tree in state.question_trees.items():
-        task = asyncio.create_task(
+        tasks.append(
             _get_or_answer_tree(
                 aspect=aspect,
                 tree=tree,
@@ -124,10 +125,8 @@ async def answer_all_trees(
                 search_end_date=None,
             )
         )
-        tasks.append(task)
 
-    # Execute all answering in parallel
-    results = await asyncio.gather(*tasks)
+    results = await gather_with_concurrency(tasks)
 
     # Build the updated question_trees dict and collect all Q&A pairs
     question_trees: Dict[str, QuestionTree] = {}

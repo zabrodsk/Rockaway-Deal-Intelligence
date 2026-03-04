@@ -18,20 +18,19 @@ from openai import RateLimitError
 
 from agent.common.llm_config import get_llm
 from agent.dataclasses.argument import Argument
+from agent.prompt_library.manager import get_criteria_mapping, get_prompt
 from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
 from agent.pipeline.state.schemas import SingleArgumentScore
+from agent.rate_limit import gather_with_concurrency
 from agent.pipeline.utils.helpers import format_argument_feedback
-from agent.prompts import (
-    CRITERIA_MAPPING,
-    EVALUATE_SINGLE_ARGUMENT_USER_PROMPT,
-    SINGLE_ARGUMENT_EVALUATION_SYSTEM_PROMPT,
-)
 
 
 @backoff.on_exception(
     backoff.expo, RateLimitError, max_tries=5, max_time=60, jitter=backoff.full_jitter
 )
-async def score_single_argument(argument: Argument) -> Argument:
+async def score_single_argument(
+    argument: Argument, prompt_overrides: dict | None = None
+) -> Argument:
     """Score one argument against all 14 criteria.
 
     Uses temperature=0.0 for consistent, reproducible scoring.
@@ -40,7 +39,9 @@ async def score_single_argument(argument: Argument) -> Argument:
     llm = get_llm(temperature=0.0)
     llm_with_structured_output = llm.with_structured_output(SingleArgumentScore)
 
-    system_prompt = SINGLE_ARGUMENT_EVALUATION_SYSTEM_PROMPT
+    system_prompt = get_prompt("evaluation.system", prompt_overrides)
+    user_prompt = get_prompt("evaluation.user", prompt_overrides)
+    criteria_mapping = get_criteria_mapping(prompt_overrides)
     critique = (
         "Critique of the argument: " + argument.critique if argument.critique else ""
     )
@@ -53,30 +54,34 @@ async def score_single_argument(argument: Argument) -> Argument:
             [
                 SystemMessage(content=system_prompt),
                 HumanMessage(
-                    content=EVALUATE_SINGLE_ARGUMENT_USER_PROMPT.format(
+                    content=user_prompt.format(
                         argument=argument.content, critique=critique
                     )
                 ),
             ]
         )
 
-        if len(score.scores) == len(CRITERIA_MAPPING):
+        if len(score.scores) == len(criteria_mapping):
             break
         elif attempt < max_retries - 1:
             print(
-                f"Attempt {attempt + 1}: Got {len(score.scores)} scores instead of {len(CRITERIA_MAPPING)}, retrying..."
+                f"Attempt {attempt + 1}: Got {len(score.scores)} scores instead of {len(criteria_mapping)}, retrying..."
             )
         else:
             raise ValueError(
-                f"After {max_retries} attempts, still got {len(score.scores)} scores instead of {len(CRITERIA_MAPPING)}"
+                f"After {max_retries} attempts, still got {len(score.scores)} scores instead of {len(criteria_mapping)}"
             )
 
     argument.score = sum(criterion.score for criterion in score.scores)
-    argument.argument_feedback = format_argument_feedback(score.scores)
+    argument.argument_feedback = format_argument_feedback(
+        score.scores, criteria_mapping=criteria_mapping
+    )
     return argument
 
 
-async def score_arguments_in_parallel(arguments: list[Argument]) -> list[Argument]:
+async def score_arguments_in_parallel(
+    arguments: list[Argument], prompt_overrides: dict | None = None
+) -> list[Argument]:
     """Score multiple arguments concurrently.
 
     Uses asyncio.gather for parallel execution, significantly
@@ -85,8 +90,11 @@ async def score_arguments_in_parallel(arguments: list[Argument]) -> list[Argumen
     if not arguments:
         return []
 
-    tasks = [score_single_argument(argument) for argument in arguments]
-    scored_arguments = await asyncio.gather(*tasks)
+    tasks = [
+        score_single_argument(argument, prompt_overrides=prompt_overrides)
+        for argument in arguments
+    ]
+    scored_arguments = await gather_with_concurrency(tasks)
 
     return scored_arguments
 
@@ -102,7 +110,10 @@ async def score_and_select_best_k(
     Returns both the full scored list and the selected subset.
     """
     arguments_to_score = state.current_arguments
-    scored_arguments = await score_arguments_in_parallel(arguments_to_score)
+    scored_arguments = await score_arguments_in_parallel(
+        arguments_to_score,
+        prompt_overrides=state.prompt_overrides,
+    )
 
     # Sort and select top K for current iteration
     k_best = state.get_current_k_best()

@@ -1,5 +1,5 @@
 import uuid
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -11,7 +11,8 @@ class Argument(BaseModel):
     content: str
     argument_type: Literal["pro", "contra"]
     qa_indices: list[int]
-    qa_pairs: list[dict[str, str]] = Field(default_factory=list)
+    # QA dicts may have chunk_ids (list[str]), web_search_* (str|None)
+    qa_pairs: list[dict[str, Any]] = Field(default_factory=list)
     score: int = 0
     percentile_score: float = 0.0
     argument_feedback: Optional[str] = None

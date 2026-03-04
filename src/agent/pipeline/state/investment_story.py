@@ -13,6 +13,7 @@ from agent.dataclasses.argument import Argument
 from agent.dataclasses.company import Company
 from agent.dataclasses.config import Config
 from agent.dataclasses.question_tree import QuestionTree
+from agent.dataclasses.ranking import CompanyRankingResult
 from agent.dataclasses.examples import BRANDBACK_COMPANY
 
 
@@ -39,7 +40,11 @@ class InputState(BaseModel):
         k_best_arguments_per_iteration=[3, 1],
         max_iterations=2,
     )
-    all_qa_pairs: list[Dict[str, str]] = Field(default_factory=list)
+    # Values may be str, list[str] (chunk_ids), or None (web_search_query/results)
+    all_qa_pairs: list[Dict[str, Any]] = Field(default_factory=list)
+    prompt_overrides: Dict[str, Any] = Field(default_factory=dict)
+    vc_context: str = ""
+    slug: str = ""
 
 
 class IterativeInvestmentStoryState(BaseModel):
@@ -74,8 +79,12 @@ class IterativeInvestmentStoryState(BaseModel):
     # Keys: "general_company", "market", "product", "team"
     question_trees: Dict[str, QuestionTree] = Field(default_factory=dict)
 
-    # Combined Q&A pairs from all trees (populated after answering stage)
-    all_qa_pairs: list[Dict[str, str]] = Field(default_factory=list)
+    # Combined Q&A pairs from all trees (populated after answering stage).
+    # Each dict has question/answer (str), chunk_ids (list[str]), web_search_* (str|None).
+    all_qa_pairs: list[Dict[str, Any]] = Field(default_factory=list)
+    prompt_overrides: Dict[str, Any] = Field(default_factory=dict)
+    vc_context: str = ""
+    slug: str = ""
 
     # Legacy field for backward compatibility - will be deprecated
     question_tree: QuestionTree | None = None
@@ -102,6 +111,7 @@ class IterativeInvestmentStoryState(BaseModel):
     # ===== OUTPUT FIELDS =====
     final_arguments: list[Argument] = Field(default_factory=list)
     final_decision: Literal["invest", "not_invest"] | None = None
+    ranking_result: CompanyRankingResult | None = None
 
     @property
     def should_continue_iterations(self) -> bool:

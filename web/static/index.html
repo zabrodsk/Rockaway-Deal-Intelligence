@@ -1,0 +1,1917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Startup Ranker — Rockaway Capital</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-dark: #0A0A0A;
+      --bg-card: #111111;
+      --bg-card-hover: #161616;
+      --border: #1A1A1A;
+      --border-subtle: #1F1F1F;
+      --green: #00D26A;
+      --green-bg: #0A2E14;
+      --green-border: rgba(0, 210, 106, 0.2);
+      --red: #FF6B6B;
+      --red-bg: #2E1A0A;
+      --red-border: rgba(255, 107, 107, 0.2);
+      --text-white: #FFFFFF;
+      --text-light: #CCCCCC;
+      --text-mid: #AAAAAA;
+      --text-gray: #808080;
+      --text-dim: #555555;
+      --text-dark: #333333;
+      --font-display: 'Playfair Display', Georgia, serif;
+      --font-body: 'Inter', -apple-system, sans-serif;
+    }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg-dark);
+      color: var(--text-white);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .screen { display: none; min-height: 100vh; flex-direction: column; }
+    .screen.active { display: flex; }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+      padding: 0 48px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .logo { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+    .logo-icon {
+      width: 28px; height: 28px;
+      background: var(--green);
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo-icon svg { width: 16px; height: 16px; stroke: var(--bg-dark); }
+    .logo-text {
+      font-size: 14px; font-weight: 400;
+      letter-spacing: 4px; color: var(--text-white);
+      text-transform: lowercase;
+    }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .btn-ghost {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 20px;
+      border: 1px solid var(--text-dark);
+      border-radius: 6px;
+      background: none;
+      color: var(--text-gray);
+      font: 13px var(--font-body);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-ghost:hover { border-color: var(--text-gray); color: var(--text-light); }
+    .btn-ghost svg { width: 14px; height: 14px; }
+
+    /* ── Password Screen ── */
+    #password-screen {
+      align-items: center; justify-content: center;
+      background: var(--bg-dark);
+    }
+    .password-card {
+      width: 400px;
+      padding: 48px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--bg-card);
+      text-align: center;
+    }
+    .password-card .logo { justify-content: center; margin-bottom: 32px; }
+    .password-card h2 {
+      font-family: var(--font-display);
+      font-size: 24px; font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .password-card p {
+      font-size: 14px; color: var(--text-gray);
+      margin-bottom: 32px;
+    }
+    .password-input {
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-white);
+      font: 15px var(--font-body);
+      text-align: center;
+      letter-spacing: 8px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .password-input:focus { border-color: var(--green); }
+    .password-input::placeholder { letter-spacing: 2px; color: var(--text-dim); }
+    .password-error {
+      color: var(--red);
+      font-size: 13px;
+      margin-top: 12px;
+      min-height: 20px;
+    }
+    .btn-green {
+      display: inline-flex;
+      align-items: center; justify-content: center; gap: 10px;
+      padding: 14px 40px;
+      background: var(--green);
+      border: none; border-radius: 8px;
+      color: var(--bg-dark);
+      font: 600 15px var(--font-body);
+      cursor: pointer;
+      transition: opacity 0.2s;
+      width: 100%;
+      margin-top: 16px;
+    }
+    .btn-green:hover { opacity: 0.9; }
+    .btn-green:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-green svg { width: 18px; height: 18px; }
+
+    /* ── Upload Screen ── */
+    .main-content {
+      flex: 1;
+      display: flex; flex-direction: column;
+      align-items: center;
+      padding: 80px 48px;
+      gap: 48px;
+    }
+    .hero-text { text-align: center; max-width: 700px; }
+    .hero-text h1 {
+      font-family: var(--font-display);
+      font-size: 52px; font-weight: 700;
+      line-height: 1.1;
+      margin-bottom: 16px;
+    }
+    .hero-text p {
+      font-size: 17px; color: var(--text-gray);
+      line-height: 1.6; max-width: 560px; margin: 0 auto;
+    }
+
+    .upload-zone {
+      width: 640px;
+      padding: 48px;
+      border: 1px dashed var(--text-dark);
+      border-radius: 12px;
+      background: var(--bg-card);
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: var(--green);
+      background: var(--bg-card-hover);
+    }
+    .upload-icon {
+      width: 52px; height: 52px;
+      border-radius: 26px;
+      background: var(--bg-dark);
+      border: 1px solid #2A2A2A;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 20px;
+    }
+    .upload-icon svg { width: 22px; height: 22px; stroke: var(--green); }
+    .upload-text span { color: var(--text-gray); font-size: 15px; }
+    .upload-text a { color: var(--green); font-weight: 600; font-size: 15px; cursor: pointer; text-decoration: none; }
+    .upload-hint { color: var(--text-dim); font-size: 13px; margin-top: 8px; }
+
+    .input-mode-section {
+      width: 640px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .input-mode-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-gray);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .input-mode-toggle {
+      display: flex;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 4px;
+      gap: 4px;
+    }
+    .input-mode-option {
+      flex: 1;
+      padding: 12px 16px;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      color: var(--text-gray);
+      font: 600 13px var(--font-body);
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+    .input-mode-option:hover {
+      color: var(--text-light);
+    }
+    .input-mode-option.active {
+      background: rgba(0, 255, 135, 0.12);
+      border: 1px solid var(--green-border);
+      color: var(--green);
+    }
+    .input-mode-hint {
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.4;
+    }
+
+    .instructions-label {
+      display: block; font-size: 12px; font-weight: 600;
+      color: var(--text-gray); letter-spacing: 1px;
+      text-transform: uppercase; margin-bottom: 8px;
+    }
+    .instructions-input {
+      width: 100%; box-sizing: border-box;
+      padding: 12px 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-light);
+      font: 14px var(--font-body);
+      resize: vertical;
+      outline: none;
+      transition: border-color 0.2s;
+      min-height: 44px;
+    }
+    .instructions-input:focus { border-color: var(--green); }
+    .instructions-input::placeholder { color: var(--text-dim); font-size: 13px; }
+
+    .files-section { width: 640px; }
+    .files-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 16px;
+    }
+    .files-header .label {
+      font-size: 12px; font-weight: 600;
+      color: var(--text-gray); letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .files-header .clear {
+      font-size: 13px; color: var(--text-dim);
+      cursor: pointer; background: none; border: none;
+      transition: color 0.2s;
+    }
+    .files-header .clear:hover { color: var(--red); }
+
+    .web-search-toggle {
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      transition: border-color 0.2s;
+    }
+    .web-search-toggle:has(input:checked) {
+      border-color: var(--green);
+    }
+    .toggle-row {
+      display: flex; align-items: flex-start; gap: 12px; cursor: pointer;
+    }
+    .toggle-switch {
+      position: relative; flex-shrink: 0;
+      width: 40px; height: 22px; margin-top: 1px;
+    }
+    .toggle-switch input {
+      opacity: 0; width: 0; height: 0;
+    }
+    .toggle-slider {
+      position: absolute; inset: 0;
+      background: var(--border-subtle); border-radius: 22px;
+      transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: ""; position: absolute;
+      width: 16px; height: 16px; left: 3px; top: 3px;
+      background: var(--text-dim); border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: rgba(0,255,135,0.25);
+    }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(18px);
+      background: var(--green);
+    }
+    .toggle-label { display: flex; flex-direction: column; gap: 2px; }
+    .toggle-title {
+      font-size: 14px; font-weight: 600; color: var(--text-light);
+      display: flex; align-items: center;
+    }
+    .toggle-desc {
+      font-size: 12px; color: var(--text-dim); line-height: 1.4;
+    }
+
+    .file-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 16px; height: 48px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+    .file-left { display: flex; align-items: center; gap: 12px; }
+    .file-left svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .file-left .name { font-size: 13px; color: var(--text-light); }
+    .file-right { display: flex; align-items: center; gap: 12px; }
+    .file-right .size { font-size: 12px; color: var(--text-dim); }
+    .file-remove {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-dim); display: flex;
+      transition: color 0.2s;
+    }
+    .file-remove:hover { color: var(--red); }
+    .file-remove svg { width: 14px; height: 14px; }
+
+    .recent-runs-section {
+      width: 640px;
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .recent-runs-header {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .recent-runs-header .label {
+      font-size: 12px; font-weight: 600;
+      color: var(--text-gray); letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .recent-run-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+    }
+    .recent-run-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+    .recent-run-title {
+      font-size: 14px;
+      color: var(--text-light);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .recent-run-subtitle {
+      font-size: 12px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .recent-run-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .recent-run-status {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-gray);
+      background: var(--bg-dark);
+    }
+    .recent-run-status.running { color: var(--green); border-color: var(--green-border); background: rgba(0,255,135,0.08); }
+    .recent-run-status.done { color: var(--text-light); }
+    .recent-run-status.error { color: var(--red); border-color: var(--red-border); background: rgba(255,107,107,0.08); }
+    .recent-run-open {
+      background: none;
+      border: 1px solid var(--text-dark);
+      color: var(--text-light);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .recent-run-open:hover { border-color: var(--text-gray); }
+
+    input[type="file"] { display: none; }
+
+    /* ── Processing Screen ── */
+    #processing-screen { align-items: center; justify-content: center; }
+    .processing-card {
+      text-align: center;
+      max-width: 500px;
+    }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 3px solid var(--border);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 24px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .processing-card h2 {
+      font-family: var(--font-display);
+      font-size: 28px; margin-bottom: 12px;
+    }
+    .processing-card .status {
+      font-size: 15px; color: var(--text-gray);
+    }
+    .processing-card .status.status-live {
+      font-size: 16px; color: var(--text-light);
+      min-height: 24px; margin: 16px 0 8px;
+    }
+    .processing-card .status-hint {
+      font-size: 13px; color: var(--text-dim);
+      line-height: 1.6;
+    }
+    .processing-steps {
+      margin-top: 32px; text-align: left;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .step {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 14px; color: var(--text-dim);
+    }
+    .step.active { color: var(--green); }
+    .step.done { color: var(--text-gray); }
+    .step-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .step.active .step-dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .step.done .step-dot { background: var(--text-gray); }
+
+    /* ── Results Screen ── */
+    .results-body { flex: 1; padding: 48px; }
+    .results-title-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 40px;
+    }
+    .results-title h1 {
+      font-family: var(--font-display);
+      font-size: 32px; font-weight: 700;
+    }
+    .results-title p { font-size: 14px; color: var(--text-gray); margin-top: 8px; }
+
+    .stats-row {
+      display: flex; gap: 16px;
+      margin-bottom: 40px;
+    }
+    .stat-card {
+      flex: 1;
+      padding: 24px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .stat-value {
+      font-family: var(--font-display);
+      font-size: 36px; font-weight: 700;
+    }
+    .stat-value.green { color: var(--green); }
+    .stat-label { font-size: 13px; color: var(--text-gray); margin-top: 4px; }
+
+    .rankings-label {
+      font-size: 12px; font-weight: 600;
+      color: var(--text-dim); letter-spacing: 2px;
+      margin-bottom: 16px;
+    }
+
+    .rank-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 16px;
+    }
+    .rank-top {
+      display: flex; align-items: center; gap: 16px;
+      margin-bottom: 16px; flex-wrap: wrap;
+    }
+    .rank-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font: bold 12px var(--font-body);
+    }
+    .rank-badge.first { background: var(--green); color: var(--bg-dark); }
+    .rank-badge.other {
+      background: var(--bg-dark);
+      border: 1px solid var(--text-dark);
+      color: var(--text-gray);
+    }
+    .rank-name {
+      font-family: var(--font-display);
+      font-size: 22px; font-weight: 700;
+    }
+    .decision-badge {
+      padding: 4px 12px;
+      border-radius: 4px;
+      font: bold 11px var(--font-body);
+      letter-spacing: 1px;
+    }
+    .decision-badge.invest {
+      background: var(--green-bg);
+      border: 1px solid var(--green-border);
+      color: var(--green);
+    }
+    .decision-badge.pass {
+      background: var(--red-bg);
+      border: 1px solid var(--red-border);
+      color: var(--red);
+    }
+
+    .score-row {
+      display: flex; gap: 24px;
+      margin-bottom: 20px;
+    }
+    .score-item {
+      padding: 12px 20px;
+      background: var(--bg-dark);
+      border-radius: 8px;
+    }
+    .score-item .value {
+      font-family: var(--font-display);
+      font-size: 28px; font-weight: 700;
+    }
+    .score-item .value.green { color: var(--green); }
+    .score-item .value.red { color: var(--red); }
+    .score-item .label { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+    .score-item.clickable { cursor: pointer; }
+    .score-item.clickable:hover { background: var(--bg-card-hover); }
+
+    .args-row { display: flex; gap: 16px; }
+    .args-col { flex: 1; }
+    .args-col .title {
+      font-size: 11px; font-weight: 600;
+      letter-spacing: 1px; margin-bottom: 8px;
+    }
+    .args-col .title.pro { color: var(--green); }
+    .args-col .title.contra { color: var(--red); }
+    .arg-item {
+      font-size: 13px; color: var(--text-mid);
+      line-height: 1.5;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .arg-item:last-child { border-bottom: none; }
+    .arg-score {
+      font-size: 11px; font-weight: 600;
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      margin-right: 6px;
+    }
+    .arg-score.pro { background: var(--green-bg); color: var(--green); }
+    .arg-score.contra { background: var(--red-bg); color: var(--red); }
+
+    .footer {
+      display: flex; justify-content: space-between; align-items: center;
+      height: 56px; padding: 0 48px;
+      border-top: 1px solid var(--border);
+      font-size: 12px; color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .footer .engine { color: var(--text-dark); letter-spacing: 1px; }
+
+    .btn-audit-log {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 10px 16px;
+      background: none;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      font-size: 12px; color: var(--text-light);
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .btn-audit-log:hover {
+      border-color: var(--text-gray);
+      color: var(--text-light);
+    }
+    .btn-audit-log svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+    .audit-modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .audit-modal-overlay.audit-modal-open { display: flex; }
+    .audit-modal-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      max-width: 700px; width: 100%;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 32px;
+      position: relative;
+    }
+    .audit-modal-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 24px;
+    }
+    .audit-modal-title {
+      font-family: var(--font-display);
+      font-size: 20px; font-weight: 700;
+    }
+    .audit-modal-close {
+      background: none; border: 1px solid var(--border-subtle);
+      color: var(--text-light);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .audit-modal-close:hover { border-color: var(--text-gray); }
+    .audit-section { margin-bottom: 24px; }
+    .audit-section-title {
+      font-size: 12px; font-weight: 600;
+      letter-spacing: 1px; text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+    }
+    .audit-section-body {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .audit-decision-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font: bold 11px var(--font-body);
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    .audit-decision-badge.invest {
+      background: var(--green-bg);
+      border: 1px solid var(--green-border);
+      color: var(--green);
+    }
+    .audit-decision-badge.pass {
+      background: var(--red-bg);
+      border: 1px solid var(--red-border);
+      color: var(--red);
+    }
+    .audit-decision-reason {
+      font-size: 14px; color: var(--text-mid);
+      line-height: 1.5;
+    }
+    .audit-qa-block {
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .audit-qa-block:last-child { border-bottom: none; }
+    .audit-qa-q { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+    .audit-qa-a { font-size: 14px; color: var(--text-light); line-height: 1.5; }
+    .audit-chunk-tags { margin-top: 8px; }
+    .audit-chunk-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      font-size: 11px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      margin: 2px 4px 2px 0;
+      color: var(--text-dim);
+    }
+    .audit-expand-toggle {
+      margin-top: 8px;
+      font-size: 12px; color: var(--green);
+      cursor: pointer;
+    }
+    .audit-expand-content {
+      margin-top: 8px;
+      font-size: 12px; color: var(--text-dim);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .audit-arg-block {
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .audit-arg-block:last-child { border-bottom: none; }
+    .audit-arg-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 8px;
+    }
+    .audit-arg-type {
+      font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 4px;
+    }
+    .audit-arg-type.pro { background: var(--green-bg); color: var(--green); }
+    .audit-arg-type.contra { background: var(--red-bg); color: var(--red); }
+    .audit-arg-text { font-size: 14px; color: var(--text-light); line-height: 1.5; }
+
+    .settings-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .settings-tab-btn {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-light);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .settings-tab-btn.active {
+      border-color: var(--green);
+      color: var(--green);
+      background: rgba(0, 210, 106, 0.08);
+    }
+    .settings-tab-panel { display: none; }
+    .settings-tab-panel.active { display: block; }
+    .settings-actions-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .settings-badge {
+      font-size: 11px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      padding: 4px 8px;
+      color: var(--text-dim);
+      background: var(--bg-dark);
+    }
+    .settings-badge.good {
+      color: var(--green);
+      border-color: var(--green-border);
+      background: var(--green-bg);
+    }
+    .settings-badge.warn {
+      color: #f6c344;
+      border-color: rgba(246, 195, 68, 0.3);
+      background: rgba(246, 195, 68, 0.08);
+    }
+    @media (max-width: 768px) {
+      .header { padding: 0 20px; }
+      .main-content { padding: 40px 20px; }
+      .hero-text h1 { font-size: 32px; }
+      .upload-zone { width: 100%; padding: 32px 20px; }
+      .instructions-section { width: 100% !important; }
+      .files-section { width: 100%; }
+      .results-body { padding: 24px 20px; }
+      .stats-row { flex-direction: column; }
+      .args-row { flex-direction: column; }
+      .score-row { flex-wrap: wrap; }
+    }
+
+    .dim-bars-container { margin: 12px 0 16px; }
+    .dim-bar-row {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 8px; font-size: 12px;
+    }
+    .dim-label {
+      width: 100px; color: var(--text-gray);
+      text-transform: capitalize;
+    }
+    .dim-bar-bg {
+      flex: 1; height: 6px; background: var(--bg-dark);
+      border-radius: 3px; overflow: hidden;
+    }
+    .dim-bar-fill {
+      height: 100%; background: var(--green);
+      border-radius: 3px; transition: width 0.3s;
+    }
+    .dim-value { width: 28px; text-align: right; color: var(--text-mid); }
+    .bucket-badge {
+      padding: 4px 10px; border-radius: 6px;
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+    }
+    .bucket-badge.bucket-priority-review { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+    .bucket-badge.bucket-watchlist { background: rgba(200,180,80,0.12); color: #c8b450; border: 1px solid rgba(200,180,80,0.3); }
+    .bucket-badge.bucket-low-priority { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+    .ranking-evidence-section { padding: 12px; background: var(--bg-dark); border-radius: 8px; font-size: 13px; }
+    .evidence-dim { margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════ PASSWORD SCREEN ═══════════════════ -->
+<div id="password-screen" class="screen active">
+  <div class="password-card">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      </div>
+      <span class="logo-text">startup ranker</span>
+    </div>
+    <h2>Access Required</h2>
+    <p>Enter the password to continue</p>
+    <form id="login-form">
+      <input type="password" class="password-input" id="password-input" placeholder="••••" maxlength="20" autofocus>
+      <div class="password-error" id="password-error"></div>
+      <button type="submit" class="btn-green">Enter</button>
+    </form>
+  </div>
+</div>
+
+<!-- ═══════════════════ UPLOAD SCREEN ═══════════════════ -->
+<div id="upload-screen" class="screen">
+  <div class="header">
+    <a class="logo" href="/">
+      <div class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      </div>
+      <span class="logo-text">startup ranker</span>
+    </a>
+    <div class="header-right">
+      <span style="font-size:13px;color:var(--text-gray)">How it works</span>
+      <span style="font-size:13px;color:var(--text-gray)">Documentation</span>
+      <span id="settings-open" style="font-size:13px;color:var(--text-gray);cursor:pointer;display:inline-flex;align-items:center" title="Settings">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px">
+    <circle cx="12" cy="12" r="3"/>
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+  </svg>
+</span>
+    </div>
+  </div>
+  <div class="main-content">
+    <div class="hero-text">
+      <h1>Rank your deal flow.</h1>
+      <p>Upload pitch decks, financials, and documents. Get structured investment rankings with pro and contra arguments in seconds.</p>
+    </div>
+
+    <div class="upload-zone" id="upload-zone">
+      <div class="upload-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div class="upload-text">
+        <span>Drag & drop files here, or </span><a id="browse-link">browse</a>
+      </div>
+      <div class="upload-hint">Supports PDF, PPTX, Word, Excel, CSV — or Specter company + people CSV exports</div>
+    </div>
+    <input type="file" id="file-input" multiple accept=".pdf,.pptx,.docx,.xlsx,.xls,.csv,.txt,.md">
+
+    <div class="input-mode-section">
+      <span class="input-mode-label">Input mode</span>
+      <div class="input-mode-toggle">
+        <button type="button" class="input-mode-option active" data-mode="pitchdeck">Pitch deck</button>
+        <button type="button" class="input-mode-option" data-mode="specter">Specter</button>
+        <button type="button" class="input-mode-option" data-mode="original">Original</button>
+      </div>
+      <p class="input-mode-hint" id="input-mode-hint">Each file = one company. Best for multiple pitch decks.</p>
+    </div>
+
+    <div class="instructions-section" style="width:640px;margin-top:20px;">
+      <label class="instructions-label" for="instructions-input">Additional instructions <span style="color:var(--text-dim);font-weight:400">(optional)</span></label>
+      <textarea id="instructions-input" class="instructions-input" rows="2" placeholder="e.g. Only rank the first 3 companies, focus on B2B SaaS, ignore companies outside Europe..."></textarea>
+    </div>
+
+    <div class="recent-runs-section" id="recent-runs-section">
+      <div class="recent-runs-header">
+        <span class="label">Recent runs</span>
+      </div>
+      <div id="recent-runs-list"></div>
+    </div>
+
+    <div class="files-section" id="files-section" style="display:none">
+      <div class="files-header">
+        <span class="label">Uploaded files</span>
+        <button class="clear" id="clear-files">Clear all</button>
+      </div>
+      <div id="specter-badge" style="display:none;margin-bottom:12px;padding:10px 14px;background:rgba(0,255,135,0.08);border:1px solid rgba(0,255,135,0.25);border-radius:8px;font-size:13px;color:var(--green);">
+        <strong>Specter mode detected</strong> — company & people CSVs will be parsed as structured data. All companies will be ranked in batch.
+      </div>
+      <div id="files-list"></div>
+
+      <div class="web-search-toggle" id="web-search-toggle" style="display:none;margin-top:16px;">
+        <label class="toggle-row" for="web-search-checkbox">
+          <div class="toggle-switch">
+            <input type="checkbox" id="web-search-checkbox">
+            <span class="toggle-slider"></span>
+          </div>
+          <div class="toggle-label">
+            <span class="toggle-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;vertical-align:middle;margin-right:6px"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              Enable web search
+            </span>
+            <span class="toggle-desc">Documents are primary. Web search only fills gaps when uploaded files have no evidence.</span>
+          </div>
+        </label>
+      </div>
+
+      <button class="btn-green" id="analyze-btn" style="margin-top:16px">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        Analyze & Rank
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ PROCESSING SCREEN ═══════════════════ -->
+<div id="processing-screen" class="screen">
+  <div class="header">
+    <a class="logo" href="/">
+      <div class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      </div>
+      <span class="logo-text">startup ranker</span>
+    </a>
+  </div>
+  <div style="flex:1;display:flex;align-items:center;justify-content:center">
+    <div class="processing-card">
+      <div class="spinner"></div>
+      <h2>Analyzing...</h2>
+      <p class="status status-live" id="processing-status">Uploading files and starting analysis...</p>
+      <p class="status-hint">Progress updates every few seconds. Each company takes 1–2 minutes.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ RESULTS SCREEN ═══════════════════ -->
+<div id="results-screen" class="screen">
+  <div class="header">
+    <a class="logo" href="/">
+      <div class="logo-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      </div>
+      <span class="logo-text">startup ranker</span>
+    </a>
+    <div class="header-right">
+      <button class="btn-ghost" id="new-analysis-btn">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Analysis
+      </button>
+    </div>
+  </div>
+  <div class="results-body">
+    <div class="results-title-row">
+      <div class="results-title">
+        <h1>Analysis Results</h1>
+        <p id="results-subtitle"></p>
+      </div>
+      <button class="btn-green" id="download-btn" style="width:auto">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Excel
+      </button>
+    </div>
+
+    <div class="stats-row" id="stats-row"></div>
+    <div class="rankings-label">RANKINGS</div>
+    <div id="rankings-container"></div>
+  </div>
+  <div class="footer">
+    <span>Powered by Rockaway Capital</span>
+    <span class="engine">DIALECTIC Evaluation Engine v1.0</span>
+  </div>
+</div>
+
+<!-- Audit log modal -->
+<div id="audit-modal-overlay" class="audit-modal-overlay">
+  <div class="audit-modal-panel">
+    <div class="audit-modal-header">
+      <h2 class="audit-modal-title" id="audit-modal-title">Audit Log</h2>
+      <button type="button" class="audit-modal-close" id="audit-modal-close">Close</button>
+    </div>
+    <div id="audit-modal-content"></div>
+  </div>
+</div>
+
+<!-- Arguments modal -->
+<div id="arguments-modal-overlay" class="audit-modal-overlay">
+  <div class="audit-modal-panel">
+    <div class="audit-modal-header">
+      <h2 class="audit-modal-title" id="arguments-modal-title">All PRO Arguments</h2>
+      <button type="button" class="audit-modal-close" id="arguments-modal-close">Close</button>
+    </div>
+    <div id="arguments-modal-content"></div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div id="settings-modal-overlay" class="audit-modal-overlay">
+  <div class="audit-modal-panel">
+    <div class="audit-modal-header">
+      <h2 class="audit-modal-title">Settings</h2>
+      <button type="button" class="audit-modal-close" id="settings-close-btn">Close</button>
+    </div>
+    <div id="settings-tab-vc" class="settings-tab-panel active">
+      <div class="audit-section-title">VC Investment Strategy</div>
+      <div class="audit-section">
+        <textarea id="vc-strategy-input" class="instructions-input" rows="4" placeholder="e.g. Early-stage B2B SaaS in Europe, check size €1–5M, sectors: fintech, healthtech, proptech..."></textarea>
+      </div>
+      <div class="settings-actions-row">
+        <button type="button" class="audit-modal-close" id="settings-save-vc-btn">Save VC Strategy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+let sessionId = localStorage.getItem('session_id');
+let currentJobId = null;
+let currentResults = null;
+let uploadedFiles = [];
+let inputMode = 'pitchdeck';
+const ACTIVE_JOB_KEY = 'active_job_id';
+const RECENT_RUNS_KEY = 'recent_runs_v1';
+const VC_STRATEGY_KEY = 'vc_investment_strategy';
+let vcInvestmentStrategy = localStorage.getItem(VC_STRATEGY_KEY) || '';
+
+function showScreen(id) {
+  $$('.screen').forEach(s => s.classList.remove('active'));
+  $(`#${id}`).classList.add('active');
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function setCookie(name, value, maxAgeSeconds = 60 * 60 * 24 * 14) {
+  const safeValue = encodeURIComponent(value);
+  document.cookie = `${name}=${safeValue};path=/;max-age=${maxAgeSeconds};SameSite=Strict`;
+}
+
+function persistActiveJob(jobId) {
+  currentJobId = jobId;
+  if (jobId) {
+    localStorage.setItem(ACTIVE_JOB_KEY, jobId);
+  } else {
+    localStorage.removeItem(ACTIVE_JOB_KEY);
+  }
+}
+
+function getPersistedActiveJob() {
+  return localStorage.getItem(ACTIVE_JOB_KEY);
+}
+
+function loadRecentRuns() {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_RUNS_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentRuns(runs) {
+  localStorage.setItem(RECENT_RUNS_KEY, JSON.stringify(runs.slice(0, 12)));
+}
+
+function upsertRecentRun(update) {
+  const runs = loadRecentRuns();
+  const idx = runs.findIndex((run) => run.jobId === update.jobId);
+  const next = {
+    ...(idx >= 0 ? runs[idx] : {}),
+    ...update,
+    updatedAt: Date.now(),
+  };
+  if (!next.createdAt) next.createdAt = Date.now();
+  if (idx >= 0) runs.splice(idx, 1);
+  runs.unshift(next);
+  saveRecentRuns(runs);
+  renderRecentRuns();
+}
+
+function formatRunTimestamp(ts) {
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return '';
+  }
+}
+
+function getRunTitle(run) {
+  if (run.results?.mode === 'batch') {
+    const count = run.results?.summary_rows?.length || 0;
+    return count ? `${count} companies ranked` : 'Batch analysis';
+  }
+  return run.results?.company_name || run.title || `Run ${run.jobId}`;
+}
+
+function renderRecentRuns() {
+  const section = $('#recent-runs-section');
+  const list = $('#recent-runs-list');
+  const runs = loadRecentRuns();
+
+  if (!runs.length) {
+    section.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+
+  section.style.display = 'flex';
+  list.innerHTML = runs.map((run) => {
+    const status = run.status || 'pending';
+    const actionLabel = status === 'done' ? 'Open results' : 'Resume';
+    const subtitle = run.progress || `Started ${formatRunTimestamp(run.createdAt)}`;
+    return `<div class="recent-run-card">
+      <div class="recent-run-meta">
+        <div class="recent-run-title">${getRunTitle(run)}</div>
+        <div class="recent-run-subtitle">${subtitle}</div>
+      </div>
+      <div class="recent-run-actions">
+        <span class="recent-run-status ${status}">${status}</span>
+        <button class="recent-run-open" data-job-open="${run.jobId}">${actionLabel}</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  $$('[data-job-open]').forEach((btn) => {
+    btn.addEventListener('click', () => openSavedRun(btn.dataset.jobOpen));
+  });
+}
+
+async function api(path, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 15000;
+  const retries = opts.retries ?? 1;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(path, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', ...opts.headers },
+        credentials: 'include',
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Request failed' }));
+        throw new Error(err.detail || 'Request failed');
+      }
+      return res.json();
+    } catch (err) {
+      if (attempt === retries) {
+        if (err?.name === 'AbortError') {
+          throw new Error('Request timed out. Please try again.');
+        }
+        throw new Error('Network error. Please retry.');
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function setSpinnerActive() {
+  const spinner = document.querySelector('.spinner');
+  if (spinner) spinner.style.borderTopColor = 'var(--green)';
+}
+
+function setSpinnerError() {
+  const spinner = document.querySelector('.spinner');
+  if (spinner) spinner.style.borderTopColor = 'var(--red)';
+}
+
+// ── Password ──
+$('#login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pw = $('#password-input').value;
+  try {
+    const data = await api('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({ password: pw }),
+    });
+    sessionId = data.session_id;
+    localStorage.setItem('session_id', sessionId);
+    setCookie('session_id', sessionId);
+    showScreen('upload-screen');
+    checkWebSearchAvailable();
+  } catch (err) {
+    const msg = err.message === 'Wrong password' ? 'Wrong password. Try again.'
+      : err.message || 'Connection error. Is the server running?';
+    $('#password-error').textContent = msg;
+    $('#password-input').value = '';
+    $('#password-input').focus();
+  }
+});
+
+async function checkWebSearchAvailable() {
+  try {
+    const data = await api('/api/web-search-available');
+    const toggle = $('#web-search-toggle');
+    if (data.available) {
+      toggle.style.display = 'block';
+    } else {
+      toggle.style.display = 'none';
+      $('#web-search-checkbox').checked = false;
+    }
+  } catch {}
+}
+
+async function resumeActiveJob() {
+  const savedJobId = getPersistedActiveJob();
+  if (!savedJobId) return false;
+
+  persistActiveJob(savedJobId);
+  showScreen('processing-screen');
+  setSpinnerActive();
+  $('#processing-status').textContent = 'Reconnecting to your running analysis...';
+
+  try {
+    const data = await api(`/api/status/${savedJobId}`, { timeoutMs: 10000, retries: 0 });
+    upsertRecentRun({
+      jobId: savedJobId,
+      status: data.status,
+      progress: data.progress,
+      results: data.results || null,
+    });
+    if (data.status === 'done' && data.results) {
+      renderResults(data.results);
+      showScreen('results-screen');
+      persistActiveJob(savedJobId);
+      return true;
+    }
+
+    if (data.status === 'error') {
+      $('#processing-status').textContent = data.progress || 'Analysis failed.';
+      setSpinnerError();
+      return true;
+    }
+
+    $('#processing-status').textContent = data.progress || 'Resuming analysis...';
+    pollStatus.failures = 0;
+    pollStatus();
+    return true;
+  } catch {
+    persistActiveJob(null);
+    showScreen('upload-screen');
+    return false;
+  }
+}
+
+async function openSavedRun(jobId) {
+  persistActiveJob(jobId);
+
+  const runs = loadRecentRuns();
+  const run = runs.find((r) => r.jobId === jobId);
+  if (run?.status === 'done' && run.results) {
+    renderResults(run.results);
+    showScreen('results-screen');
+    return;
+  }
+
+  showScreen('processing-screen');
+  $('#processing-status').textContent = 'Loading saved run...';
+  await resumeActiveJob();
+}
+
+// Check existing session on load
+(async () => {
+  if (sessionId) {
+    setCookie('session_id', sessionId);
+    try {
+      const data = await api('/api/check-session');
+      if (data.authenticated) {
+        checkWebSearchAvailable();
+        renderRecentRuns();
+        const resumed = await resumeActiveJob();
+        if (!resumed) {
+          showScreen('upload-screen');
+        }
+        return;
+      }
+    } catch {}
+  }
+  showScreen('password-screen');
+})();
+
+// ── File Upload ──
+const fileColors = {
+  '.pdf': '#FF6B6B', '.pptx': '#6366F1', '.docx': '#3B82F6',
+  '.xlsx': '#00D26A', '.xls': '#00D26A', '.csv': '#FCD34D',
+  '.txt': '#808080', '.md': '#808080',
+};
+
+function getExt(name) {
+  const idx = name.lastIndexOf('.');
+  return idx >= 0 ? name.substring(idx).toLowerCase() : '';
+}
+
+function formatSize(bytes) {
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+  if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  return bytes + ' B';
+}
+
+function renderFiles() {
+  const section = $('#files-section');
+  const list = $('#files-list');
+  if (uploadedFiles.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  list.innerHTML = uploadedFiles.map((f, i) => {
+    const ext = getExt(f.name);
+    const color = fileColors[ext] || '#808080';
+    return `<div class="file-item">
+      <div class="file-left">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span class="name">${f.name}</span>
+      </div>
+      <div class="file-right">
+        <span class="size">${formatSize(f.size)}</span>
+        <button class="file-remove" onclick="removeFile(${i})">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function isSpecterMode() {
+  const names = uploadedFiles.map(f => f.name.toLowerCase());
+  return names.some(n => n.includes('company') && n.includes('signal') && n.endsWith('.csv'))
+      && names.some(n => n.includes('people') && n.includes('signal') && n.endsWith('.csv'));
+}
+
+function addFiles(fileList) {
+  for (const f of fileList) {
+    if (!uploadedFiles.some(uf => uf.name === f.name)) {
+      uploadedFiles.push(f);
+    }
+  }
+  renderFiles();
+  const badge = $('#specter-badge');
+  badge.style.display = isSpecterMode() ? 'block' : 'none';
+}
+
+window.removeFile = (i) => { uploadedFiles.splice(i, 1); renderFiles(); };
+
+$('#clear-files').addEventListener('click', () => {
+  uploadedFiles = [];
+  renderFiles();
+  $('#specter-badge').style.display = 'none';
+});
+
+const uploadZone = $('#upload-zone');
+const fileInput = $('#file-input');
+
+$('#browse-link').addEventListener('click', (e) => {
+  e.stopPropagation();
+  fileInput.click();
+});
+uploadZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  addFiles(fileInput.files);
+  fileInput.value = '';
+});
+
+uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  addFiles(e.dataTransfer.files);
+});
+
+// ── Input mode toggle ──
+const MODE_HINTS = {
+  pitchdeck: 'Each file = one company. Best for multiple pitch decks.',
+  specter: 'Upload 2 files (companies first, people second). Any names. CSV or Excel.',
+  original: 'All files = one company. Best for a folder of docs (deck, financials, etc.).',
+};
+function setInputMode(mode) {
+  inputMode = mode;
+  $$('.input-mode-option').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  const hint = $('#input-mode-hint');
+  if (hint) hint.textContent = MODE_HINTS[mode] || '';
+}
+$$('.input-mode-option').forEach((btn) => {
+  btn.addEventListener('click', () => setInputMode(btn.dataset.mode));
+});
+
+// ── Analyze ──
+$('#analyze-btn').addEventListener('click', async () => {
+  if (uploadedFiles.length === 0) return;
+
+  showScreen('processing-screen');
+  setSpinnerActive();
+  $('#processing-status').textContent = 'Uploading files...';
+
+  const formData = new FormData();
+  for (const f of uploadedFiles) formData.append('files', f);
+
+  try {
+    const uploadResponse = await fetch('/api/upload', {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+    });
+
+    const uploadRes = await uploadResponse.json().catch(() => ({}));
+    if (!uploadResponse.ok) {
+      throw new Error(uploadRes.detail || 'Upload failed');
+    }
+
+    if (!uploadRes.job_id) {
+      throw new Error('Upload did not return a job id.');
+    }
+    persistActiveJob(uploadRes.job_id);
+    upsertRecentRun({
+      jobId: uploadRes.job_id,
+      status: 'running',
+      progress: 'Uploading files...',
+      title: isSpecterMode() ? 'Batch analysis' : uploadedFiles.map((f) => f.name).join(', '),
+    });
+
+    const useWebSearch = !!$('#web-search-checkbox')?.checked;
+    const instructions = ($('#instructions-input')?.value || '').trim();
+    try {
+      await api(`/api/analyze/${currentJobId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          use_web_search: useWebSearch,
+          instructions: instructions || undefined,
+          input_mode: inputMode,
+          vc_investment_strategy: vcInvestmentStrategy || undefined,
+        }),
+        timeoutMs: 60000,
+        retries: 4,
+      });
+    } catch (err) {
+      // The backend may still have accepted the job even if this request timed out.
+      // Continue by polling status instead of failing hard.
+      $('#processing-status').textContent =
+        'Connection unstable while starting analysis. Reconnecting...';
+    }
+    pollStatus();
+  } catch (err) {
+    setSpinnerError();
+    $('#processing-status').textContent = 'Error: ' + err.message;
+  }
+});
+
+async function pollStatus() {
+  pollStatus.failures = pollStatus.failures || 0;
+  pollStatus.lastProgress = pollStatus.lastProgress || '';
+  pollStatus.stallTicks = pollStatus.stallTicks || 0;
+  try {
+    const data = await api(`/api/status/${currentJobId}`, { timeoutMs: 10000, retries: 0 });
+    pollStatus.failures = 0;
+    setSpinnerActive();
+    upsertRecentRun({
+      jobId: currentJobId,
+      status: data.status,
+      progress: data.progress || 'Processing...',
+      results: data.results || null,
+    });
+    const progressText = data.progress || 'Processing...';
+    if (progressText === pollStatus.lastProgress && data.status !== 'done' && data.status !== 'error') {
+      pollStatus.stallTicks += 1;
+    } else {
+      pollStatus.stallTicks = 0;
+      pollStatus.lastProgress = progressText;
+    }
+    if (pollStatus.stallTicks >= 20) {
+      $('#processing-status').textContent = `${progressText} (still running, waiting for next update...)`;
+    } else {
+      $('#processing-status').textContent = progressText;
+    }
+
+    if (data.status === 'done') {
+      renderResults(data.results);
+      showScreen('results-screen');
+      persistActiveJob(currentJobId);
+      pollStatus.lastProgress = '';
+      pollStatus.stallTicks = 0;
+    } else if (data.status === 'error') {
+      $('#processing-status').textContent = data.progress;
+      setSpinnerError();
+    } else {
+      setTimeout(pollStatus, 1500);
+    }
+  } catch (err) {
+    const message = (err && err.message ? err.message : '').toLowerCase();
+    if (message.includes('not found') || message.includes('job')) {
+      setSpinnerError();
+      $('#processing-status').textContent =
+        'This run ID is no longer available. Please start a new analysis.';
+      persistActiveJob(null);
+      return;
+    }
+    pollStatus.failures += 1;
+    if (pollStatus.failures >= 3) {
+      $('#processing-status').textContent =
+        'Network connection is unstable. Retrying automatically...';
+    }
+    setTimeout(pollStatus, 3000);
+  }
+}
+
+// ── Results ──
+function renderResults(r) {
+  currentResults = r;
+  if (r.mode === 'batch') {
+    renderBatchResults(r);
+  } else {
+    renderSingleResult(r);
+  }
+}
+
+function buildDimensionBars(dimScores) {
+  if (!dimScores || !dimScores.length) return '';
+  return dimScores.map(d => {
+    const pct = Math.min(100, Math.round(d.adjusted_score || 0));
+    const label = (d.dimension || '').replace(/_/g, ' ');
+    return `<div class="dim-bar-row"><span class="dim-label">${label}</span><div class="dim-bar-bg"><div class="dim-bar-fill" style="width:${pct}%"></div></div><span class="dim-value">${pct}</span></div>`;
+  }).join('');
+}
+
+function buildEvidenceSnippets(dimScores) {
+  if (!dimScores || !dimScores.length) return '';
+  let html = '<div class="ranking-evidence-section"><div class="audit-section-title">Evidence snippets</div>';
+  dimScores.forEach(d => {
+    if (d.evidence_snippets && d.evidence_snippets.length) {
+      html += `<div class="evidence-dim"><strong>${(d.dimension || '').replace(/_/g, ' ')}:</strong> ${escapeHtml(d.evidence_snippets.join(' | '))}</div>`;
+    }
+  });
+  html += '</div>';
+  return html;
+}
+
+function renderSingleResult(r) {
+  $('#results-subtitle').textContent =
+    `${r.company_name} — ${r.industry} · ${r.num_documents} documents · ${r.num_arguments} arguments`;
+
+  const rank = r.ranking_result?.rank;
+  const composite = r.ranking_result?.composite_score;
+  const bucket = r.ranking_result?.bucket || '';
+
+  $('#stats-row').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${r.num_documents}</div><div class="stat-label">Documents Processed</div></div>
+    <div class="stat-card"><div class="stat-value green">${composite !== undefined ? composite : r.total_score}</div><div class="stat-label">${composite !== undefined ? 'Composite Score' : 'Total Score'}</div></div>
+    <div class="stat-card"><div class="stat-value">${r.num_chunks}</div><div class="stat-label">Evidence Chunks</div></div>
+    <div class="stat-card"><div class="stat-value">${r.num_arguments}</div><div class="stat-label">Arguments Generated</div></div>
+  `;
+
+  const isInvest = r.decision.toLowerCase().includes('invest') && !r.decision.toLowerCase().includes('not');
+  const decClass = isInvest ? 'invest' : 'pass';
+  const decText = isInvest ? 'INVEST' : 'PASS';
+  const bucketLabel = bucket === 'priority_review' ? 'Priority Review' : bucket === 'watchlist' ? 'Watchlist' : bucket ? 'Low Priority' : '';
+
+  let proHtml = r.pro_arguments.map(a =>
+    `<div class="arg-item"><span class="arg-score pro">${a.score}</span>${a.text}</div>`
+  ).join('');
+
+  let conHtml = r.contra_arguments.map(a =>
+    `<div class="arg-item"><span class="arg-score contra">${a.score}</span>${a.text}</div>`
+  ).join('');
+
+  const dimBars = r.ranking_result?.dimension_scores ? buildDimensionBars(r.ranking_result.dimension_scores) : '';
+  const evidenceBlock = r.ranking_result?.dimension_scores ? buildEvidenceSnippets(r.ranking_result.dimension_scores) : '';
+
+  let scoreRowHtml = `
+    <div class="score-item"><div class="value green">${composite !== undefined ? composite : r.total_score}</div><div class="label">${composite !== undefined ? 'Composite' : 'Total Score'}</div></div>
+    <div class="score-item clickable" data-type="pro" data-slug="${(r.startup_slug || r.company_name || '').replace(/"/g, '&quot;')}"><div class="value green">${r.avg_pro}</div><div class="label">Avg. Pro</div></div>
+    <div class="score-item clickable" data-type="contra" data-slug="${(r.startup_slug || r.company_name || '').replace(/"/g, '&quot;')}"><div class="value red">${r.avg_contra}</div><div class="label">Avg. Contra</div></div>
+    <button class="btn-audit-log" data-slug="${(r.startup_slug || r.company_name || '').replace(/"/g, '&quot;')}">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      View log
+    </button>
+  `;
+
+  $('#rankings-container').innerHTML = `
+    <div class="rank-card">
+      <div class="rank-top">
+        <span class="rank-badge first">#${rank || 1}</span>
+        <span class="rank-name">${r.company_name}</span>
+        ${bucketLabel ? `<span class="bucket-badge bucket-${bucket.replace(/_/g,'-')}">${bucketLabel}</span>` : ''}
+        <span class="decision-badge ${decClass}">${decText}</span>
+      </div>
+      ${dimBars ? `<div class="dim-bars-container">${dimBars}</div>` : ''}
+      <div class="score-row">${scoreRowHtml}</div>
+      ${evidenceBlock ? `<div class="ranking-evidence-toggle"><button type="button" class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Show evidence snippets</button><div class="audit-expand-content" style="display:none">${evidenceBlock}</div></div>` : ''}
+      <div class="args-row">
+        <div class="args-col">
+          <div class="title pro">TOP PRO ARGUMENTS</div>
+          ${proHtml || '<div class="arg-item">No pro arguments</div>'}
+        </div>
+        <div class="args-col">
+          <div class="title contra">TOP CONTRA ARGUMENTS</div>
+          ${conHtml || '<div class="arg-item">No contra arguments</div>'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderBatchResults(r) {
+  const rows = r.summary_rows || [];
+  const skipped = r.num_skipped || 0;
+  $('#results-subtitle').textContent =
+    `${rows.length} companies ranked${skipped ? ` (${skipped} skipped)` : ''} — Specter batch analysis`;
+
+  const topComposite = rows.length > 0 && (typeof rows[0].composite_score === 'number') ? rows[0].composite_score : (rows.length > 0 ? rows[0].total_score : '—');
+  $('#stats-row').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${rows.length}</div><div class="stat-label">Companies Ranked</div></div>
+    <div class="stat-card"><div class="stat-value green">${topComposite}</div><div class="stat-label">Top Composite</div></div>
+    <div class="stat-card"><div class="stat-value">${skipped}</div><div class="stat-label">Skipped</div></div>
+    <div class="stat-card"><div class="stat-value">${(r.argument_rows || []).length}</div><div class="stat-label">Total Arguments</div></div>
+  `;
+
+  let cardsHtml = rows.map((row, i) => {
+    const isInvest = (row.decision || '').toLowerCase().includes('invest') && !(row.decision || '').toLowerCase().includes('not');
+    const decClass = isInvest ? 'invest' : 'pass';
+    const decText = isInvest ? 'INVEST' : 'PASS';
+    const rankNum = (typeof row.rank === 'number' ? row.rank : i + 1);
+    const badge = rankNum === 1 ? 'first' : (rankNum === 2 ? 'second' : (rankNum === 3 ? 'third' : ''));
+    const bucket = row.bucket || '';
+    const bucketLabel = bucket === 'priority_review' ? 'Priority Review' : bucket === 'watchlist' ? 'Watchlist' : bucket ? 'Low Priority' : '';
+    const composite = typeof row.composite_score === 'number' ? row.composite_score : row.total_score;
+    const dimBars = (row.strategy_fit_score !== undefined && row.team_score !== undefined && row.upside_score !== undefined)
+      ? buildDimensionBars([
+          { dimension: 'strategy_fit', adjusted_score: row.strategy_fit_score },
+          { dimension: 'team', adjusted_score: row.team_score },
+          { dimension: 'upside', adjusted_score: row.upside_score },
+        ])
+      : '';
+
+    let prosHtml = '';
+    for (let j = 1; j <= 3; j++) {
+      const t = row[`top_pro_${j}`];
+      const s = row[`top_pro_${j}_score`];
+      if (t) prosHtml += `<div class="arg-item"><span class="arg-score pro">${s}</span>${t}</div>`;
+    }
+    let consHtml = '';
+    for (let j = 1; j <= 3; j++) {
+      const t = row[`top_contra_${j}`];
+      const s = row[`top_contra_${j}_score`];
+      if (t) consHtml += `<div class="arg-item"><span class="arg-score contra">${s}</span>${t}</div>`;
+    }
+
+    return `
+      <div class="rank-card">
+        <div class="rank-top">
+          <span class="rank-badge ${badge}">#${rankNum}</span>
+          <span class="rank-name">${row.company_name || row.startup_slug}</span>
+          ${bucketLabel ? `<span class="bucket-badge bucket-${bucket.replace(/_/g,'-')}">${bucketLabel}</span>` : ''}
+          <span class="decision-badge ${decClass}">${decText}</span>
+        </div>
+        ${dimBars ? `<div class="dim-bars-container">${dimBars}</div>` : ''}
+        <div class="score-row">
+          <div class="score-item"><div class="value green">${composite}</div><div class="label">${typeof row.composite_score === 'number' ? 'Composite' : 'Total Score'}</div></div>
+          <div class="score-item clickable" data-type="pro" data-slug="${(row.startup_slug || row.company_name || '').replace(/"/g, '&quot;')}"><div class="value green">${row.avg_pro}</div><div class="label">Avg. Pro</div></div>
+          <div class="score-item clickable" data-type="contra" data-slug="${(row.startup_slug || row.company_name || '').replace(/"/g, '&quot;')}"><div class="value red">${row.avg_contra}</div><div class="label">Avg. Contra</div></div>
+          <button class="btn-audit-log" data-slug="${(row.startup_slug || row.company_name || '').replace(/"/g, '&quot;')}">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            View log
+          </button>
+        </div>
+        <div class="args-row">
+          <div class="args-col">
+            <div class="title pro">TOP PRO ARGUMENTS</div>
+            ${prosHtml || '<div class="arg-item">No pro arguments</div>'}
+          </div>
+          <div class="args-col">
+            <div class="title contra">TOP CONTRA ARGUMENTS</div>
+            ${consHtml || '<div class="arg-item">No contra arguments</div>'}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  $('#rankings-container').innerHTML = cardsHtml || '<p style="color:var(--text-dim)">No companies were successfully evaluated.</p>';
+}
+
+function showAuditLog(slug) {
+  if (!currentResults || !slug) return;
+  const r = currentResults;
+  const summaryRows = r.summary_rows || [];
+  const summary = r.mode === 'batch'
+    ? summaryRows.find((row) => (row.startup_slug || row.company_name) === slug)
+    : summaryRows[0] || { company_name: r.company_name, startup_slug: r.startup_slug || r.company_name, decision: r.decision, total_score: r.total_score, avg_pro: r.avg_pro, avg_contra: r.avg_contra };
+  const companyName = summary?.company_name || r.company_name || slug;
+  const argRows = (r.argument_rows || []).filter((a) => (a.startup_slug || a.company_name) === slug);
+  const qaRows = (r.qa_provenance_rows || []).filter((q) => (q.startup_slug || q.company_name) === slug);
+
+  const isInvest = (summary?.decision || r.decision || '').toLowerCase().includes('invest') && !(summary?.decision || r.decision || '').toLowerCase().includes('not');
+  const decClass = isInvest ? 'invest' : 'pass';
+  const decText = isInvest ? 'INVEST' : 'NOT INVEST';
+  const avgPro = summary?.avg_pro ?? r.avg_pro ?? 0;
+  const avgContra = summary?.avg_contra ?? r.avg_contra ?? 0;
+  const totalScore = summary?.total_score ?? r.total_score ?? 0;
+
+  let html = '';
+  html += `<div class="audit-section"><div class="audit-section-title">Decision</div><div class="audit-section-body">`;
+  html += `<div class="audit-decision-badge ${decClass}">${decText}</div>`;
+  html += `<div class="audit-decision-reason">Avg pro: ${avgPro} · Avg contra: ${avgContra} → total score ${totalScore}. Invest when pro > contra.</div>`;
+  html += `</div></div>`;
+
+  html += `<div class="audit-section"><div class="audit-section-title">Evidence Used</div><div class="audit-section-body">`;
+  if (qaRows.length === 0) {
+    html += `<div class="audit-qa-block"><div class="audit-qa-a" style="color:var(--text-dim)">No provenance data available.</div></div>`;
+  } else {
+    qaRows.forEach((qa) => {
+      html += `<div class="audit-qa-block">`;
+      html += `<div class="audit-qa-q">Q: ${escapeHtml(qa.question || '')}</div>`;
+      html += `<div class="audit-qa-a">${escapeHtml(qa.answer || '')}</div>`;
+      const chunkIds = (qa.chunk_ids || '').toString().split(',').map((s) => s.trim()).filter(Boolean);
+      if (chunkIds.length > 0) {
+        html += `<div class="audit-chunk-tags">`;
+        chunkIds.forEach((id) => { html += `<span class="audit-chunk-tag">${escapeHtml(id)}</span>`; });
+        html += `</div>`;
+      }
+      if (qa.chunks_preview) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Show chunk preview</div>`;
+        html += `<div class="audit-expand-content" style="display:none">${escapeHtml(qa.chunks_preview)}</div>`;
+      }
+      if (qa.web_search_query && qa.web_search_results) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Show web search</div>`;
+        html += `<div class="audit-expand-content" style="display:none">Query: ${escapeHtml(qa.web_search_query)}\n\n${escapeHtml(qa.web_search_results)}</div>`;
+      }
+      html += `</div>`;
+    });
+  }
+  html += `</div></div>`;
+
+  html += `<div class="audit-section"><div class="audit-section-title">Arguments & Reasoning</div><div class="audit-section-body">`;
+  if (argRows.length === 0) {
+    html += `<div class="audit-arg-block"><div class="audit-arg-text" style="color:var(--text-dim)">No argument details available.</div></div>`;
+  } else {
+    argRows.forEach((arg) => {
+      html += `<div class="audit-arg-block">`;
+      html += `<div class="audit-arg-header"><span class="audit-arg-type ${arg.type}">${(arg.type || '').toUpperCase()}</span><span style="font-size:12px;color:var(--text-dim)">Score ${arg.score}</span></div>`;
+      html += `<div class="audit-arg-text">${escapeHtml(arg.refined_text || arg.argument_text || '')}</div>`;
+      if (arg.qa_pairs_used) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Based on Q&A</div>`;
+        html += `<div class="audit-expand-content" style="display:none">${escapeHtml(arg.qa_pairs_used)}</div>`;
+      }
+      if (arg.argument_feedback) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Scoring criteria</div>`;
+        html += `<div class="audit-expand-content" style="display:none">${escapeHtml(arg.argument_feedback)}</div>`;
+      }
+      if (arg.critique_text) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Critique</div>`;
+        html += `<div class="audit-expand-content" style="display:none">${escapeHtml(arg.critique_text)}</div>`;
+      }
+      html += `</div>`;
+    });
+  }
+  html += `</div></div>`;
+
+  $('#audit-modal-title').textContent = `Audit Log — ${companyName}`;
+  $('#audit-modal-content').innerHTML = html;
+  $('#audit-modal-overlay').classList.add('audit-modal-open');
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function hideAuditLog() {
+  $('#audit-modal-overlay').classList.remove('audit-modal-open');
+}
+
+function showArgumentsModal(slug, type) {
+  if (!currentResults || !slug || !type) return;
+  const r = currentResults;
+  const argRows = (r.argument_rows || []).filter(
+    (a) => (a.startup_slug || a.company_name) === slug && (a.type || '').toLowerCase() === type.toLowerCase()
+  );
+  argRows.sort((a, b) => (b.score || 0) - (a.score || 0));
+
+  const summaryRows = r.summary_rows || [];
+  const summary = r.mode === 'batch'
+    ? summaryRows.find((row) => (row.startup_slug || row.company_name) === slug)
+    : null;
+  const companyName = summary?.company_name || r.company_name || slug;
+  const typeLabel = type === 'pro' ? 'PRO' : 'CONTRA';
+
+  $('#arguments-modal-title').textContent = `All ${typeLabel} Arguments — ${companyName}`;
+
+  if (argRows.length === 0) {
+    $('#arguments-modal-content').innerHTML = '<div class="arg-item" style="color:var(--text-dim)">No arguments of this type.</div>';
+  } else {
+    const html = argRows.map((arg) => {
+      const text = arg.refined_text || arg.argument_text || '';
+      const scoreClass = type === 'pro' ? 'pro' : 'contra';
+      return `<div class="arg-item"><span class="arg-score ${scoreClass}">${arg.score}</span>${escapeHtml(text)}</div>`;
+    }).join('');
+    $('#arguments-modal-content').innerHTML = html;
+  }
+
+  $('#arguments-modal-overlay').classList.add('audit-modal-open');
+}
+
+function hideArgumentsModal() {
+  $('#arguments-modal-overlay').classList.remove('audit-modal-open');
+}
+
+$('#rankings-container').addEventListener('click', (e) => {
+  const scoreItem = e.target.closest('.score-item.clickable');
+  if (scoreItem) {
+    const slug = scoreItem.getAttribute('data-slug');
+    const type = scoreItem.getAttribute('data-type');
+    if (slug && type) showArgumentsModal(slug, type);
+    return;
+  }
+  const btn = e.target.closest('.btn-audit-log');
+  if (btn) {
+    const slug = btn.getAttribute('data-slug');
+    showAuditLog(slug);
+  }
+});
+
+$('#audit-modal-close').addEventListener('click', hideAuditLog);
+$('#audit-modal-overlay').addEventListener('click', (e) => {
+  if (e.target === $('#audit-modal-overlay')) hideAuditLog();
+});
+$('#arguments-modal-close').addEventListener('click', hideArgumentsModal);
+$('#arguments-modal-overlay').addEventListener('click', (e) => {
+  if (e.target === $('#arguments-modal-overlay')) hideArgumentsModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if ($('#audit-modal-overlay').classList.contains('audit-modal-open')) hideAuditLog();
+    if ($('#arguments-modal-overlay').classList.contains('audit-modal-open')) hideArgumentsModal();
+  }
+});
+
+function showSettingsModal() {
+  $('#vc-strategy-input').value = vcInvestmentStrategy;
+  $('#settings-modal-overlay').classList.add('audit-modal-open');
+}
+function hideSettingsModal() {
+  $('#settings-modal-overlay').classList.remove('audit-modal-open');
+}
+function saveVcStrategy() {
+  vcInvestmentStrategy = ($('#vc-strategy-input').value || '').trim();
+  localStorage.setItem(VC_STRATEGY_KEY, vcInvestmentStrategy);
+}
+$('#settings-open').addEventListener('click', showSettingsModal);
+$('#settings-save-vc-btn').addEventListener('click', () => {
+  saveVcStrategy();
+  hideSettingsModal();
+});
+$('#settings-close-btn').addEventListener('click', hideSettingsModal);
+$('#settings-modal-overlay').addEventListener('click', (e) => {
+  if (e.target === $('#settings-modal-overlay')) hideSettingsModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#settings-modal-overlay').classList.contains('audit-modal-open')) hideSettingsModal();
+});
+
+$('#download-btn').addEventListener('click', () => {
+  if (currentJobId) window.location.href = `/api/download/${currentJobId}`;
+});
+
+$('#new-analysis-btn').addEventListener('click', () => {
+  uploadedFiles = [];
+  renderFiles();
+  persistActiveJob(null);
+  renderRecentRuns();
+  showScreen('upload-screen');
+});
+
+window.addEventListener('storage', (event) => {
+  if (event.key === RECENT_RUNS_KEY) {
+    renderRecentRuns();
+  }
+  if (event.key === ACTIVE_JOB_KEY && getPersistedActiveJob() && !currentJobId) {
+    resumeActiveJob();
+  }
+});
+</script>
+</body>
+</html>

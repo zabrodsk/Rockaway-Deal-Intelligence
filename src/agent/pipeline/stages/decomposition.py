@@ -21,13 +21,13 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.common.llm_config import get_llm
 from agent.dataclasses.question_tree import QuestionNode, QuestionTree
+from agent.prompt_library.manager import get_prompt
 from agent.pipeline.state.decomposition import (
     DecompositionInput,
     DecompositionNode,
     DecompositionOutput,
     DecompositionTree,
 )
-from agent.prompts import DECOMPOSE_QUESTION_PROMPT, DECOMPOSE_SYSTEM_PROMPT
 
 
 # Initialize LLM with structured output
@@ -77,10 +77,12 @@ def decompose_question(state: DecompositionInput) -> DecompositionOutput:
     Takes a high-level investment question and uses an LLM to break it
     down into a tree of sub-questions customized for the given industry.
     """
+    decompose_system_prompt = get_prompt("decomposition.system", state.prompt_overrides)
+    decompose_user_prompt = get_prompt("decomposition.user", state.prompt_overrides)
     messages = [
-        SystemMessage(content=DECOMPOSE_SYSTEM_PROMPT),
+        SystemMessage(content=decompose_system_prompt),
         HumanMessage(
-            content=DECOMPOSE_QUESTION_PROMPT.format(
+            content=decompose_user_prompt.format(
                 question=state.question, industry=state.industry
             )
         ),
@@ -110,9 +112,10 @@ graph = builder.compile()
 
 
 if __name__ == "__main__":
+    decompose_user_prompt = get_prompt("decomposition.user")
     messages = [
         HumanMessage(
-            content=DECOMPOSE_QUESTION_PROMPT
+            content=decompose_user_prompt
             + "Q: Who are the key members of the founding team, and what relevant experience and track record do they have?\nA:"
         ),
     ]

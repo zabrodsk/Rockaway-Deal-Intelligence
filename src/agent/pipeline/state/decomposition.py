@@ -4,9 +4,9 @@ These state classes are used by the decomposition stage to break down
 complex investment questions into hierarchical question trees.
 """
 
-from typing import Literal
+from typing import Any, Dict, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agent.dataclasses.question_tree import QuestionTree
 
@@ -43,6 +43,7 @@ class DecompositionInput(BaseModel):
     industry: str | None = "AI marketing tools"
     question: str | None = "What is the current size and forecast growth of the target market?"
     aspect: Literal["general_company", "market", "product", "team"] | None = "general_company"
+    prompt_overrides: Dict[str, Any] = Field(default_factory=dict)
 
 
 class DecompositionOutput(BaseModel):

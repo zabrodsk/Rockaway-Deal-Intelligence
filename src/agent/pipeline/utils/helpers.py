@@ -7,8 +7,8 @@ to internal data structures and formatting feedback for display.
 from typing import Literal
 
 from agent.dataclasses.argument import Argument
+from agent.prompt_library.manager import get_criteria_mapping
 from agent.pipeline.state.schemas import ArgumentOutput, CriterionScore
-from agent.prompts import CRITERIA_MAPPING
 
 
 def generate_context_block(qa_pairs: list[dict[str, str]], vc_context: str) -> str:
@@ -66,7 +66,10 @@ def convert_llm_arguments_to_objects(
     return arguments, tracking_id_counter
 
 
-def format_argument_feedback(argument_scores: list[CriterionScore]) -> str:
+def format_argument_feedback(
+    argument_scores: list[CriterionScore],
+    criteria_mapping: list[str] | None = None,
+) -> str:
     """Format argument feedback scores into readable text.
 
     Args:
@@ -75,9 +78,11 @@ def format_argument_feedback(argument_scores: list[CriterionScore]) -> str:
     Returns:
         Formatted string with each criterion, its reasoning, and score
     """
+    mapping = criteria_mapping or get_criteria_mapping()
     formatted_feedback_list = []
     for i, feedback in enumerate(argument_scores):
+        criterion = mapping[i] if i < len(mapping) else f"Criterion {i + 1}"
         formatted_feedback_list.append(
-            f"{CRITERIA_MAPPING[i]}: {feedback.reasoning} (Score: {feedback.score})"
+            f"{criterion}: {feedback.reasoning} (Score: {feedback.score})"
         )
     return "\n".join(formatted_feedback_list)

@@ -97,7 +97,7 @@ Edit `.env` with your API key. Gemini is the default free-tier path:
 
 ```
 LLM_PROVIDER=gemini
-MODEL_NAME=gemini-2.5-flash
+MODEL_NAME=gemini-3-flash-lite-preview
 GOOGLE_API_KEY=your_google_api_key_here
 ```
 

@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+
+# Env (secrets - set in Railway dashboard)
+.env
+*.env
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+.claude
+.cursor
+
+# Docs / plans
+*.md
+!README.md
+.cursor/plans/
+
+# Tests (optional - include if small)
+# tests/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import importlib
 import os
-import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import List, Optional
+
+from agent.rate_limit import run_with_sync_retries
 
 DEFAULT_RESULT_COUNT = 3
 DEFAULT_COUNTRY = "US"
@@ -116,51 +117,24 @@ class SonarSearchProvider(WebSearchProvider):
         if self._search_before:
             payload["search_before_date_filter"] = self._search_before
 
-        # Retry logic with exponential backoff
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = self._requests.post(
-                    self.BASE_URL,
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                    timeout=30,
-                )
-                response.raise_for_status()
-                data = response.json()
+        response = run_with_sync_retries(
+            self._requests.post,
+            self.BASE_URL,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
 
-                results = data.get("results", [])
-                if not isinstance(results, list):
-                    raise ValueError("Unexpected Sonar response format: 'results' is not a list")
+        results = data.get("results", [])
+        if not isinstance(results, list):
+            raise ValueError("Unexpected Sonar response format: 'results' is not a list")
 
-                return self._format_results(query, results)
-
-            except self._requests.exceptions.HTTPError as e:
-                # Check if it's a rate limit error (429) or server error (5xx)
-                if hasattr(e, 'response') and e.response is not None:
-                    status_code = e.response.status_code
-                    # Retry on rate limit or server errors
-                    if status_code in (429, 500, 502, 503, 504):
-                        if attempt < max_retries - 1:
-                            # Exponential backoff: 1s, 2s, 4s
-                            wait_time = 2 ** attempt
-                            time.sleep(wait_time)
-                            continue
-                # Re-raise if not retryable or last attempt
-                raise
-            except (self._requests.exceptions.Timeout, self._requests.exceptions.ConnectionError) as e:
-                # Retry on timeout or connection errors
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt
-                    time.sleep(wait_time)
-                    continue
-                raise
-
-        # This should not be reached, but just in case
-        raise RuntimeError(f"Failed to complete search after {max_retries} attempts")
+        return self._format_results(query, results)
 
     @staticmethod
     def _derive_date_filters(search_end_date: str) -> tuple[Optional[str], Optional[str]]:
@@ -206,5 +180,4 @@ def get_provider(search_end_date: str, *, provider_name: str) -> WebSearchProvid
     if provider == "brave":
         return BraveSearchProvider(search_end_date=search_end_date)
     raise ValueError(f"Unsupported web search provider '{provider_name}'.")
-
 

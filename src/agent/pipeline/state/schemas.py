@@ -48,3 +48,19 @@ class IndividualRefinedArgumentOutput(BaseModel):
     qa_indices: list[int] = Field(
         description="Indices of Q&A pairs used to support this argument"
     )
+
+
+class DimensionScoreOutput(BaseModel):
+    """LLM output for a single ranking dimension (strategy_fit, team, upside)."""
+
+    raw_score: float = Field(ge=0, le=100, description="Score 0-100")
+    confidence: float = Field(ge=0, le=1, description="Evidence confidence 0-1")
+    evidence_count: int = Field(ge=0, description="Number of Q&A pairs that contributed")
+    evidence_snippets: list[str] = Field(
+        default_factory=list,
+        description="2-3 short supporting quotes",
+    )
+    critical_gaps: list[str] = Field(
+        default_factory=list,
+        description="Missing high-impact facts",
+    )

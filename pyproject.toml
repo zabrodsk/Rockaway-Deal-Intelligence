@@ -1,6 +1,6 @@
 [project]
 name = "agent"
-version = "0.0.1"
+version = "0.0.2"
 description = "Starter template for making a new agent LangGraph."
 authors = [
     { name = "William Fu-Hinthorn", email = "13333726+hinthornw@users.noreply.github.com" },
@@ -25,6 +25,9 @@ dependencies = [
     "pandas>=2.0.0",
     "openpyxl>=3.1.0",
     "scikit-learn>=1.4.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "python-multipart>=0.0.6",
 ]
 
 
@@ -44,6 +47,7 @@ packages = ["langgraph.templates.agent", "agent"]
 
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
+"agent" = ["prompt_library/*.json"]
 
 [tool.ruff]
 lint.select = [

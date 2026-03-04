@@ -27,9 +27,14 @@ def get_qa_pairs_from_question_tree(
 
         qa_pairs = []
         if question_node.answer:
-            qa_pairs.append(
-                {"question": question_node.question, "answer": question_node.answer, "aspect": question_node.aspect}
-            )
+            pair: dict = {
+                "question": question_node.question,
+                "answer": question_node.answer,
+                "aspect": question_node.aspect,
+            }
+            if hasattr(question_node, "provenance") and question_node.provenance:
+                pair.update(question_node.provenance)
+            qa_pairs.append(pair)
         for node in question_node.sub_nodes:
             qa_pairs.extend(_get_qa_pairs_from_question_node(node))
         return qa_pairs

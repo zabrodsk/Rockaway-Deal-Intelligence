@@ -19,6 +19,7 @@ from agent.pipeline.stages.answering.without_tool import (
     graph as answer_without_tool_graph,
 )
 from agent.pipeline.state.answer import AnswerQuestionTreeState
+from agent.rate_limit import gather_with_concurrency
 
 
 async def _async_answer_question_with_tool(
@@ -77,18 +78,16 @@ async def _answer_node(
     answered_children: list[QuestionNode] = []
     if question_node.sub_nodes:
         tasks = [
-            asyncio.create_task(
-                _answer_node(
-                    child,
-                    company,
-                    vc_context=vc_context,
-                    is_backtesting=is_backtesting,
-                    search_end_date=search_end_date,
-                )
+            _answer_node(
+                child,
+                company,
+                vc_context=vc_context,
+                is_backtesting=is_backtesting,
+                search_end_date=search_end_date,
             )
             for child in question_node.sub_nodes
         ]
-        answered_children = await asyncio.gather(*tasks)
+        answered_children = await gather_with_concurrency(tasks)
 
     # 2. Prepare context from child answers
     sub_pairs: list[dict[str, str]] = [

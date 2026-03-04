@@ -17,14 +17,10 @@ from openai import RateLimitError
 from agent.common.llm_config import get_llm
 from agent.common.utils import format_qa_pairs_without_index
 from agent.dataclasses.argument import Argument
+from agent.prompt_library.manager import get_prompt
 from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
 from agent.pipeline.state.schemas import ArgumentCritique
-from agent.prompts import (
-    DEVILS_ADVOCATE_CONTRA_SYSTEM_PROMPT,
-    DEVILS_ADVOCATE_INDIVIDUAL_CONTRA_ARGUMENT_USER_PROMPT,
-    DEVILS_ADVOCATE_INDIVIDUAL_PRO_ARGUMENT_USER_PROMPT,
-    DEVILS_ADVOCATE_PRO_SYSTEM_PROMPT,
-)
+from agent.rate_limit import gather_with_concurrency
 
 # Initialize LLM
 llm = get_llm(temperature=0.5)
@@ -34,16 +30,21 @@ llm = get_llm(temperature=0.5)
     backoff.expo, RateLimitError, max_tries=5, max_time=60, jitter=backoff.full_jitter
 )
 async def _apply_devils_advocate_to_pro_argument(
-    argument: Argument, qa_pairs_formatted: str, former_critique: str | None = None
+    argument: Argument,
+    qa_pairs_formatted: str,
+    former_critique: str | None = None,
+    prompt_overrides: dict | None = None,
 ) -> Argument:
     """Critique a single pro argument from the opposing perspective.
 
     The critique comes from someone against investing, challenging
     the reasons why this would be a good investment.
     """
+    pro_user_prompt = get_prompt("critique.pro_user", prompt_overrides)
+    pro_system_prompt = get_prompt("critique.pro_system", prompt_overrides)
     llm_with_structured_output = llm.with_structured_output(ArgumentCritique)
 
-    user_prompt = DEVILS_ADVOCATE_INDIVIDUAL_PRO_ARGUMENT_USER_PROMPT.format(
+    user_prompt = pro_user_prompt.format(
         questions_and_answers=qa_pairs_formatted, argument=argument.content
     )
     if former_critique:
@@ -51,7 +52,7 @@ async def _apply_devils_advocate_to_pro_argument(
 
     critique: ArgumentCritique = await llm_with_structured_output.ainvoke(
         [
-            SystemMessage(content=DEVILS_ADVOCATE_PRO_SYSTEM_PROMPT),
+            SystemMessage(content=pro_system_prompt),
             HumanMessage(content=user_prompt),
         ]
     )
@@ -63,16 +64,21 @@ async def _apply_devils_advocate_to_pro_argument(
     backoff.expo, RateLimitError, max_tries=5, max_time=60, jitter=backoff.full_jitter
 )
 async def _apply_devils_advocate_to_contra_argument(
-    argument: Argument, qa_pairs_formatted: str, former_critique: str | None = None
+    argument: Argument,
+    qa_pairs_formatted: str,
+    former_critique: str | None = None,
+    prompt_overrides: dict | None = None,
 ) -> Argument:
     """Critique a single contra argument from the opposing perspective.
 
     The critique comes from someone in favor of investing, challenging
     the reasons why this would be a bad investment.
     """
+    contra_user_prompt = get_prompt("critique.contra_user", prompt_overrides)
+    contra_system_prompt = get_prompt("critique.contra_system", prompt_overrides)
     llm_with_structured_output = llm.with_structured_output(ArgumentCritique)
 
-    user_prompt = DEVILS_ADVOCATE_INDIVIDUAL_CONTRA_ARGUMENT_USER_PROMPT.format(
+    user_prompt = contra_user_prompt.format(
         questions_and_answers=qa_pairs_formatted, argument=argument.content
     )
     if former_critique:
@@ -80,7 +86,7 @@ async def _apply_devils_advocate_to_contra_argument(
 
     critique: ArgumentCritique = await llm_with_structured_output.ainvoke(
         [
-            SystemMessage(content=DEVILS_ADVOCATE_CONTRA_SYSTEM_PROMPT),
+            SystemMessage(content=contra_system_prompt),
             HumanMessage(content=user_prompt),
         ]
     )
@@ -117,12 +123,15 @@ async def apply_devils_advocate_to_pro_arguments(
 
     critique_tasks = [
         _apply_devils_advocate_to_pro_argument(
-            arg, formatted_qa_pairs, arg.former_critique
+            arg,
+            formatted_qa_pairs,
+            arg.former_critique,
+            state.prompt_overrides,
         )
         for arg in pro_arguments
     ]
 
-    critiqued_arguments = await asyncio.gather(*critique_tasks)
+    critiqued_arguments = await gather_with_concurrency(critique_tasks)
 
     return {"devils_advocate_pro_arguments": critiqued_arguments}
 
@@ -149,11 +158,14 @@ async def apply_devils_advocate_to_contra_arguments(
 
     critique_tasks = [
         _apply_devils_advocate_to_contra_argument(
-            arg, formatted_qa_pairs, arg.former_critique
+            arg,
+            formatted_qa_pairs,
+            arg.former_critique,
+            state.prompt_overrides,
         )
         for arg in contra_arguments
     ]
 
-    critiqued_arguments = await asyncio.gather(*critique_tasks)
+    critiqued_arguments = await gather_with_concurrency(critique_tasks)
 
     return {"devils_advocate_contra_arguments": critiqued_arguments}

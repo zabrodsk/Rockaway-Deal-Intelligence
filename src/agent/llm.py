@@ -4,7 +4,7 @@ Supports Gemini, OpenAI, Anthropic, and OpenRouter via environment variables.
 
 Environment variables:
     LLM_PROVIDER: One of "gemini", "openai", "anthropic", "openrouter" (default: "gemini")
-    MODEL_NAME: Model identifier (default: "gemini-2.0-flash")
+    MODEL_NAME: Model identifier (default: "gemini-3-flash-lite-preview")
     GOOGLE_API_KEY: Required when LLM_PROVIDER=gemini
     OPENAI_API_KEY: Required when LLM_PROVIDER=openai or openrouter
     ANTHROPIC_API_KEY: Required when LLM_PROVIDER=anthropic
@@ -16,10 +16,12 @@ import os
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from agent.rate_limit import wrap_llm
+
 load_dotenv()
 
 _DEFAULT_PROVIDER = "gemini"
-_DEFAULT_MODEL = "gemini-2.5-flash"
+_DEFAULT_MODEL = "gemini-3-flash-lite-preview"
 
 
 def create_llm(temperature: float = 0.0) -> BaseChatModel:
@@ -41,13 +43,13 @@ def create_llm(temperature: float = 0.0) -> BaseChatModel:
     model = os.getenv("MODEL_NAME", _DEFAULT_MODEL)
 
     if provider == "gemini":
-        return _create_gemini(model, temperature)
+        return wrap_llm(_create_gemini(model, temperature))
     elif provider == "openai":
-        return _create_openai(model, temperature)
+        return wrap_llm(_create_openai(model, temperature))
     elif provider == "openrouter":
-        return _create_openrouter(model, temperature)
+        return wrap_llm(_create_openrouter(model, temperature))
     elif provider == "anthropic":
-        return _create_anthropic(model, temperature)
+        return wrap_llm(_create_anthropic(model, temperature))
     else:
         raise ValueError(
             f"Unknown LLM_PROVIDER '{provider}'. "

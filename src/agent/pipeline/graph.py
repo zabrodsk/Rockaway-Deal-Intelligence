@@ -43,6 +43,10 @@ from agent.pipeline.stages.generation import (
 )
 from agent.pipeline.stages.parallel_answering import answer_all_trees
 from agent.pipeline.stages.parallel_decomposition import decompose_all_questions
+from agent.pipeline.stages.ranking import (
+    compute_composite_rank,
+    score_company_dimensions,
+)
 from agent.pipeline.stages.refinement import (
     merge_refined_arguments,
     refine_contra_arguments,
@@ -133,6 +137,10 @@ def build_graph() -> StateGraph:
     builder.add_node("decide_final_investment_decision", decide_final_investment_decision)
     builder.add_node("create_final_investment_story", create_final_investment_story)
 
+    # Stage 8: Ranking layer
+    builder.add_node("score_company_dimensions", score_company_dimensions)
+    builder.add_node("compute_composite_rank", compute_composite_rank)
+
     # === EDGES ===
 
     # 1. Conditional start - check where to begin
@@ -181,7 +189,11 @@ def build_graph() -> StateGraph:
     # 13. Prepare final arguments and create final story
     builder.add_edge("prepare_final_arguments", "decide_final_investment_decision")
     builder.add_edge("decide_final_investment_decision", "create_final_investment_story")
-    builder.add_edge("create_final_investment_story", END)
+
+    # 14. Ranking layer (after final story)
+    builder.add_edge("create_final_investment_story", "score_company_dimensions")
+    builder.add_edge("score_company_dimensions", "compute_composite_rank")
+    builder.add_edge("compute_composite_rank", END)
 
     return builder
 

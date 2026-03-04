@@ -75,4 +75,6 @@ def ingest_startup_folder(
     return EvidenceStore(startup_slug=slug, chunks=chunks)
 
 
-__all__ = ["ingest_startup_folder", "EvidenceStore", "Chunk"]
+from agent.ingest.specter_ingest import ingest_specter  # noqa: F401
+
+__all__ = ["ingest_startup_folder", "ingest_specter", "EvidenceStore", "Chunk"]
