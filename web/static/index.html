@@ -840,6 +840,13 @@
     .bucket-badge.bucket-low-priority { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
     .ranking-evidence-section { padding: 12px; background: var(--bg-dark); border-radius: 8px; font-size: 13px; }
     .evidence-dim { margin-bottom: 8px; }
+    .executive-summary-container { margin: 12px 0 16px; font-size: 13px; }
+    .executive-summary-block .dim-summary { margin-bottom: 8px; line-height: 1.5; }
+    .executive-summary-block .key-points-list,
+    .executive-summary-block .red-flags-list { margin: 6px 0 0; padding-left: 18px; }
+    .executive-summary-block .key-points-list li { margin-bottom: 4px; }
+    .executive-summary-block .red-flags-list li { margin-bottom: 4px; color: var(--red); }
+    .executive-summary-block .red-flags-title { color: var(--red) !important; }
   </style>
 </head>
 <body>
@@ -1614,6 +1621,35 @@ function buildEvidenceSnippets(dimScores) {
   return html;
 }
 
+function buildExecutiveSummaryBlock(rr) {
+  if (!rr) return '';
+  const strategyFit = rr.strategy_fit_summary || '';
+  const teamSummary = rr.team_summary || '';
+  const potentialSummary = rr.potential_summary || '';
+  const keyPoints = Array.isArray(rr.key_points) ? rr.key_points : (rr.key_points ? String(rr.key_points).split('\n').filter(Boolean) : []);
+  const redFlags = Array.isArray(rr.red_flags) ? rr.red_flags : (rr.red_flags ? String(rr.red_flags).split('\n').filter(Boolean) : []);
+  if (!strategyFit && !teamSummary && !potentialSummary && !keyPoints.length && !redFlags.length) return '';
+  let html = '<div class="executive-summary-block">';
+  if (strategyFit || teamSummary || potentialSummary) {
+    html += '<div class="audit-section-title">Summary</div>';
+    if (strategyFit) html += `<div class="dim-summary"><strong>Strategy Fit:</strong> ${escapeHtml(strategyFit)}</div>`;
+    if (teamSummary) html += `<div class="dim-summary"><strong>Team:</strong> ${escapeHtml(teamSummary)}</div>`;
+    if (potentialSummary) html += `<div class="dim-summary"><strong>Potential:</strong> ${escapeHtml(potentialSummary)}</div>`;
+  }
+  if (keyPoints.length) {
+    html += '<div class="audit-section-title" style="margin-top:12px">KEY POINTS</div><ul class="key-points-list">';
+    keyPoints.forEach(p => { html += `<li>${escapeHtml(p)}</li>`; });
+    html += '</ul>';
+  }
+  if (redFlags.length) {
+    html += `<div class="audit-section-title red-flags-title" style="margin-top:12px">RED FLAGS (${redFlags.length})</div><ul class="red-flags-list">`;
+    redFlags.forEach(f => { html += `<li>${escapeHtml(f)}</li>`; });
+    html += '</ul>';
+  }
+  html += '</div>';
+  return html;
+}
+
 function renderSingleResult(r) {
   $('#results-subtitle').textContent =
     `${r.company_name} — ${r.industry} · ${r.num_documents} documents · ${r.num_arguments} arguments`;
@@ -1644,6 +1680,7 @@ function renderSingleResult(r) {
 
   const dimBars = r.ranking_result?.dimension_scores ? buildDimensionBars(r.ranking_result.dimension_scores) : '';
   const evidenceBlock = r.ranking_result?.dimension_scores ? buildEvidenceSnippets(r.ranking_result.dimension_scores) : '';
+  const executiveSummaryBlock = buildExecutiveSummaryBlock(r.ranking_result);
 
   let scoreRowHtml = `
     <div class="score-item"><div class="value green">${composite !== undefined ? composite : r.total_score}</div><div class="label">${composite !== undefined ? 'Composite' : 'Total Score'}</div></div>
@@ -1664,6 +1701,7 @@ function renderSingleResult(r) {
         <span class="decision-badge ${decClass}">${decText}</span>
       </div>
       ${dimBars ? `<div class="dim-bars-container">${dimBars}</div>` : ''}
+      ${executiveSummaryBlock ? `<div class="executive-summary-container">${executiveSummaryBlock}</div>` : ''}
       <div class="score-row">${scoreRowHtml}</div>
       ${evidenceBlock ? `<div class="ranking-evidence-toggle"><button type="button" class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Show evidence snippets</button><div class="audit-expand-content" style="display:none">${evidenceBlock}</div></div>` : ''}
       <div class="args-row">
@@ -1710,6 +1748,7 @@ function renderBatchResults(r) {
           { dimension: 'upside', adjusted_score: row.upside_score },
         ])
       : '';
+    const executiveSummaryBlock = buildExecutiveSummaryBlock(row);
 
     let prosHtml = '';
     for (let j = 1; j <= 3; j++) {
@@ -1733,6 +1772,7 @@ function renderBatchResults(r) {
           <span class="decision-badge ${decClass}">${decText}</span>
         </div>
         ${dimBars ? `<div class="dim-bars-container">${dimBars}</div>` : ''}
+        ${executiveSummaryBlock ? `<div class="executive-summary-container">${executiveSummaryBlock}</div>` : ''}
         <div class="score-row">
           <div class="score-item"><div class="value green">${composite}</div><div class="label">${typeof row.composite_score === 'number' ? 'Composite' : 'Total Score'}</div></div>
           <div class="score-item clickable" data-type="pro" data-slug="${(row.startup_slug || row.company_name || '').replace(/"/g, '&quot;')}"><div class="value green">${row.avg_pro}</div><div class="label">Avg. Pro</div></div>

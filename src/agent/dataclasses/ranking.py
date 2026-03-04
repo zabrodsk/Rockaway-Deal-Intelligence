@@ -48,3 +48,10 @@ class CompanyRankingResult(BaseModel):
     min_dimension_score: float = 0.0
     avg_confidence: float = 0.0
     critical_gaps_count: int = 0
+
+    # Executive summary (human-readable)
+    strategy_fit_summary: str = ""
+    team_summary: str = ""
+    potential_summary: str = ""
+    key_points: list[str] = Field(default_factory=list)
+    red_flags: list[str] = Field(default_factory=list)

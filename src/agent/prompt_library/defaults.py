@@ -33,6 +33,8 @@ from agent.prompts.question_answering import (
     DECOMPOSE_SYSTEM_PROMPT,
 )
 from agent.prompts.ranking import (
+    EXECUTIVE_SUMMARY_SYSTEM,
+    EXECUTIVE_SUMMARY_USER,
     RANKING_STRATEGY_FIT_SYSTEM,
     RANKING_STRATEGY_FIT_USER,
     RANKING_TEAM_SYSTEM,
@@ -136,6 +138,8 @@ ORDERED_PROMPT_IDS = [
     "ranking.team.user",
     "ranking.upside.system",
     "ranking.upside.user",
+    "ranking.executive_summary.system",
+    "ranking.executive_summary.user",
 ]
 
 PROMPT_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -463,6 +467,33 @@ PROMPT_DEFINITIONS: dict[str, dict[str, Any]] = {
         "type": "text",
         "required_placeholders": ["{company_summary}", "{qa_block}"],
         "default_value": RANKING_UPSIDE_USER,
+    },
+    "ranking.executive_summary.system": {
+        "title": "Executive Summary System Prompt",
+        "stage": "ranking",
+        "category": "Ranking",
+        "source_path": "src/agent/prompts/ranking.py",
+        "description": "System prompt for generating executive summary (dimension summaries, key points, red flags).",
+        "type": "text",
+        "required_placeholders": [],
+        "default_value": EXECUTIVE_SUMMARY_SYSTEM,
+    },
+    "ranking.executive_summary.user": {
+        "title": "Executive Summary User Prompt",
+        "stage": "ranking",
+        "category": "Ranking",
+        "source_path": "src/agent/prompts/ranking.py",
+        "description": "User prompt template for executive summary.",
+        "type": "text",
+        "required_placeholders": [
+            "{company_summary}",
+            "{vc_context}",
+            "{dimension_block}",
+            "{pro_arguments}",
+            "{contra_arguments}",
+            "{critical_gaps}",
+        ],
+        "default_value": EXECUTIVE_SUMMARY_USER,
     },
 }
 

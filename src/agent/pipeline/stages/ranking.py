@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from agent.common.llm_config import get_llm
 from agent.dataclasses.ranking import CompanyRankingResult, DimensionScore
 from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
-from agent.pipeline.state.schemas import DimensionScoreOutput
+from agent.pipeline.state.schemas import DimensionScoreOutput, ExecutiveSummaryOutput
 from agent.prompt_library.manager import get_prompt
 
 
@@ -193,5 +193,91 @@ def compute_composite_rank(
         result.bucket = "watchlist"
     else:
         result.bucket = "low_priority"
+
+    return {"ranking_result": result}
+
+
+def _format_dimension_block(dimension_scores: list[DimensionScore]) -> str:
+    """Format dimension scores and evidence for the executive summary prompt."""
+    if not dimension_scores:
+        return "No dimension scores available."
+    lines = []
+    labels = {"strategy_fit": "Strategy Fit", "team": "Team", "upside": "Potential"}
+    for d in dimension_scores:
+        label = labels.get(d.dimension, d.dimension)
+        lines.append(f"{label} (score {d.adjusted_score}):")
+        if d.evidence_snippets:
+            lines.append("  Evidence: " + " | ".join(d.evidence_snippets[:3]))
+        if d.critical_gaps:
+            lines.append("  Gaps: " + "; ".join(d.critical_gaps[:3]))
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def generate_executive_summary(
+    state: IterativeInvestmentStoryState,
+) -> dict[str, Any]:
+    """Generate human-readable dimension summaries, key points, and red flags.
+
+    Uses a single LLM call with structured output. Populates ranking_result
+    with strategy_fit_summary, team_summary, potential_summary, key_points, red_flags.
+    """
+    result = state.ranking_result
+    if not result:
+        return {}
+
+    company_summary = state.company.get_company_summary()
+    vc_context = (state.vc_context or "").strip() or "Not provided."
+
+    dimension_block = _format_dimension_block(result.dimension_scores)
+
+    pro_args = [a for a in (state.final_arguments or []) if a.argument_type == "pro"]
+    contra_args = [a for a in (state.final_arguments or []) if a.argument_type == "contra"]
+    pro_args = sorted(pro_args, key=lambda a: a.score, reverse=True)[:5]
+    contra_args = sorted(contra_args, key=lambda a: a.score, reverse=True)[:5]
+
+    pro_arguments = "\n".join(
+        f"- (score {a.score}) {a.refined_content or a.content}" for a in pro_args
+    ) or "None"
+    contra_arguments = "\n".join(
+        f"- (score {a.score}) {a.refined_content or a.content}" for a in contra_args
+    ) or "None"
+
+    all_gaps = []
+    for d in result.dimension_scores:
+        all_gaps.extend(d.critical_gaps)
+    critical_gaps = "\n".join(f"- {g}" for g in all_gaps[:10]) if all_gaps else "None identified"
+
+    system_prompt = get_prompt("ranking.executive_summary.system", state.prompt_overrides)
+    user_prompt = get_prompt("ranking.executive_summary.user", state.prompt_overrides)
+    user_content = user_prompt.format(
+        company_summary=company_summary,
+        vc_context=vc_context,
+        dimension_block=dimension_block,
+        pro_arguments=pro_arguments,
+        contra_arguments=contra_arguments,
+        critical_gaps=critical_gaps,
+    )
+
+    try:
+        llm = get_llm(temperature=0.3)
+        llm_structured = llm.with_structured_output(ExecutiveSummaryOutput)
+        output: ExecutiveSummaryOutput = llm_structured.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_content),
+            ]
+        )
+        result.strategy_fit_summary = output.strategy_fit_summary or ""
+        result.team_summary = output.team_summary or ""
+        result.potential_summary = output.potential_summary or ""
+        result.key_points = output.key_points[:8] if output.key_points else []
+        result.red_flags = output.red_flags[:6] if output.red_flags else []
+    except Exception:
+        result.strategy_fit_summary = ""
+        result.team_summary = ""
+        result.potential_summary = ""
+        result.key_points = []
+        result.red_flags = []
 
     return {"ranking_result": result}

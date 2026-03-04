@@ -1,6 +1,6 @@
 [project]
 name = "agent"
-version = "0.0.2"
+version = "0.0.3"
 description = "Starter template for making a new agent LangGraph."
 authors = [
     { name = "William Fu-Hinthorn", email = "13333726+hinthornw@users.noreply.github.com" },

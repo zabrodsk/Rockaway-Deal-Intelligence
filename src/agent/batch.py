@@ -385,6 +385,11 @@ def build_summary_rows(results: List[Dict[str, Any]]) -> List[Dict]:
             row["top_evidence_strategy"] = " | ".join(strat_snippets[:2]) if strat_snippets else ""
             row["top_evidence_team"] = " | ".join(team_snippets[:2]) if team_snippets else ""
             row["top_evidence_upside"] = " | ".join(upside_snippets[:2]) if upside_snippets else ""
+            row["strategy_fit_summary"] = ranking.strategy_fit_summary or ""
+            row["team_summary"] = ranking.team_summary or ""
+            row["potential_summary"] = ranking.potential_summary or ""
+            row["key_points"] = "\n".join(ranking.key_points) if ranking.key_points else ""
+            row["red_flags"] = "\n".join(ranking.red_flags) if ranking.red_flags else ""
         else:
             row["rank"] = ""
             row["percentile"] = ""
@@ -397,6 +402,11 @@ def build_summary_rows(results: List[Dict[str, Any]]) -> List[Dict]:
             row["top_evidence_strategy"] = ""
             row["top_evidence_team"] = ""
             row["top_evidence_upside"] = ""
+            row["strategy_fit_summary"] = ""
+            row["team_summary"] = ""
+            row["potential_summary"] = ""
+            row["key_points"] = ""
+            row["red_flags"] = ""
 
         top_pro = _get_top_args(final_args, "pro", 3)
         top_contra = _get_top_args(final_args, "contra", 3)

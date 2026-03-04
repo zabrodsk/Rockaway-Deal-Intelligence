@@ -50,6 +50,16 @@ class IndividualRefinedArgumentOutput(BaseModel):
     )
 
 
+class ExecutiveSummaryOutput(BaseModel):
+    """LLM output for executive summary: dimension summaries, key points, red flags."""
+
+    strategy_fit_summary: str = Field(description="1-2 sentence summary of strategy fit")
+    team_summary: str = Field(description="1-2 sentence summary of team quality")
+    potential_summary: str = Field(description="1-2 sentence summary of upside/potential")
+    key_points: list[str] = Field(description="4-6 core product/market strengths and differentiators")
+    red_flags: list[str] = Field(description="1-5 critical risks or deal-breakers")
+
+
 class DimensionScoreOutput(BaseModel):
     """LLM output for a single ranking dimension (strategy_fit, team, upside)."""
 

@@ -350,6 +350,11 @@ def _build_results_payload(
                 "team_score": ranking.team_score,
                 "upside_score": ranking.upside_score,
                 "bucket": ranking.bucket,
+                "strategy_fit_summary": getattr(ranking, "strategy_fit_summary", "") or "",
+                "team_summary": getattr(ranking, "team_summary", "") or "",
+                "potential_summary": getattr(ranking, "potential_summary", "") or "",
+                "key_points": getattr(ranking, "key_points", []) or [],
+                "red_flags": getattr(ranking, "red_flags", []) or [],
                 "dimension_scores": [
                     {
                         "dimension": d.dimension,

@@ -90,3 +90,38 @@ Provide:
 - evidence_snippets: 2-3 short quotes that support the score (max 100 chars each)
 - critical_gaps: list of high-impact facts that are missing (e.g. "no TAM data", "WTP unclear")
 """
+
+EXECUTIVE_SUMMARY_SYSTEM = """\
+You are a VC investment analyst writing an executive summary for internal deal review.
+
+Write concise, data-backed summaries. Be specific—cite evidence from the Q&A and arguments.
+
+Key Points = 4-6 core product/market strengths, differentiators, and compelling facts. Focus on what makes this company stand out.
+
+Red Flags = 1-5 critical risks or deal-breakers. Synthesize from critical_gaps (missing high-impact facts) and contra arguments. Prioritize the most material concerns. If there are none significant, return an empty list.
+"""
+
+EXECUTIVE_SUMMARY_USER = """\
+Company: {company_summary}
+
+VC Context: {vc_context}
+
+=== Dimension Scores & Evidence ===
+{dimension_block}
+
+=== Top Pro Arguments ===
+{pro_arguments}
+
+=== Top Contra Arguments ===
+{contra_arguments}
+
+=== Critical Gaps (from scoring) ===
+{critical_gaps}
+
+Provide structured output:
+- strategy_fit_summary: 1-2 sentences explaining alignment with VC strategy (sector, stage, geography)
+- team_summary: 1-2 sentences on founder-market fit, experience, team completeness
+- potential_summary: 1-2 sentences on market opportunity and upside potential
+- key_points: 4-6 bullet strings (core strengths, differentiators)
+- red_flags: 1-5 bullet strings (critical risks, deal-breakers)
+"""

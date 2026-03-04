@@ -45,6 +45,7 @@ from agent.pipeline.stages.parallel_answering import answer_all_trees
 from agent.pipeline.stages.parallel_decomposition import decompose_all_questions
 from agent.pipeline.stages.ranking import (
     compute_composite_rank,
+    generate_executive_summary,
     score_company_dimensions,
 )
 from agent.pipeline.stages.refinement import (
@@ -140,6 +141,7 @@ def build_graph() -> StateGraph:
     # Stage 8: Ranking layer
     builder.add_node("score_company_dimensions", score_company_dimensions)
     builder.add_node("compute_composite_rank", compute_composite_rank)
+    builder.add_node("generate_executive_summary", generate_executive_summary)
 
     # === EDGES ===
 
@@ -193,7 +195,8 @@ def build_graph() -> StateGraph:
     # 14. Ranking layer (after final story)
     builder.add_edge("create_final_investment_story", "score_company_dimensions")
     builder.add_edge("score_company_dimensions", "compute_composite_rank")
-    builder.add_edge("compute_composite_rank", END)
+    builder.add_edge("compute_composite_rank", "generate_executive_summary")
+    builder.add_edge("generate_executive_summary", END)
 
     return builder
 
