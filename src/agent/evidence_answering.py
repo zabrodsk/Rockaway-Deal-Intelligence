@@ -103,7 +103,13 @@ Question: {question}
 
 
 def _answer_indicates_no_evidence(answer: str) -> bool:
-    """Return True if the LLM answer indicates it lacks evidence from documents."""
+    """Return True if the LLM answer indicates it lacks evidence from documents.
+
+    Matches patterns: Unknown from provided documents; no information about;
+    there is no information; contains no / does not contain; however, there is no;
+    insufficient information available; no relevant chunks found; outlines...but contains no.
+    Empty answers are treated as no evidence.
+    """
     if not answer or not answer.strip():
         return True
     return bool(_ANSWER_NO_EVIDENCE_RE.search(answer))
@@ -157,10 +163,17 @@ async def answer_question_from_evidence(
 ) -> tuple[str, dict]:
     """Answer a single question using retrieved document chunks and optional web search.
 
-    Documents are primary. Web search (Perplexity) runs only when the grounded
-    answer indicates lack of evidence (e.g. "Unknown from provided documents",
-    "contains no information about") — and only if use_web_search=True and under
-    the per-company cap.
+    Perplexity API is used only when ALL of the following hold:
+    1. use_web_search=True (user enabled the toggle)
+    2. needs_search=True, where:
+       - If WEB_SEARCH_TRIGGER=answer: _answer_indicates_no_evidence(grounded_answer)
+         (answer matches patterns like "Unknown from provided documents", "contains no",
+         "there is no information", etc.)
+       - If WEB_SEARCH_TRIGGER=no_chunks: not chunks
+    3. Per-company cap not exceeded (web_search_state["count"] < max)
+
+    Flow: (1) Run grounded LLM call first. (2) If answer indicates no evidence and
+    above conditions hold, call Perplexity and run hybrid LLM with web results.
 
     Args:
         question: The due-diligence question to answer.

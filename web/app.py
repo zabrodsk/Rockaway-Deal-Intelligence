@@ -85,6 +85,7 @@ class AnalysisStatus(BaseModel):
     job_id: str
     status: str  # "pending" | "running" | "done" | "error"
     progress: str = ""
+    progress_log: list[str] = []
     results: Any = None
 
 
@@ -447,6 +448,8 @@ async def _run_analysis(
 def _make_progress_callback(job_id: str):
     def on_progress(msg: str) -> None:
         _jobs[job_id].progress = msg
+        log = getattr(_jobs[job_id], "progress_log", []) or []
+        _jobs[job_id].progress_log = log + [msg]
     return on_progress
 
 
@@ -507,7 +510,10 @@ async def _run_document_analysis(
             shutil.copy2(src, doc_dir / fname)
 
         def make_progress(msg: str) -> None:
-            _jobs[job_id].progress = f"{prefix} — {msg}"
+            full_msg = f"{prefix} — {msg}"
+            _jobs[job_id].progress = full_msg
+            log = getattr(_jobs[job_id], "progress_log", []) or []
+            _jobs[job_id].progress_log = log + [full_msg]
 
         try:
             result = await evaluate_startup(
@@ -575,7 +581,10 @@ async def _run_specter_analysis(
         _jobs[job_id].progress = f"{prefix} — Starting..."
 
         def make_specter_progress(p: str) -> None:
-            _jobs[job_id].progress = f"{prefix} — {p}"
+            full_msg = f"{prefix} — {p}"
+            _jobs[job_id].progress = full_msg
+            log = getattr(_jobs[job_id], "progress_log", []) or []
+            _jobs[job_id].progress_log = log + [full_msg]
 
         try:
             result = await evaluate_from_specter(
@@ -624,6 +633,7 @@ async def get_status(job_id: str, session_id: str | None = Cookie(default=None))
         "job_id": job.job_id,
         "status": job.status,
         "progress": job.progress,
+        "progress_log": getattr(job, "progress_log", []) or [],
         "results": _results_cache.get(job_id, {}).get("results"),
     }
 
