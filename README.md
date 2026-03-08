@@ -41,7 +41,7 @@ Add your API keys to `.env` (see [Configuration](#configuration)).
 python -m web
 ```
 
-Then open **http://localhost:8000** in your browser. Default password: `9876`.
+Then open **http://localhost:8000** in your browser. Set `APP_PASSWORD` in `.env` for login.
 
 - **Upload** PDF, PPTX, Word, Excel, or CSV files
 - Choose **Pitch Deck** (each file = one company), **Specter** (company + people CSVs), or **Original** (all files = one company)
@@ -90,7 +90,7 @@ uvicorn web.app:app --reload --port 8000
 ./deploy.sh
 ```
 
-Runs the FastAPI server and exposes it via `cloudflared` tunnel. Use the printed URL and `APP_PASSWORD` (default `9876`).
+Runs the FastAPI server and exposes it via `cloudflared` tunnel. Use the printed URL and `APP_PASSWORD` from your `.env`.
 
 ---
 
@@ -155,7 +155,7 @@ Copy `.env.example` to `.env` and set:
 | `GOOGLE_API_KEY` | if Gemini | For `LLM_PROVIDER=gemini` |
 | `OPENAI_API_KEY` | if OpenAI | For `LLM_PROVIDER=openai` |
 | `ANTHROPIC_API_KEY` | if Anthropic | For `LLM_PROVIDER=anthropic` |
-| `APP_PASSWORD` | optional | Web app login (default: `9876`) |
+| `APP_PASSWORD` | optional | Web app login |
 | `PPLX_API_KEY` | optional | Perplexity for web search |
 | `BRAVE_SEARCH_API_KEY` | optional | Brave Search alternative |
 | `WEB_SEARCH_PROVIDER` | optional | `sonar` (Perplexity) or `brave` |
