@@ -16,6 +16,8 @@ from agent.prompt_library.manager import get_prompt
 from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
 from agent.pipeline.state.schemas import ArgumentsOutput
 from agent.pipeline.utils.helpers import convert_llm_arguments_to_objects
+from agent.pipeline.utils.phase_llm import invoke_with_phase_fallback
+from agent.run_context import get_current_pipeline_policy
 
 def check_if_final(
     state: IterativeInvestmentStoryState,
@@ -59,18 +61,26 @@ def generate_pro_arguments(
     system_prompt = get_prompt("generation.system", state.prompt_overrides)
     pro_user_prompt = get_prompt("generation.pro_user", state.prompt_overrides)
 
-    llm = get_llm(temperature=0.5)
-    llm_with_structured_output = llm.with_structured_output(ArgumentsOutput)
-    arguments: ArgumentsOutput = llm_with_structured_output.invoke(
-        [
-            SystemMessage(content=system_prompt),
-            HumanMessage(
-                content=pro_user_prompt.format(
-                    n_pro_arguments=state.config.n_pro_arguments,
-                    questions_and_answers=formatted_qa_pairs,
-                )
-            ),
-        ]
+    policy = get_current_pipeline_policy()
+
+    def _invoke() -> ArgumentsOutput:
+        llm = get_llm(temperature=0.5)
+        llm_with_structured_output = llm.with_structured_output(ArgumentsOutput)
+        return llm_with_structured_output.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(
+                    content=pro_user_prompt.format(
+                        n_pro_arguments=state.config.n_pro_arguments,
+                        questions_and_answers=formatted_qa_pairs,
+                    )
+                ),
+            ]
+        )
+
+    arguments = invoke_with_phase_fallback(
+        policy.generation if policy else None,
+        _invoke,
     )
 
     pro_argument_objects, _ = convert_llm_arguments_to_objects(
@@ -107,18 +117,26 @@ def generate_contra_arguments(
     system_prompt = get_prompt("generation.system", state.prompt_overrides)
     contra_user_prompt = get_prompt("generation.contra_user", state.prompt_overrides)
 
-    llm = get_llm(temperature=0.5)
-    llm_with_structured_output = llm.with_structured_output(ArgumentsOutput)
-    arguments: ArgumentsOutput = llm_with_structured_output.invoke(
-        [
-            SystemMessage(content=system_prompt),
-            HumanMessage(
-                content=contra_user_prompt.format(
-                    n_contra_arguments=state.config.n_contra_arguments,
-                    questions_and_answers=formatted_qa_pairs,
-                )
-            ),
-        ]
+    policy = get_current_pipeline_policy()
+
+    def _invoke() -> ArgumentsOutput:
+        llm = get_llm(temperature=0.5)
+        llm_with_structured_output = llm.with_structured_output(ArgumentsOutput)
+        return llm_with_structured_output.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(
+                    content=contra_user_prompt.format(
+                        n_contra_arguments=state.config.n_contra_arguments,
+                        questions_and_answers=formatted_qa_pairs,
+                    )
+                ),
+            ]
+        )
+
+    arguments = invoke_with_phase_fallback(
+        policy.generation if policy else None,
+        _invoke,
     )
 
     # Start counter after pro arguments

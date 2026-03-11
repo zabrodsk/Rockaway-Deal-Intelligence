@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,7 @@ class ModelCatalogEntry:
     model: str
     label: str
     summary: str
+    tier: Literal["budget", "balanced", "premium"]
     pricing: ModelPricing | None
     required_env: tuple[str, ...]
 
@@ -29,6 +30,7 @@ MODEL_CATALOG: tuple[ModelCatalogEntry, ...] = (
         model="gemini-3.1-flash-lite-preview",
         label="Gemini 3.1 Flash Lite",
         summary="Budget speed",
+        tier="budget",
         pricing=ModelPricing(
             input_per_million_tokens_usd=0.25,
             output_per_million_tokens_usd=1.50,
@@ -40,6 +42,7 @@ MODEL_CATALOG: tuple[ModelCatalogEntry, ...] = (
         model="claude-haiku-4-5-20251001",
         label="Claude Haiku 4.5",
         summary="Sharp writing",
+        tier="balanced",
         pricing=ModelPricing(
             input_per_million_tokens_usd=1.00,
             output_per_million_tokens_usd=5.00,
@@ -51,6 +54,7 @@ MODEL_CATALOG: tuple[ModelCatalogEntry, ...] = (
         model="gpt-5-nano",
         label="GPT-5 nano",
         summary="Ultra fast",
+        tier="budget",
         pricing=ModelPricing(
             input_per_million_tokens_usd=0.05,
             output_per_million_tokens_usd=0.40,
@@ -62,6 +66,7 @@ MODEL_CATALOG: tuple[ModelCatalogEntry, ...] = (
         model="gpt-5-mini",
         label="GPT-5 mini",
         summary="Balanced pick",
+        tier="balanced",
         pricing=ModelPricing(
             input_per_million_tokens_usd=0.25,
             output_per_million_tokens_usd=2.00,
@@ -73,6 +78,7 @@ MODEL_CATALOG: tuple[ModelCatalogEntry, ...] = (
         model="gpt-5",
         label="GPT-5",
         summary="Deep reasoning",
+        tier="premium",
         pricing=ModelPricing(
             input_per_million_tokens_usd=1.25,
             output_per_million_tokens_usd=10.00,
@@ -84,6 +90,7 @@ MODEL_CATALOG: tuple[ModelCatalogEntry, ...] = (
         model="gpt-4.1-mini",
         label="GPT-4.1 mini",
         summary="Stable fallback",
+        tier="balanced",
         pricing=ModelPricing(
             input_per_million_tokens_usd=0.80,
             output_per_million_tokens_usd=3.20,
@@ -122,6 +129,15 @@ def find_model_entry(provider: str | None, model: str | None) -> ModelCatalogEnt
     return None
 
 
+def get_tier_default(
+    tier: Literal["budget", "balanced", "premium"],
+) -> ModelCatalogEntry | None:
+    for entry in MODEL_CATALOG:
+        if entry.tier == tier and _has_required_env(entry):
+            return entry
+    return None
+
+
 def model_label(provider: str | None, model: str | None) -> str:
     entry = find_model_entry(provider, model)
     if entry:
@@ -156,6 +172,7 @@ def available_models_payload() -> list[dict[str, Any]]:
                 "model": entry.model,
                 "label": entry.label,
                 "summary": entry.summary,
+                "tier": entry.tier,
                 "available": _has_required_env(entry),
                 "pricing_available": entry.pricing is not None,
             }

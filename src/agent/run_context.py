@@ -7,9 +7,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 from agent.llm_catalog import estimate_llm_cost_usd, model_label, serialize_selection
+
+if TYPE_CHECKING:
+    from agent.llm_policy import PipelineModelPolicy
 
 PERPLEXITY_SEARCH_PRICE_PER_REQUEST_USD = 0.005
 
@@ -20,6 +23,10 @@ _telemetry_collector_var: ContextVar["RunTelemetryCollector | None"] = ContextVa
 )
 _company_slug_var: ContextVar[str | None] = ContextVar("company_slug", default=None)
 _stage_name_var: ContextVar[str | None] = ContextVar("stage_name", default=None)
+_pipeline_policy_var: ContextVar["PipelineModelPolicy | None"] = ContextVar(
+    "pipeline_policy",
+    default=None,
+)
 
 
 def get_current_llm_selection() -> dict[str, str] | None:
@@ -38,21 +45,45 @@ def get_current_stage_name() -> str | None:
     return _stage_name_var.get()
 
 
+def get_current_pipeline_policy() -> "PipelineModelPolicy | None":
+    return _pipeline_policy_var.get()
+
+
+@contextmanager
+def use_phase_llm(selection: dict[str, str] | None) -> Iterator[None]:
+    if selection is None:
+        yield
+        return
+    token = _llm_selection_var.set(
+        serialize_selection(selection.get("provider"), selection.get("model"))
+    )
+    try:
+        yield
+    finally:
+        _llm_selection_var.reset(token)
+
+
 @contextmanager
 def use_run_context(
     *,
     llm_selection: dict[str, str] | None = None,
     telemetry_collector: "RunTelemetryCollector | None" = None,
+    pipeline_policy: "PipelineModelPolicy | None" = None,
 ) -> Iterator[None]:
     llm_token: Token[dict[str, str] | None] | None = None
     telemetry_token: Token[RunTelemetryCollector | None] | None = None
+    policy_token: Token["PipelineModelPolicy | None"] | None = None
     if llm_selection is not None:
         llm_token = _llm_selection_var.set(serialize_selection(llm_selection.get("provider"), llm_selection.get("model")))
     if telemetry_collector is not None:
         telemetry_token = _telemetry_collector_var.set(telemetry_collector)
+    if pipeline_policy is not None:
+        policy_token = _pipeline_policy_var.set(pipeline_policy)
     try:
         yield
     finally:
+        if policy_token is not None:
+            _pipeline_policy_var.reset(policy_token)
         if telemetry_token is not None:
             _telemetry_collector_var.reset(telemetry_token)
         if llm_token is not None:
@@ -207,6 +238,7 @@ class RunTelemetryCollector:
         llm_total_tokens = 0
         llm_cost = 0.0
         llm_cost_known = True
+        llm_cost_rows_seen = False
         llm_events_seen = False
 
         perplexity_requests = 0
@@ -231,6 +263,8 @@ class RunTelemetryCollector:
                         "total_tokens": 0,
                         "usd": 0.0,
                         "pricing_available": True,
+                        "partial": False,
+                        "has_known_cost": False,
                     },
                 )
                 prompt_tokens = row.get("prompt_tokens")
@@ -249,11 +283,12 @@ class RunTelemetryCollector:
                 if estimated_cost_usd is None:
                     llm_cost_known = False
                     grouped[key]["pricing_available"] = False
-                    grouped[key]["usd"] = None
+                    grouped[key]["partial"] = True
                 else:
                     llm_cost += float(estimated_cost_usd)
-                    if grouped[key]["usd"] is not None:
-                        grouped[key]["usd"] += float(estimated_cost_usd)
+                    llm_cost_rows_seen = True
+                    grouped[key]["has_known_cost"] = True
+                    grouped[key]["usd"] += float(estimated_cost_usd)
             elif service == "perplexity_search":
                 perplexity_requests += int(row.get("request_count") or 1)
                 perplexity_cost += float(row.get("estimated_cost_usd") or 0.0)
@@ -267,16 +302,19 @@ class RunTelemetryCollector:
 
         by_model: list[dict[str, Any]] = []
         for item in grouped.values():
-            if isinstance(item["usd"], float):
+            if item.get("has_known_cost"):
                 item["usd"] = round(item["usd"], 8)
+            else:
+                item["usd"] = None
+            item.pop("has_known_cost", None)
             by_model.append(item)
         by_model.sort(key=lambda item: (item["provider"], item["model"]))
 
-        llm_usd = round(llm_cost, 8) if llm_cost_known else None
+        llm_usd = round(llm_cost, 8) if llm_cost_rows_seen else None
         total_usd = None
         if llm_usd is not None:
             total_usd = round(llm_usd + perplexity_cost, 8)
-        elif perplexity_requests > 0 and not llm_events_seen:
+        elif perplexity_requests > 0:
             total_usd = round(perplexity_cost, 8)
 
         return {

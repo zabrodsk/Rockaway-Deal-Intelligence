@@ -20,7 +20,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -52,6 +52,21 @@ from agent.llm_catalog import (
     pricing_catalog_payload,
     serialize_selection,
     validate_requested_selection,
+)
+from agent.llm_policy import (
+    build_phase_model_policy,
+    build_phase_policy_display_label,
+    build_pipeline_policy,
+    build_tier_display_label,
+    coerce_phase_models_payload,
+    normalize_phase_models,
+    normalize_premium_phase_models,
+    normalize_quality_tier,
+    phase_model_defaults_payload,
+    premium_phase_options_payload,
+    quality_tiers_payload,
+    resolve_effective_phase_choices,
+    resolve_effective_phase_models,
 )
 from agent.run_context import RunTelemetryCollector, use_run_context
 from agent.dataclasses.company import Company
@@ -105,6 +120,39 @@ def _get_llm_display() -> str:
     return selection["label"]
 
 
+def _pipeline_meta_from_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    phase_models = payload.get("phase_models")
+    if isinstance(phase_models, dict):
+        effective_phase_models = payload.get("effective_phase_models")
+        if not isinstance(effective_phase_models, dict):
+            effective_phase_models = None
+        return {
+            "phase_models": normalize_phase_models(phase_models),
+            "quality_tier": None,
+            "premium_phase_models": None,
+            "effective_phase_models": effective_phase_models,
+        }
+    quality_tier = normalize_quality_tier(payload.get("quality_tier"))
+    if not quality_tier:
+        return None
+    premium_phase_models = (
+        normalize_premium_phase_models(payload.get("premium_phase_models"))
+        if quality_tier == "premium"
+        else None
+    )
+    effective_phase_models = payload.get("effective_phase_models")
+    if not isinstance(effective_phase_models, dict):
+        effective_phase_models = None
+    return {
+        "phase_models": None,
+        "quality_tier": quality_tier,
+        "premium_phase_models": premium_phase_models,
+        "effective_phase_models": effective_phase_models,
+    }
+
+
 def _selection_from_payload(payload: dict[str, Any] | None) -> dict[str, str] | None:
     if not isinstance(payload, dict):
         return None
@@ -131,8 +179,59 @@ def _resolve_job_llm_selection(job_id: str, *, results: dict[str, Any] | None = 
     return current_default_selection()
 
 
+def _resolve_job_pipeline_meta(job_id: str, *, results: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    cache = _results_cache.get(job_id, {})
+    for candidate in (
+        _pipeline_meta_from_payload(results),
+        _pipeline_meta_from_payload(cache.get("results")),
+        _pipeline_meta_from_payload(cache.get("run_config")),
+    ):
+        if candidate:
+            return candidate
+    return None
+
+
 def _resolve_job_llm_label(job_id: str, *, results: dict[str, Any] | None = None) -> str:
+    pipeline_meta = _resolve_job_pipeline_meta(job_id, results=results)
+    if pipeline_meta:
+        if pipeline_meta.get("phase_models"):
+            return build_phase_policy_display_label(
+                pipeline_meta.get("effective_phase_models") or pipeline_meta["phase_models"]
+            )
+        return build_tier_display_label(
+            pipeline_meta["quality_tier"],
+            effective_phase_models=pipeline_meta.get("effective_phase_models"),
+        )
+    if isinstance(results, dict):
+        explicit = (results.get("llm") or "").strip()
+        if explicit and not _selection_from_payload(results):
+            return explicit
     return _resolve_job_llm_selection(job_id, results=results)["label"]
+
+
+def _resolve_batch_chunking_selection(job_id: str) -> dict[str, str]:
+    pipeline_meta = _resolve_job_pipeline_meta(job_id)
+    if pipeline_meta:
+        effective = pipeline_meta.get("effective_phase_models")
+        if isinstance(effective, dict):
+            for phase_name in (
+                "answering",
+                "evaluation",
+                "ranking",
+                "generation",
+                "decomposition",
+                "critique",
+                "refinement",
+            ):
+                selection = effective.get(phase_name)
+                if isinstance(selection, dict):
+                    provider = (selection.get("provider") or "").strip().lower()
+                    model = (selection.get("model") or "").strip()
+                    if provider == "anthropic":
+                        return serialize_selection(provider, model)
+                elif selection == "claude":
+                    return serialize_selection("anthropic", "claude-haiku-4-5-20251001")
+    return _resolve_job_llm_selection(job_id)
 
 
 def _read_positive_int_env(name: str, default: int) -> int:
@@ -152,7 +251,7 @@ def _batch_chunking_config(
     total_items: int,
     mode: str,
 ) -> dict[str, Any]:
-    selection = _resolve_job_llm_selection(job_id)
+    selection = _resolve_batch_chunking_selection(job_id)
     provider = selection.get("provider")
     default_threshold = 4 if provider == "anthropic" else 10_000
     default_chunk_size = 2 if provider == "anthropic" else total_items
@@ -200,10 +299,19 @@ class AnalyzeRequest(BaseModel):
     instructions: str | None = None
     input_mode: str = "pitchdeck"  # pitchdeck | specter | original
     vc_investment_strategy: str | None = None
+    phase_models: dict[str, dict[str, str]] | None = None
+    quality_tier: Literal["cheap", "premium"] | None = None
+    premium_phase_models: dict[str, Literal["claude", "gpt5"]] | None = None
     llm_provider: str | None = None
     llm_model: str | None = None
 
-    @field_validator("instructions", "vc_investment_strategy", "llm_provider", "llm_model", mode="before")
+    @field_validator(
+        "instructions",
+        "vc_investment_strategy",
+        "llm_provider",
+        "llm_model",
+        mode="before",
+    )
     @classmethod
     def _coerce_str(cls, v: Any) -> str | None:
         if v is None:
@@ -212,6 +320,34 @@ class AnalyzeRequest(BaseModel):
             return " ".join(str(x) for x in v).strip() or None
         s = str(v).strip()
         return s if s else None
+
+    @field_validator("phase_models", mode="before")
+    @classmethod
+    def _coerce_phase_models(cls, v: Any) -> dict[str, dict[str, str]] | None:
+        if v is None:
+            return None
+        normalized = coerce_phase_models_payload(v, require_all=True)
+        return {
+            phase: {
+                "provider": selection["provider"],
+                "model": selection["model"],
+            }
+            for phase, selection in normalized.items()
+        }
+
+    @field_validator("premium_phase_models", mode="before")
+    @classmethod
+    def _coerce_premium_phase_models(cls, v: Any) -> dict[str, str] | None:
+        if v is None:
+            return None
+        if not isinstance(v, dict):
+            raise ValueError("premium_phase_models must be an object.")
+        normalized = normalize_premium_phase_models(v)
+        allowed = {"decomposition", "generation", "evaluation", "ranking"}
+        invalid_keys = [key for key in v.keys() if key not in allowed]
+        if invalid_keys:
+            raise ValueError("premium_phase_models contains unsupported phases.")
+        return normalized
 
 
 class AnalysisStatus(BaseModel):
@@ -313,7 +449,10 @@ def _append_progress(job_id: str, msg: str, *, allow_stopped: bool = False) -> N
     log = getattr(job, "progress_log", []) or []
     job.progress_log = log + [msg]
     if db and db.is_configured():
-        db.insert_analysis_event(job_id, message=msg, event_type="progress")
+        try:
+            db.insert_analysis_event(job_id, message=msg, event_type="progress")
+        except Exception:
+            pass
 
 
 def _set_job_status(job_id: str, status: str, progress: str | None = None, source: str = "app") -> None:
@@ -326,12 +465,15 @@ def _set_job_status(job_id: str, status: str, progress: str | None = None, sourc
     if progress is not None:
         _jobs[job_id].progress = progress
     if db and db.is_configured():
-        db.insert_job_status_history(
-            job_id,
-            status=status,
-            progress=_jobs[job_id].progress,
-            source=source,
-        )
+        try:
+            db.insert_job_status_history(
+                job_id,
+                status=status,
+                progress=_jobs[job_id].progress,
+                source=source,
+            )
+        except Exception:
+            pass
 
 
 def _persist_person_job(job_id: str, request_payload: dict[str, Any] | None = None) -> None:
@@ -563,9 +705,10 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
                     "input_mode": entry.get("input_mode") or (existing or {}).get("input_mode"),
                     "use_web_search": entry.get("use_web_search"),
                     "results": entry.get("results") or (existing or {}).get("results"),
-                    "llm": _selection_from_payload(entry.get("results") or {})["label"]
-                    if _selection_from_payload(entry.get("results") or {})
-                    else (existing or {}).get("llm") or _get_llm_display(),
+                    "llm": _resolve_job_llm_label(
+                        job_id,
+                        results=entry.get("results") or {},
+                    ) if entry.get("results") else (existing or {}).get("llm") or _get_llm_display(),
                 }
                 jobs_by_id[job_id] = merged
         except Exception:
@@ -818,14 +961,45 @@ async def start_analysis(
     if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    try:
-        selected_entry = validate_requested_selection(req.llm_provider, req.llm_model)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    llm_selection = serialize_selection(
-        (selected_entry.provider if selected_entry else None),
-        (selected_entry.model if selected_entry else None),
-    )
+    quality_tier = normalize_quality_tier(req.quality_tier)
+    pipeline_policy = None
+    phase_models = normalize_phase_models(req.phase_models) if req.phase_models is not None else None
+    premium_phase_models = normalize_premium_phase_models(req.premium_phase_models)
+    if req.phase_models:
+        try:
+            pipeline_policy = build_phase_model_policy(phase_models)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = dict(pipeline_policy.answering)
+        effective_phase_models = resolve_effective_phase_models(pipeline_policy)
+        llm_display = build_phase_policy_display_label(effective_phase_models)
+        quality_tier = None
+        premium_phase_models = None
+    elif quality_tier:
+        try:
+            pipeline_policy = build_pipeline_policy(
+                quality_tier,
+                premium_phase_models if quality_tier == "premium" else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = dict(pipeline_policy.answering)
+        effective_phase_models = resolve_effective_phase_choices(pipeline_policy)
+        llm_display = build_tier_display_label(
+            quality_tier,
+            effective_phase_models=effective_phase_models,
+        )
+    else:
+        try:
+            selected_entry = validate_requested_selection(req.llm_provider, req.llm_model)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = serialize_selection(
+            (selected_entry.provider if selected_entry else None),
+            (selected_entry.model if selected_entry else None),
+        )
+        effective_phase_models = None
+        llm_display = llm_selection["label"]
 
     _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
     _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
@@ -834,13 +1008,24 @@ async def start_analysis(
     _results_cache[job_id]["use_web_search"] = req.use_web_search
     _results_cache[job_id]["instructions"] = req.instructions
     _results_cache[job_id]["llm_selection"] = llm_selection
+    _results_cache[job_id]["phase_models"] = phase_models if req.phase_models else None
+    _results_cache[job_id]["quality_tier"] = quality_tier
+    _results_cache[job_id]["premium_phase_models"] = (
+        premium_phase_models if quality_tier == "premium" else None
+    )
+    _results_cache[job_id]["effective_phase_models"] = effective_phase_models
     _results_cache[job_id]["run_config"] = {
         "input_mode": req.input_mode,
         "vc_investment_strategy": req.vc_investment_strategy,
         "instructions": req.instructions,
         "use_web_search": req.use_web_search,
+        "phase_models": phase_models if req.phase_models else None,
+        "quality_tier": quality_tier,
+        "premium_phase_models": premium_phase_models if quality_tier == "premium" else None,
+        "effective_phase_models": effective_phase_models,
         "llm_provider": llm_selection["provider"],
         "llm_model": llm_selection["model"],
+        "llm": llm_display,
     }
     _results_cache[job_id]["model_executions"] = []
     _results_cache[job_id]["versions"] = _runtime_versions()
@@ -868,11 +1053,12 @@ async def start_analysis(
                 input_mode=req.input_mode,
                 vc_investment_strategy=vc_str,
                 llm_selection=llm_selection,
+                pipeline_policy=pipeline_policy,
             )
         ),
         daemon=True,
     ).start()
-    return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_selection["label"]}
+    return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
 
 
 @app.post("/api/jobs/{job_id}/control")
@@ -950,8 +1136,14 @@ def _report_mode_hint(job_id: str, results_list: list[dict[str, Any]]) -> str:
 
 def _merge_runtime_payload_metadata(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(payload)
+    pipeline_meta = _resolve_job_pipeline_meta(job_id, results=merged)
     llm_selection = _resolve_job_llm_selection(job_id, results=merged)
-    merged["llm"] = llm_selection["label"]
+    if pipeline_meta:
+        merged["phase_models"] = pipeline_meta.get("phase_models")
+        merged["quality_tier"] = pipeline_meta["quality_tier"]
+        merged["premium_phase_models"] = pipeline_meta["premium_phase_models"]
+        merged["effective_phase_models"] = pipeline_meta.get("effective_phase_models")
+    merged["llm"] = _resolve_job_llm_label(job_id, results=merged)
     merged["llm_selection"] = llm_selection
     run_costs = _run_costs_from_cache(job_id)
     if run_costs.get("status") != "unavailable" or "run_costs" not in merged:
@@ -1118,6 +1310,78 @@ def _single_result_payload(job_id: str, result: dict[str, Any]) -> dict[str, Any
     return _compose_results_payload([result], job_id)
 
 
+def _run_config_from_cache(job_id: str) -> dict[str, Any]:
+    cache = _results_cache.get(job_id, {})
+    run_config = dict(cache.get("run_config") or {})
+    if run_config:
+        return run_config
+
+    llm_selection = _resolve_job_llm_selection(job_id, results=cache.get("results"))
+    return {
+        "input_mode": cache.get("input_mode", "pitchdeck"),
+        "vc_investment_strategy": cache.get("vc_investment_strategy"),
+        "instructions": cache.get("instructions"),
+        "use_web_search": cache.get("use_web_search", False),
+        "phase_models": cache.get("phase_models"),
+        "quality_tier": cache.get("quality_tier"),
+        "premium_phase_models": cache.get("premium_phase_models"),
+        "effective_phase_models": cache.get("effective_phase_models"),
+        "llm_provider": llm_selection["provider"],
+        "llm_model": llm_selection["model"],
+        "llm": _resolve_job_llm_label(job_id, results=cache.get("results")),
+    }
+
+
+def _failure_result_payload(
+    job_id: str,
+    *,
+    company: Company,
+    store: EvidenceStore,
+    slug: str,
+    status: str,
+    error_message: str,
+) -> dict[str, Any]:
+    founders = _extract_founders_from_company(company, slug)
+    payload = {
+        "mode": "single",
+        "startup_slug": slug,
+        "company_name": company.name,
+        "industry": company.industry or "N/A",
+        "tagline": company.tagline or "",
+        "about": company.about or "",
+        "decision": status,
+        "total_score": None,
+        "avg_pro": None,
+        "avg_contra": None,
+        "ranking_result": None,
+        "num_documents": len(_results_cache.get(job_id, {}).get("files", [])),
+        "num_chunks": len(getattr(store, "chunks", []) or []),
+        "num_arguments": 0,
+        "pro_arguments": [],
+        "contra_arguments": [],
+        "summary_rows": [{
+            "startup_slug": slug,
+            "company_name": company.name,
+            "decision": status,
+            "total_score": None,
+            "avg_pro": None,
+            "avg_contra": None,
+        }],
+        "argument_rows": [],
+        "qa_provenance_rows": [],
+        "failed_rows": [{
+            "startup_slug": slug,
+            "company_name": company.name,
+            "error": error_message,
+        }],
+        "founders": founders,
+        "team_members": founders,
+        "job_status": status,
+        "job_message": error_message,
+    }
+    return _merge_runtime_payload_metadata(job_id, payload)
+
+
 def _score_summary_from_result(result: dict[str, Any]) -> tuple[float | None, float | None]:
     final_state = result.get("final_state") or {}
     ranking = final_state.get("ranking_result")
@@ -1179,21 +1443,58 @@ def _persist_company_result_to_db(job_id: str, result: dict[str, Any]) -> bool:
     if not (db and db.is_configured()) or result.get("skipped"):
         return False
     cache = _results_cache.get(job_id, {})
-    run_config = dict(cache.get("run_config") or {})
-    if not run_config:
-        llm_selection = _resolve_job_llm_selection(job_id, results=cache.get("results"))
-        run_config = {
-            "input_mode": cache.get("input_mode", "pitchdeck"),
-            "vc_investment_strategy": cache.get("vc_investment_strategy"),
-            "instructions": cache.get("instructions"),
-            "use_web_search": cache.get("use_web_search", False),
-            "llm_provider": llm_selection["provider"],
-                "llm_model": llm_selection["model"],
-            }
+    run_config = _run_config_from_cache(job_id)
     company_payload = _single_result_payload(job_id, result)
     return bool(db.persist_company_result(
         job_id_legacy=job_id,
         result_row=result,
+        company_payload=company_payload,
+        run_config=run_config,
+        versions=cache.get("versions") or _runtime_versions(),
+    ))
+
+
+def _persist_failed_company_result_to_db(
+    job_id: str,
+    *,
+    company: Company,
+    store: EvidenceStore,
+    slug: str,
+    error_message: str,
+    status: str,
+) -> bool:
+    if not (db and db.is_configured()):
+        return False
+
+    cache = _results_cache.get(job_id, {})
+    run_config = _run_config_from_cache(job_id)
+
+    result_row = {
+        "slug": slug,
+        "company": company,
+        "company_name": company.name,
+        "evidence_store": store,
+        "final_state": {
+            "final_arguments": [],
+            "final_decision": status,
+            "ranking_result": None,
+            "all_qa_pairs": [],
+        },
+        "analysis_status": status,
+        "error": error_message,
+        "skipped": False,
+    }
+    company_payload = _failure_result_payload(
+        job_id,
+        company=company,
+        store=store,
+        slug=slug,
+        status=status,
+        error_message=error_message,
+    )
+    return bool(db.persist_company_failure_result(
+        job_id_legacy=job_id,
+        result_row=result_row,
         company_payload=company_payload,
         run_config=run_config,
         versions=cache.get("versions") or _runtime_versions(),
@@ -1206,17 +1507,7 @@ def _persist_results_to_db(job_id: str, results_list: list[dict]) -> None:
         return
     try:
         cache = _results_cache.get(job_id, {})
-        run_config = dict(cache.get("run_config") or {})
-        if not run_config:
-            llm_selection = _resolve_job_llm_selection(job_id, results=cache.get("results"))
-            run_config = {
-                "input_mode": cache.get("input_mode", "pitchdeck"),
-                "vc_investment_strategy": cache.get("vc_investment_strategy"),
-                "instructions": cache.get("instructions"),
-                "use_web_search": cache.get("use_web_search", False),
-                "llm_provider": llm_selection["provider"],
-                "llm_model": llm_selection["model"],
-            }
+        run_config = _run_config_from_cache(job_id)
         db.persist_analysis(
             job_id_legacy=job_id,
             results_list=results_list,
@@ -1258,13 +1549,18 @@ async def _run_analysis(
     input_mode: str = "pitchdeck",
     vc_investment_strategy: str | None = None,
     llm_selection: dict[str, str] | None = None,
+    pipeline_policy: Any = None,
 ):
     try:
         selection = llm_selection or _resolve_job_llm_selection(job_id)
         collector = RunTelemetryCollector(selected_llm=selection)
         _results_cache[job_id]["telemetry_collector"] = collector
 
-        with use_run_context(llm_selection=selection, telemetry_collector=collector):
+        with use_run_context(
+            llm_selection=selection,
+            telemetry_collector=collector,
+            pipeline_policy=pipeline_policy,
+        ):
             await _cooperate_with_job_control(job_id)
             upload_dir = Path(_results_cache[job_id]["upload_dir"])
             specter = _results_cache[job_id].get("specter")
@@ -1550,6 +1846,14 @@ async def _run_document_analysis(
                             error_type=type(exc).__name__,
                             company_slug=_sanitize_slug(fname),
                         )
+                        _persist_failed_company_result_to_db(
+                            job_id,
+                            company=Company(name=fname),
+                            store=EvidenceStore(startup_slug=_sanitize_slug(fname), chunks=[]),
+                            slug=_sanitize_slug(fname),
+                            error_message=str(exc)[:1000],
+                            status="timeout" if isinstance(exc, TimeoutError) else "error",
+                        )
                     results_list.append({
                         "slug": _sanitize_slug(fname),
                         "skipped": True,
@@ -1716,6 +2020,14 @@ async def _run_specter_analysis(
                             stage="evaluate_from_specter",
                             error_type=type(exc).__name__,
                             company_slug=store.startup_slug,
+                        )
+                        _persist_failed_company_result_to_db(
+                            job_id,
+                            company=company,
+                            store=store,
+                            slug=store.startup_slug,
+                            error_message=str(exc)[:1000],
+                            status="timeout" if isinstance(exc, TimeoutError) else "error",
                         )
                     results_list.append({
                         "slug": store.startup_slug,
@@ -1941,6 +2253,9 @@ async def get_config(session_id: str | None = Cookie(default=None)):
         "default_llm": default_llm,
         "available_models": available_models_payload(),
         "pricing_catalog": pricing_catalog_payload(),
+        "phase_model_defaults": phase_model_defaults_payload(),
+        "quality_tiers": quality_tiers_payload(),
+        "premium_phase_options": premium_phase_options_payload(),
     }
 
 

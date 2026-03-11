@@ -394,6 +394,108 @@ def test_run_specter_analysis_persists_first_company_before_starting_second(
         web_app._results_cache.pop(job_id, None)
 
 
+def test_run_specter_analysis_persists_timeout_company_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    job_id = "job-timeout-persist"
+    company = Company(name="Alpha")
+    store = EvidenceStore(startup_slug="alpha", chunks=[])
+    persisted_failures: list[dict[str, str]] = []
+
+    async def fake_evaluate_from_specter(*args, **kwargs):
+        raise TimeoutError("final evaluation timed out")
+
+    monkeypatch.setattr(
+        web_app,
+        "ingest_specter",
+        lambda companies, people=None: [(company, store)],
+    )
+    monkeypatch.setattr(web_app, "evaluate_from_specter", fake_evaluate_from_specter)
+    monkeypatch.setattr(web_app, "_persist_jobs", lambda: None)
+    monkeypatch.setattr(web_app, "_persist_results_to_db", lambda current_job_id, results_list: None)
+    monkeypatch.setattr(
+        web_app,
+        "_persist_failed_company_result_to_db",
+        lambda current_job_id, **kwargs: persisted_failures.append(
+            {
+                "job_id": current_job_id,
+                "slug": kwargs["slug"],
+                "status": kwargs["status"],
+            }
+        ) or True,
+    )
+    monkeypatch.setattr(web_app, "_llm_telemetry_base", lambda: {})
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        type(
+            "DB",
+            (),
+            {
+                "is_configured": staticmethod(lambda: True),
+                "insert_analysis_event": staticmethod(lambda *args, **kwargs: None),
+                "insert_analysis_error": staticmethod(lambda *args, **kwargs: None),
+                "insert_job_status_history": staticmethod(lambda *args, **kwargs: None),
+            },
+        )(),
+    )
+
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="running",
+        progress="Starting...",
+        progress_log=[],
+    )
+    web_app._job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
+    web_app._results_cache[job_id] = {}
+
+    try:
+        asyncio.run(
+            web_app._run_specter_analysis(
+                job_id,
+                tmp_path,
+                {"companies": "companies.csv", "people": "people.csv"},
+                use_web_search=False,
+            )
+        )
+
+        assert persisted_failures == [{"job_id": job_id, "slug": "alpha", "status": "timeout"}]
+        job = web_app._jobs[job_id]
+        assert job.status == "error"
+        assert "No startups were successfully evaluated." in job.progress
+    finally:
+        web_app._jobs.pop(job_id, None)
+        web_app._job_controls.pop(job_id, None)
+        web_app._results_cache.pop(job_id, None)
+
+
+def test_set_job_status_tolerates_db_history_write_failure(monkeypatch) -> None:
+    job_id = "job-status-write-failure"
+    failing_db = type(
+        "DB",
+        (),
+        {
+            "is_configured": staticmethod(lambda: True),
+            "insert_job_status_history": staticmethod(lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db down"))),
+        },
+    )()
+    monkeypatch.setattr(web_app, "db", failing_db)
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="running",
+        progress="Working...",
+        progress_log=[],
+    )
+
+    try:
+        web_app._set_job_status(job_id, "done", "Analysis complete", source="test")
+        assert web_app._jobs[job_id].status == "done"
+        assert web_app._jobs[job_id].progress == "Analysis complete"
+    finally:
+        web_app._jobs.pop(job_id, None)
+
+
 def test_status_endpoint_returns_partial_results_for_running_job(monkeypatch) -> None:
     job_id = "job-running-status"
     web_app._jobs[job_id] = web_app.AnalysisStatus(
@@ -438,6 +540,45 @@ def test_batch_chunking_config_enables_for_large_anthropic_batch() -> None:
         assert config["enabled"] is True
         assert config["chunk_size"] == 2
         assert config["total_chunks"] == 3
+        assert config["cooldown_seconds"] == 20
+    finally:
+        web_app._results_cache.pop(job_id, None)
+
+
+def test_batch_chunking_config_uses_claude_phase_policy_even_when_answering_is_gemini() -> None:
+    job_id = "job-phase-chunking-config"
+    web_app._results_cache[job_id] = {
+        "llm_selection": {
+            "provider": "gemini",
+            "model": "gemini-3.1-flash-lite-preview",
+            "label": "Gemini 3.1 Flash Lite",
+        },
+        "run_config": {
+            "phase_models": {
+                "decomposition": {"provider": "openai", "model": "gpt-5"},
+                "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+                "generation": {"provider": "openai", "model": "gpt-5"},
+                "evaluation": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+                "ranking": {"provider": "openai", "model": "gpt-5"},
+            },
+            "effective_phase_models": {
+                "decomposition": {"provider": "openai", "model": "gpt-5", "label": "GPT-5"},
+                "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite"},
+                "generation": {"provider": "openai", "model": "gpt-5", "label": "GPT-5"},
+                "critique": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite"},
+                "evaluation": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
+                "refinement": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite"},
+                "ranking": {"provider": "openai", "model": "gpt-5", "label": "GPT-5"},
+            },
+        },
+    }
+
+    try:
+        config = web_app._batch_chunking_config(job_id, total_items=5, mode="specter")
+        assert config["enabled"] is True
+        assert config["provider"] == "anthropic"
+        assert config["model"] == "claude-haiku-4-5-20251001"
+        assert config["chunk_size"] == 2
         assert config["cooldown_seconds"] == 20
     finally:
         web_app._results_cache.pop(job_id, None)

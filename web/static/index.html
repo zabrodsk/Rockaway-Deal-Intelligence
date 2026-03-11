@@ -776,6 +776,63 @@
     .llm-model-card[data-provider="gemini"] {
       --llm-accent: #5be7c4;
     }
+    .premium-phase-config {
+      margin-top: 14px;
+      padding: 16px;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border-subtle);
+      background: rgba(255,255,255,0.02);
+    }
+    .premium-phase-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .premium-phase-field {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .premium-phase-label {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .premium-phase-select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 12px 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      color: var(--text-light);
+      font: 14px var(--font-body);
+      outline: none;
+      min-height: 44px;
+    }
+    .advanced-llm-section {
+      margin-top: 16px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      background: rgba(255,255,255,0.02);
+      overflow: hidden;
+    }
+    .advanced-llm-section summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 14px 16px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-light);
+    }
+    .advanced-llm-section summary::-webkit-details-marker {
+      display: none;
+    }
+    .advanced-llm-content {
+      padding: 0 16px 16px;
+    }
 
     .files-section { width: 640px; }
     .files-header {
@@ -2249,6 +2306,7 @@
       .instructions-section { width: 100% !important; }
       .llm-model-section { width: 100%; }
       .llm-model-grid { grid-template-columns: 1fr; }
+      .premium-phase-grid { grid-template-columns: 1fr; }
       .files-section { width: 100%; }
       .results-body { padding: 24px 20px; }
       .stats-row { flex-direction: column; }
@@ -3164,12 +3222,20 @@
       <textarea id="instructions-input" class="instructions-input" rows="2" placeholder="e.g. Only rank the first 3 companies, focus on B2B SaaS, ignore companies outside Europe..."></textarea>
     </div>
     <div class="llm-model-section">
-      <label class="instructions-label" for="llm-model-select" id="llm-model-label">Analysis model</label>
-      <div class="llm-select-shell">
-        <select id="llm-model-select" class="llm-select visually-hidden" aria-labelledby="llm-model-label"></select>
-        <div id="llm-model-grid" class="llm-model-grid" role="radiogroup" aria-labelledby="llm-model-label"></div>
-      </div>
-      <div class="llm-select-hint" id="llm-model-hint">Loading available models…</div>
+      <label class="instructions-label" id="phase-model-label">Pipeline models</label>
+      <div id="phase-model-config" class="premium-phase-config"></div>
+      <div class="llm-select-hint" id="phase-model-hint">Loading available options…</div>
+      <details id="advanced-llm-section" class="advanced-llm-section">
+        <summary>Advanced: choose one model for the whole pipeline</summary>
+        <div class="advanced-llm-content">
+          <span id="llm-model-label" class="visually-hidden">Advanced analysis model</span>
+          <div class="llm-select-shell">
+            <select id="llm-model-select" class="llm-select visually-hidden" aria-labelledby="llm-model-label"></select>
+            <div id="llm-model-grid" class="llm-model-grid" role="radiogroup" aria-labelledby="llm-model-label"></div>
+          </div>
+          <div class="llm-select-hint" id="llm-model-hint">Loading available models…</div>
+        </div>
+      </details>
     </div>
 
     <div class="files-section" id="files-section" style="display:none">
@@ -3473,7 +3539,7 @@ const ACTIVE_JOB_KEY = 'active_job_id';
 const RECENT_RUNS_KEY = 'recent_runs_v1';
 const VC_STRATEGY_KEY = 'vc_investment_strategy';
 const PERSON_INTEL_CACHE_KEY = 'person_intel_cache_v3_harvest_only';
-const SHOW_PRO_CONTRA_ARGUMENTS = false;
+const SHOW_PRO_CONTRA_ARGUMENTS = true;
 const SHOW_AVG_PRO_CONTRA_SCORES = false;
 const DEFAULT_RANKINGS_SORT = 'top_scored';
 const DEFAULT_SAVED_COMPANY_SORT = 'top_scored';
@@ -3500,6 +3566,15 @@ let screenTransitionToken = 0;
 let renderedTeamMembersBySlug = {};
 let analysisConfig = null;
 let selectedLlmKey = null;
+const USER_PHASES = ['decomposition', 'answering', 'generation', 'evaluation', 'ranking'];
+const USER_PHASE_LABELS = {
+  decomposition: 'Decomposition',
+  answering: 'Q&A',
+  generation: 'Generation',
+  evaluation: 'Evaluation',
+  ranking: 'Ranking',
+};
+let selectedPhaseModelKeys = {};
 let analysisConfigLoadState = 'idle';
 
 function _finalizeVisibleScreens(activeId) {
@@ -3640,6 +3715,12 @@ function getSelectedLlmFromConfig() {
   return fallback || models.find((item) => item.available) || defaultSelection;
 }
 
+function getAdvancedLlmSelection() {
+  if (!selectedLlmKey) return null;
+  const models = analysisConfig?.available_models || [];
+  return models.find((item) => `${item.provider}:${item.model}` === selectedLlmKey && item.available) || null;
+}
+
 function getProviderLabel(provider) {
   const labels = {
     openai: 'OpenAI',
@@ -3673,6 +3754,159 @@ function syncLlmSelectValue(value) {
   select.value = value || '';
 }
 
+function getModelByKey(key) {
+  if (!key) return null;
+  return (analysisConfig?.available_models || []).find((item) => `${item.provider}:${item.model}` === key) || null;
+}
+
+function getPhaseModelDefaults() {
+  const serverDefaults = analysisConfig?.phase_model_defaults;
+  if (serverDefaults && typeof serverDefaults === 'object') {
+    return Object.fromEntries(
+      USER_PHASES
+        .filter((phase) => serverDefaults[phase]?.provider && serverDefaults[phase]?.model)
+        .map((phase) => [phase, `${serverDefaults[phase].provider}:${serverDefaults[phase].model}`])
+    );
+  }
+
+  const available = (analysisConfig?.available_models || []).filter((item) => item.available);
+  const findKey = (provider, model) => {
+    const found = available.find((item) => item.provider === provider && item.model === model);
+    return found ? `${found.provider}:${found.model}` : null;
+  };
+
+  const answeringKey = findKey('gemini', 'gemini-3.1-flash-lite-preview')
+    || findKey('anthropic', 'claude-haiku-4-5-20251001')
+    || (available[0] ? `${available[0].provider}:${available[0].model}` : null);
+  const criticalKey = findKey('openai', 'gpt-5')
+    || findKey('anthropic', 'claude-haiku-4-5-20251001')
+    || findKey('openai', 'gpt-5-mini')
+    || answeringKey;
+
+  return {
+    decomposition: criticalKey,
+    answering: answeringKey,
+    generation: criticalKey,
+    evaluation: criticalKey,
+    ranking: criticalKey,
+  };
+}
+
+function ensurePhaseModelSelections() {
+  const defaults = getPhaseModelDefaults();
+  const available = (analysisConfig?.available_models || []).filter((item) => item.available);
+  const firstKey = available[0] ? `${available[0].provider}:${available[0].model}` : null;
+
+  USER_PHASES.forEach((phase) => {
+    const current = selectedPhaseModelKeys[phase];
+    if (current && getModelByKey(current)?.available) return;
+    selectedPhaseModelKeys[phase] = defaults[phase] || firstKey || '';
+  });
+}
+
+function getPhaseSelectionSummaryLabel() {
+  ensurePhaseModelSelections();
+  const parts = USER_PHASES.map((phase) => {
+    const model = getModelByKey(selectedPhaseModelKeys[phase]);
+    return `${USER_PHASE_LABELS[phase]} ${model?.label || 'Unknown'}`;
+  });
+  return `Per-phase · ${parts.join(' · ')}`;
+}
+
+function getAnalysisSelectionPayload() {
+  const advancedSelection = getAdvancedLlmSelection();
+  if (!advancedSelection) {
+    ensurePhaseModelSelections();
+    const phaseModels = {};
+    USER_PHASES.forEach((phase) => {
+      const model = getModelByKey(selectedPhaseModelKeys[phase]);
+      if (!model) return;
+      phaseModels[phase] = {
+        provider: model.provider,
+        model: model.model,
+      };
+    });
+    return {
+      phase_models: phaseModels,
+      quality_tier: undefined,
+      premium_phase_models: undefined,
+      llm_provider: undefined,
+      llm_model: undefined,
+      llmLabel: getPhaseSelectionSummaryLabel(),
+    };
+  }
+
+  return {
+    phase_models: undefined,
+    quality_tier: undefined,
+    premium_phase_models: undefined,
+    llm_provider: advancedSelection?.provider || undefined,
+    llm_model: advancedSelection?.model || undefined,
+    llmLabel: advancedSelection?.label || '',
+  };
+}
+
+function renderPhaseModelSelector() {
+  const config = $('#phase-model-config');
+  const hint = $('#phase-model-hint');
+  if (!config || !hint) return;
+
+  if (analysisConfigLoadState === 'loading') {
+    config.innerHTML = '<button type="button" class="llm-model-card is-unavailable" disabled><span class="llm-model-name">Loading options…</span><span class="llm-model-meta">Checking configured providers.</span></button>';
+    hint.textContent = 'Loading available models…';
+    return;
+  }
+  if (analysisConfigLoadState === 'error') {
+    config.innerHTML = '<button type="button" class="llm-model-card is-unavailable" disabled><span class="llm-model-name">Pipeline routing unavailable</span><span class="llm-model-meta">Refresh the page or reconnect to the server.</span></button>';
+    hint.textContent = 'Could not load the model catalog. You can still use Advanced mode if models load.';
+    return;
+  }
+
+  const models = (analysisConfig?.available_models || []).filter((item) => item.available);
+  if (!models.length) {
+    config.innerHTML = '<button type="button" class="llm-model-card is-unavailable" disabled><span class="llm-model-name">No models configured</span><span class="llm-model-meta">Add provider credentials to enable per-phase routing.</span></button>';
+    hint.textContent = 'No configured analysis models are available in this environment.';
+    return;
+  }
+
+  ensurePhaseModelSelections();
+  config.innerHTML = `
+    <div class="premium-phase-grid">
+      ${USER_PHASES.map((phase) => {
+        const selected = selectedPhaseModelKeys[phase] || '';
+        return `
+          <label class="premium-phase-field">
+            <span class="premium-phase-label">${escapeHtml(USER_PHASE_LABELS[phase])}</span>
+            <select class="premium-phase-select" data-phase-model="${escapeHtml(phase)}">
+              ${models.map((item) => {
+                const key = `${item.provider}:${item.model}`;
+                return `<option value="${escapeHtml(key)}" ${selected === key ? 'selected' : ''}>${escapeHtml(item.label)}</option>`;
+              }).join('')}
+            </select>
+          </label>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  config.querySelectorAll('[data-phase-model]').forEach((select) => {
+    select.addEventListener('change', (event) => {
+      selectedPhaseModelKeys[event.target.getAttribute('data-phase-model')] = event.target.value || '';
+      selectedLlmKey = null;
+      renderPhaseModelSelector();
+      renderLlmSelector();
+    });
+  });
+
+  const answeringModel = getModelByKey(selectedPhaseModelKeys.answering);
+  const advancedSelection = getAdvancedLlmSelection();
+  if (advancedSelection) {
+    hint.textContent = `${advancedSelection.label || 'Advanced selection'} currently overrides the whole pipeline. Change any phase above to switch back to per-phase routing.`;
+    return;
+  }
+  hint.textContent = `${getPhaseSelectionSummaryLabel()}. Critique and refinement follow ${answeringModel?.label || 'the answering model'}. Open Advanced to force one model for the whole pipeline.`;
+}
+
 function renderLlmSelector() {
   const select = $('#llm-model-select');
   const grid = $('#llm-model-grid');
@@ -3702,23 +3936,27 @@ function renderLlmSelector() {
   }
 
   const models = analysisConfig.available_models || [];
-  const selected = getSelectedLlmFromConfig();
-  if (selected) selectedLlmKey = `${selected.provider}:${selected.model}`;
+  const explicitSelection = getAdvancedLlmSelection();
+  const previewSelection = explicitSelection || getSelectedLlmFromConfig();
+  const selectedKeyForUi = explicitSelection
+    ? `${explicitSelection.provider}:${explicitSelection.model}`
+    : '';
 
-  select.innerHTML = models.map((item) => {
+  const placeholderOption = '<option value="" selected>Preview only — Advanced mode inactive</option>';
+  select.innerHTML = placeholderOption + models.map((item) => {
     const key = `${item.provider}:${item.model}`;
     const statusSuffix = item.available
       ? (item.pricing_available ? '' : ' · cost unavailable')
       : ' · unavailable';
-    return `<option value="${escapeHtml(key)}" ${item.available ? '' : 'disabled'} ${key === selectedLlmKey ? 'selected' : ''}>${escapeHtml(item.label + statusSuffix)}</option>`;
+    return `<option value="${escapeHtml(key)}" ${item.available ? '' : 'disabled'} ${key === selectedKeyForUi ? 'selected' : ''}>${escapeHtml(item.label + statusSuffix)}</option>`;
   }).join('');
   select.disabled = !models.some((item) => item.available);
-  syncLlmSelectValue(selectedLlmKey);
+  syncLlmSelectValue(selectedKeyForUi);
 
   grid.innerHTML = models.map((item, index) => {
     const key = `${item.provider}:${item.model}`;
     const providerLabel = getProviderLabel(item.provider);
-    const selectedClass = key === selectedLlmKey ? ' is-selected' : '';
+    const selectedClass = key === selectedKeyForUi ? ' is-selected' : '';
     const unavailableClass = item.available ? '' : ' is-unavailable';
     const stateClass = item.available ? 'ready' : '';
     const stateLabel = item.available ? 'Ready' : 'Missing key';
@@ -3732,7 +3970,7 @@ function renderLlmSelector() {
         data-provider="${escapeHtml(item.provider)}"
         style="--card-index:${index}"
         role="radio"
-        aria-checked="${key === selectedLlmKey ? 'true' : 'false'}"
+        aria-checked="${key === selectedKeyForUi ? 'true' : 'false'}"
         ${item.available ? '' : 'disabled'}
       >
         <div class="llm-model-card-top">
@@ -3759,32 +3997,39 @@ function renderLlmSelector() {
     button.addEventListener('click', () => {
       selectedLlmKey = button.getAttribute('data-llm-key') || null;
       syncLlmSelectValue(selectedLlmKey);
+      $('#advanced-llm-section')?.setAttribute('open', 'open');
+      renderPhaseModelSelector();
       renderLlmSelector();
     });
   });
 
-  const chosen = getSelectedLlmFromConfig();
+  const chosen = previewSelection;
   if (!chosen) {
     hint.textContent = 'No configured model credentials are available in this environment.';
     return;
   }
   const chosenSummary = chosen.summary ? `${chosen.summary}. ` : '';
-  hint.textContent = chosen.pricing_available
-    ? `${chosen.label} will be used for this run. ${chosenSummary}${formatModelPricing(chosen)}. Cost tracking is enabled when token usage metadata is returned by the provider.`
-    : `${chosen.label} will be used for this run. ${chosenSummary}Token totals may still be tracked, but exact LLM cost is unavailable for this model.`;
+  hint.textContent = explicitSelection
+    ? (chosen.pricing_available
+        ? `${chosen.label} will be used for the whole pipeline. ${chosenSummary}${formatModelPricing(chosen)}.`
+        : `${chosen.label} will be used for the whole pipeline. ${chosenSummary}Token totals may still be tracked, but exact LLM cost is unavailable for this model.`)
+    : `Advanced mode is not active. Open this section and choose a model only if you want to force one model for the whole pipeline. Default preview: ${chosen.label}.`;
 }
 
 async function loadAnalysisConfig() {
   analysisConfigLoadState = 'loading';
+  renderPhaseModelSelector();
   renderLlmSelector();
   try {
     analysisConfig = await api('/api/config', { timeoutMs: 5000, retries: 0 });
     analysisConfigLoadState = 'ready';
+    renderPhaseModelSelector();
     renderLlmSelector();
     return analysisConfig;
   } catch (_) {
     analysisConfig = null;
     analysisConfigLoadState = 'error';
+    renderPhaseModelSelector();
     renderLlmSelector();
     return null;
   }
@@ -3846,6 +4091,7 @@ function getRunTitle(run) {
   return run.results?.company_name || run.title || `Run ${run.jobId}`;
 }
 
+renderPhaseModelSelector();
 renderLlmSelector();
 
 function getRunModeLabel(run) {
@@ -5445,6 +5691,8 @@ $$('.input-mode-option').forEach((btn) => {
 });
 $('#llm-model-select')?.addEventListener('change', (event) => {
   selectedLlmKey = event.target.value || null;
+  $('#advanced-llm-section')?.setAttribute('open', 'open');
+  renderPhaseModelSelector();
   renderLlmSelector();
 });
 
@@ -5494,7 +5742,7 @@ $('#analyze-btn').addEventListener('click', async () => {
 
     const useWebSearch = !!$('#web-search-checkbox')?.checked;
     const instructions = ($('#instructions-input')?.value || '').trim();
-    const selectedLlm = getSelectedLlmFromConfig();
+    const analysisSelection = getAnalysisSelectionPayload();
     if (autoDetectedSpecter) setInputMode('specter');
     try {
       await api(`/api/analyze/${currentJobId}`, {
@@ -5505,8 +5753,11 @@ $('#analyze-btn').addEventListener('click', async () => {
           instructions: instructions || undefined,
           input_mode: effectiveInputMode,
           vc_investment_strategy: vcInvestmentStrategy || undefined,
-          llm_provider: selectedLlm?.provider || undefined,
-          llm_model: selectedLlm?.model || undefined,
+          phase_models: analysisSelection.phase_models,
+          quality_tier: analysisSelection.quality_tier,
+          premium_phase_models: analysisSelection.premium_phase_models,
+          llm_provider: analysisSelection.llm_provider,
+          llm_model: analysisSelection.llm_model,
         }),
         timeoutMs: 60000,
         retries: 4,
@@ -5798,6 +6049,14 @@ function renderRunCostStrip(runCosts, fallbackLlmLabel = '') {
     ? 'Some successful model calls did not include billable usage metadata, so totals are partial.'
     : '';
   const requestCount = Number(costs.perplexity_search?.requests || 0);
+  const byModel = Array.isArray(costs.by_model) ? costs.by_model : [];
+  const modelBreakdownHtml = byModel.length
+    ? `<div class="run-cost-card-note">${byModel.map((item) => {
+        const label = escapeHtml(item?.label || item?.model || item?.provider || 'Model');
+        const partialSuffix = item?.pricing_available === false ? ' (partial)' : '';
+        return `${label}: ${escapeHtml(formatUsd(item?.usd))}${partialSuffix}`;
+      }).join('<br>')}</div>`
+    : '';
 
   container.innerHTML = `
     <div class="run-cost-strip${costs.status === 'unavailable' ? ' is-unavailable' : ''}">
@@ -5813,6 +6072,7 @@ function renderRunCostStrip(runCosts, fallbackLlmLabel = '') {
         <div class="run-cost-card-label">Primary LLM</div>
         <div class="run-cost-card-value">${formatUsd(costs.llm_usd)}</div>
         <div class="run-cost-card-sub">Prompt ${formatTokens(costs.llm_tokens?.prompt)} · Completion ${formatTokens(costs.llm_tokens?.completion)} · Total ${formatTokens(costs.llm_tokens?.total)} tokens</div>
+        ${modelBreakdownHtml}
       </div>
       <div class="run-cost-card">
         <div class="run-cost-card-glow"></div>

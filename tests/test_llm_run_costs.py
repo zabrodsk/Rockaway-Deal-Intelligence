@@ -1,9 +1,11 @@
 import asyncio
 import io
 import sys
+from uuid import uuid4
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, HumanMessage
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -12,9 +14,17 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from agent.llm_catalog import available_models_payload, validate_requested_selection
+from agent.llm_policy import (
+    build_phase_model_policy,
+    build_pipeline_policy,
+    phase_model_defaults_payload,
+    premium_phase_options_payload,
+    quality_tiers_payload,
+)
 from agent.run_context import (
     RunTelemetryCollector,
     use_company_context,
+    use_phase_llm,
     use_run_context,
     use_stage_context,
 )
@@ -67,6 +77,105 @@ def test_available_models_payload_marks_availability(monkeypatch) -> None:
         for item in models
         if item["provider"] == "openai"
     )
+    assert gemini["tier"] == "budget"
+
+
+def test_build_pipeline_policy_resolves_cheap_and_premium(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    cheap = build_pipeline_policy("cheap")
+    assert cheap.answering["provider"] == "gemini"
+    assert cheap.decomposition["provider"] == "gemini"
+    assert cheap.ranking["provider"] == "gemini"
+
+    premium = build_pipeline_policy(
+        "premium",
+        {
+            "decomposition": "claude",
+            "generation": "gpt5",
+            "evaluation": "claude",
+            "ranking": "gpt5",
+        },
+    )
+    assert premium.answering["provider"] == "gemini"
+    assert premium.critique["provider"] == "gemini"
+    assert premium.refinement["provider"] == "gemini"
+    assert premium.decomposition["provider"] == "anthropic"
+    assert premium.generation["model"] == "gpt-5"
+    assert premium.evaluation["provider"] == "anthropic"
+    assert premium.ranking["model"] == "gpt-5"
+
+
+def test_build_pipeline_policy_falls_back_between_claude_and_gpt5(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    premium = build_pipeline_policy("premium", {"evaluation": "gpt5"})
+
+    assert premium.evaluation["provider"] == "anthropic"
+    assert premium.evaluation["model"] == "claude-haiku-4-5-20251001"
+
+
+def test_build_phase_model_policy_resolves_five_user_facing_phases(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    policy = build_phase_model_policy(
+        {
+            "decomposition": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+            "generation": {"provider": "openai", "model": "gpt-5"},
+            "evaluation": {"provider": "openai", "model": "gpt-5-mini"},
+            "ranking": {"provider": "openai", "model": "gpt-4.1-mini"},
+        }
+    )
+
+    assert policy.decomposition["provider"] == "anthropic"
+    assert policy.answering["provider"] == "gemini"
+    assert policy.critique["provider"] == "gemini"
+    assert policy.refinement["provider"] == "gemini"
+    assert policy.generation["model"] == "gpt-5"
+    assert policy.evaluation["model"] == "gpt-5-mini"
+    assert policy.ranking["model"] == "gpt-4.1-mini"
+
+
+def test_build_phase_model_policy_requires_all_user_facing_phases(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    try:
+        build_phase_model_policy(
+            {
+                "decomposition": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+                "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+            }
+        )
+    except ValueError as exc:
+        assert "missing required phases" in str(exc)
+    else:
+        raise AssertionError("Expected incomplete phase_models payload to raise ValueError")
+
+
+def test_is_authentication_api_error_detects_status_and_message() -> None:
+    class StatusAuthError(Exception):
+        status_code = 401
+
+    class TextAuthError(Exception):
+        pass
+
+    assert rate_limit_module.is_authentication_api_error(StatusAuthError("bad key")) is True
+    assert (
+        rate_limit_module.is_authentication_api_error(
+            TextAuthError("authentication_error: invalid x-api-key")
+        )
+        is True
+    )
+    assert rate_limit_module.is_authentication_api_error(Exception("timeout")) is False
 
 
 def test_model_catalog_validation_accepts_openai_entries_when_key_present(monkeypatch) -> None:
@@ -108,6 +217,17 @@ def test_create_llm_prefers_run_context_selection_over_env(monkeypatch) -> None:
     }
 
 
+def test_use_phase_llm_temporarily_overrides_selection() -> None:
+    from agent.run_context import get_current_llm_selection
+
+    with use_run_context(llm_selection={"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"}):
+        assert get_current_llm_selection()["provider"] == "gemini"
+        with use_phase_llm({"provider": "openai", "model": "gpt-5"}):
+            assert get_current_llm_selection()["provider"] == "openai"
+            assert get_current_llm_selection()["model"] == "gpt-5"
+        assert get_current_llm_selection()["provider"] == "gemini"
+
+
 def test_run_telemetry_collector_builds_costs_for_llm_and_perplexity() -> None:
     collector = RunTelemetryCollector()
     collector.record_llm_usage(
@@ -145,6 +265,34 @@ def test_run_telemetry_collector_marks_partial_when_usage_missing() -> None:
     assert costs["status"] == "partial"
     assert costs["llm_usd"] is None
     assert costs["total_usd"] is None
+
+
+def test_run_telemetry_collector_keeps_known_spend_when_some_usage_missing() -> None:
+    collector = RunTelemetryCollector()
+    collector.record_llm_usage(
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        total_tokens=1_500,
+    )
+    collector.record_llm_usage(
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        prompt_tokens=None,
+        completion_tokens=None,
+        total_tokens=None,
+    )
+
+    costs = collector.build_run_costs()
+
+    assert costs["status"] == "partial"
+    assert costs["llm_usd"] == 0.0035
+    assert costs["total_usd"] == 0.0035
+    assert costs["by_model"][0]["label"] == "Claude Haiku 4.5"
+    assert costs["by_model"][0]["usd"] == 0.0035
+    assert costs["by_model"][0]["pricing_available"] is False
+    assert costs["by_model"][0]["partial"] is True
 
 
 def test_throttled_runnable_records_retry_events_with_stage_context() -> None:
@@ -227,6 +375,60 @@ def test_extract_usage_metadata_reads_usage_from_generation_message_object() -> 
     }
 
 
+def test_estimate_usage_metadata_returns_token_counts_when_provider_usage_missing() -> None:
+    usage = llm_module._estimate_usage_metadata(
+        provider="openai",
+        model="gpt-5",
+        prompt_text="Summarize the startup traction.",
+        completion_text="The company has strong month-over-month growth.",
+    )
+
+    assert usage is not None
+    assert usage["prompt_tokens"] > 0
+    assert usage["completion_tokens"] > 0
+    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
+
+
+def test_telemetry_callback_estimates_usage_when_response_omits_metadata() -> None:
+    collector = RunTelemetryCollector()
+    run_id = uuid4()
+
+    class FakeGeneration:
+        message = AIMessage(content="Short answer")
+
+    class FakeResult:
+        generations = [[FakeGeneration()]]
+        llm_output = {}
+        response_metadata = {}
+
+        def dict(self):
+            return {
+                "generations": [[{"message": {"content": "Short answer"}}]],
+                "llm_output": {},
+                "response_metadata": {},
+            }
+
+    with use_run_context(
+        llm_selection={"provider": "openai", "model": "gpt-5"},
+        telemetry_collector=collector,
+    ):
+        llm_module._TELEMETRY_CALLBACK.on_chat_model_start(
+            {},
+            [[HumanMessage(content="What is the moat?")]],
+            run_id=run_id,
+        )
+        llm_module._TELEMETRY_CALLBACK.on_llm_end(FakeResult(), run_id=run_id)
+
+    costs = collector.build_run_costs()
+    rows = collector.snapshot_model_executions()
+
+    assert costs["status"] == "complete"
+    assert costs["llm_usd"] is not None
+    assert rows[0]["prompt_tokens"] > 0
+    assert rows[0]["completion_tokens"] > 0
+    assert rows[0]["metadata"]["estimated_usage"] is True
+
+
 def test_api_config_exposes_default_and_available_models(monkeypatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("MODEL_NAME", "gemini-3.1-flash-lite-preview")
@@ -247,6 +449,9 @@ def test_api_config_exposes_default_and_available_models(monkeypatch) -> None:
     assert providers == {"gemini", "anthropic", "openai"}
     assert any(item["model"] == "gemini-3.1-flash-lite-preview" and item["available"] for item in payload["available_models"])
     assert any(item["model"] == "gpt-5-mini" and item["available"] for item in payload["available_models"])
+    assert payload["phase_model_defaults"] == phase_model_defaults_payload()
+    assert payload["quality_tiers"] == quality_tiers_payload()
+    assert payload["premium_phase_options"] == premium_phase_options_payload()
 
 
 def test_start_analysis_persists_requested_llm_selection(monkeypatch) -> None:
@@ -291,6 +496,163 @@ def test_start_analysis_persists_requested_llm_selection(monkeypatch) -> None:
         assert cache["llm_selection"]["model"] == "claude-haiku-4-5-20251001"
         assert cache["run_config"]["llm_provider"] == "anthropic"
         assert cache["run_config"]["llm_model"] == "claude-haiku-4-5-20251001"
+
+
+def test_start_analysis_persists_quality_tier_selection(monkeypatch) -> None:
+    from web import app as web_app_module
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    started = {"called": False}
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            started["called"] = True
+
+    monkeypatch.setattr(web_app_module.threading, "Thread", FakeThread)
+
+    with TestClient(app) as client:
+        _login(client)
+        upload = client.post(
+            "/api/upload",
+            files={"files": ("deck.txt", io.BytesIO(b"sample content"), "text/plain")},
+        )
+        job_id = upload.json()["job_id"]
+
+        analyze = client.post(
+            f"/api/analyze/{job_id}",
+            json={
+                "input_mode": "pitchdeck",
+                "quality_tier": "premium",
+                "premium_phase_models": {
+                    "decomposition": "claude",
+                    "generation": "gpt5",
+                    "evaluation": "claude",
+                    "ranking": "gpt5",
+                },
+            },
+        )
+        assert analyze.status_code == 200
+        assert started["called"] is True
+
+        cache = web_app_module._results_cache[job_id]
+        assert cache["quality_tier"] == "premium"
+        assert cache["llm_selection"]["provider"] == "gemini"
+        assert cache["premium_phase_models"]["decomposition"] == "claude"
+        assert cache["effective_phase_models"] == {
+            "decomposition": "claude",
+            "answering": "gemini",
+            "generation": "gpt5",
+            "critique": "gemini",
+            "evaluation": "claude",
+            "refinement": "gemini",
+            "ranking": "gpt5",
+        }
+        assert cache["run_config"]["quality_tier"] == "premium"
+        assert cache["run_config"]["llm_provider"] == "gemini"
+        assert cache["run_config"]["llm"] == "Premium tier · QA Gemini · Critical phases mixed"
+
+
+def test_start_analysis_persists_phase_model_selection(monkeypatch) -> None:
+    from web import app as web_app_module
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    started = {"called": False}
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            started["called"] = True
+
+    monkeypatch.setattr(web_app_module.threading, "Thread", FakeThread)
+
+    with TestClient(app) as client:
+        _login(client)
+        upload = client.post(
+            "/api/upload",
+            files={"files": ("deck.txt", io.BytesIO(b"sample content"), "text/plain")},
+        )
+        job_id = upload.json()["job_id"]
+
+        analyze = client.post(
+            f"/api/analyze/{job_id}",
+            json={
+                "input_mode": "pitchdeck",
+                "phase_models": {
+                    "decomposition": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+                    "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+                    "generation": {"provider": "openai", "model": "gpt-5"},
+                    "evaluation": {"provider": "openai", "model": "gpt-5-mini"},
+                    "ranking": {"provider": "openai", "model": "gpt-4.1-mini"},
+                },
+            },
+        )
+        assert analyze.status_code == 200
+        assert started["called"] is True
+
+        cache = web_app_module._results_cache[job_id]
+        assert cache["phase_models"]["decomposition"]["provider"] == "anthropic"
+        assert cache["llm_selection"]["provider"] == "gemini"
+        assert cache["quality_tier"] is None
+        assert cache["effective_phase_models"]["critique"]["provider"] == "gemini"
+        assert cache["effective_phase_models"]["ranking"]["model"] == "gpt-4.1-mini"
+        assert cache["run_config"]["phase_models"]["generation"]["model"] == "gpt-5"
+        assert cache["run_config"]["llm"] == (
+            "Per-phase · D Claude Haiku 4.5 · A Gemini 3.1 Flash Lite"
+            " · G GPT-5 · E GPT-5 mini · R GPT-4.1 mini"
+        )
+
+
+def test_start_analysis_rejects_incomplete_phase_model_selection(monkeypatch) -> None:
+    from web import app as web_app_module
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            raise AssertionError("analysis thread should not start for invalid phase_models")
+
+    monkeypatch.setattr(web_app_module.threading, "Thread", FakeThread)
+
+    with TestClient(app) as client:
+        _login(client)
+        upload = client.post(
+            "/api/upload",
+            files={"files": ("deck.txt", io.BytesIO(b"sample content"), "text/plain")},
+        )
+        job_id = upload.json()["job_id"]
+
+        analyze = client.post(
+            f"/api/analyze/{job_id}",
+            json={
+                "input_mode": "pitchdeck",
+                "phase_models": {
+                    "decomposition": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+                    "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+                },
+            },
+        )
+
+    assert analyze.status_code == 422
+    assert "phase_models is missing required phases" in analyze.text
 
 
 def test_start_analysis_normalizes_google_provider_alias(monkeypatch) -> None:

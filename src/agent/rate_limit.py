@@ -358,6 +358,17 @@ _RETRYABLE_MARKERS = _RATE_LIMIT_MARKERS + (
     "gateway timeout",
 )
 
+_AUTHENTICATION_MARKERS = (
+    "authentication_error",
+    "authentication error",
+    "invalid x-api-key",
+    "invalid api key",
+    "unauthorized",
+    "forbidden",
+    "permission denied",
+    "invalid credentials",
+)
+
 
 def is_rate_limit_error(exc: Exception) -> bool:
     status_code = _extract_status_code(exc)
@@ -379,6 +390,19 @@ def is_retryable_api_error(exc: Exception) -> bool:
 
     error_text = _exception_text(exc)
     return any(marker in error_text for marker in _RETRYABLE_MARKERS)
+
+
+def is_authentication_api_error(exc: Exception) -> bool:
+    status_code = _extract_status_code(exc)
+    if status_code in {401, 403}:
+        return True
+
+    name = exc.__class__.__name__.lower()
+    if any(token in name for token in ("authentication", "unauthorized", "forbidden", "permission")):
+        return True
+
+    error_text = _exception_text(exc)
+    return any(marker in error_text for marker in _AUTHENTICATION_MARKERS)
 
 
 def compute_retry_delay(exc: Exception, attempt: int, retry_policy: RetryPolicy) -> float:

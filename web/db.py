@@ -413,6 +413,7 @@ def _persist_company_analysis_row(
     slug = result_row.get("slug", "unknown")
     final_state = result_row.get("final_state", {})
     store = result_row.get("evidence_store")
+    analysis_status = str(result_row.get("analysis_status") or "done")
     company_name = getattr(company, "name", None) or result_row.get("company_name") or slug
     company_domain = getattr(company, "domain", None)
     company_key = _normalize_company_key(company_name, company_domain, slug)
@@ -473,7 +474,7 @@ def _persist_company_analysis_row(
             "job_id_legacy": job_id_legacy,
             "state": _serialize(final_state),
             "results_payload": _serialize(company_payload),
-            "status": "done",
+            "status": analysis_status,
             "run_config": _serialize(run_config),
             "excel_storage_path": excel_storage_path,
         }
@@ -774,9 +775,14 @@ def persist_analysis(
         return False
 
     try:
+        import time as _time
+        _t0 = _time.monotonic()
+        print(f"[persist_analysis] start job={job_id_legacy}")
         job_uuid = upsert_job(job_id_legacy, run_config=run_config, versions=versions)
         if not job_uuid:
+            print(f"[persist_analysis] upsert_job returned None, aborting")
             return False
+        print(f"[persist_analysis] upsert_job done ({_time.monotonic()-_t0:.1f}s)")
 
         for file_info in source_files or []:
             try:
@@ -795,38 +801,46 @@ def persist_analysis(
             except Exception:
                 pass
 
-        for exec_row in model_executions or []:
+        _EXEC_BATCH_SIZE = 200
+        exec_rows_to_insert = [
+            {
+                "job_id": job_uuid,
+                "job_id_legacy": job_id_legacy,
+                "company_slug": exec_row.get("company_slug"),
+                "service": exec_row.get("service", "llm"),
+                "stage": exec_row.get("stage", "scoring"),
+                "provider": exec_row.get("provider"),
+                "model": exec_row.get("model"),
+                "request_timeout_seconds": exec_row.get("request_timeout_seconds"),
+                "max_retries": exec_row.get("max_retries"),
+                "latency_ms": exec_row.get("latency_ms"),
+                "prompt_tokens": exec_row.get("prompt_tokens"),
+                "completion_tokens": exec_row.get("completion_tokens"),
+                "total_tokens": exec_row.get("total_tokens"),
+                "estimated_cost_usd": exec_row.get("estimated_cost_usd"),
+                "request_count": exec_row.get("request_count"),
+                "status": exec_row.get("status", "done"),
+                "error_message": exec_row.get("error_message"),
+                "metadata": _serialize(exec_row.get("metadata") or {}),
+            }
+            for exec_row in (model_executions or [])
+        ]
+        print(f"[persist_analysis] inserting {len(exec_rows_to_insert)} model_executions in batches ({_time.monotonic()-_t0:.1f}s)")
+        for i in range(0, len(exec_rows_to_insert), _EXEC_BATCH_SIZE):
             try:
                 client.table("model_executions").insert(
-                    {
-                        "job_id": job_uuid,
-                        "job_id_legacy": job_id_legacy,
-                        "company_slug": exec_row.get("company_slug"),
-                        "service": exec_row.get("service", "llm"),
-                        "stage": exec_row.get("stage", "scoring"),
-                        "provider": exec_row.get("provider"),
-                        "model": exec_row.get("model"),
-                        "request_timeout_seconds": exec_row.get("request_timeout_seconds"),
-                        "max_retries": exec_row.get("max_retries"),
-                        "latency_ms": exec_row.get("latency_ms"),
-                        "prompt_tokens": exec_row.get("prompt_tokens"),
-                        "completion_tokens": exec_row.get("completion_tokens"),
-                        "total_tokens": exec_row.get("total_tokens"),
-                        "estimated_cost_usd": exec_row.get("estimated_cost_usd"),
-                        "request_count": exec_row.get("request_count"),
-                        "status": exec_row.get("status", "done"),
-                        "error_message": exec_row.get("error_message"),
-                        "metadata": _serialize(exec_row.get("metadata") or {}),
-                    }
+                    exec_rows_to_insert[i : i + _EXEC_BATCH_SIZE]
                 ).execute()
             except Exception:
                 pass
+        print(f"[persist_analysis] model_executions done ({_time.monotonic()-_t0:.1f}s)")
 
         try:
             client.table("analyses").delete().eq("job_id_legacy", job_id_legacy).is_("company_id", "null").execute()
         except Exception:
             pass
 
+        print(f"[persist_analysis] inserting analyses row, payload size={len(str(snapshot_payload))} chars ({_time.monotonic()-_t0:.1f}s)")
         client.table("analyses").insert(
             {
                 "pitch_deck_id": None,
@@ -841,6 +855,7 @@ def persist_analysis(
             }
         ).execute()
 
+        print(f"[persist_analysis] analyses row inserted ({_time.monotonic()-_t0:.1f}s)")
         insert_job_status_history(
             job_id_legacy,
             status=snapshot_payload.get("job_status") or "done",
@@ -853,9 +868,12 @@ def persist_analysis(
             stop_requested=(snapshot_payload.get("job_status") == "stopped"),
             last_action=snapshot_payload.get("job_status") or "done",
         )
+        print(f"[persist_analysis] done total={_time.monotonic()-_t0:.1f}s")
 
         return True
     except Exception:
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -870,6 +888,38 @@ def persist_company_result(
     """Persist one completed company immediately without waiting for the full batch."""
     client = _get_client()
     if not client or result_row.get("skipped"):
+        return False
+
+    try:
+        job_uuid = upsert_job(job_id_legacy, run_config=run_config, versions=versions)
+        if not job_uuid:
+            return False
+
+        return _persist_company_analysis_row(
+            client,
+            job_uuid=job_uuid,
+            job_id_legacy=job_id_legacy,
+            result_row=result_row,
+            company_payload=company_payload,
+            run_config=run_config,
+            excel_storage_path=None,
+            replace_documents=True,
+        )
+    except Exception:
+        return False
+
+
+def persist_company_failure_result(
+    *,
+    job_id_legacy: str,
+    result_row: dict[str, Any],
+    company_payload: dict[str, Any],
+    run_config: dict[str, Any],
+    versions: dict[str, Any] | None = None,
+) -> bool:
+    """Persist a timed-out or failed company so batch progress is not lost."""
+    client = _get_client()
+    if not client:
         return False
 
     try:

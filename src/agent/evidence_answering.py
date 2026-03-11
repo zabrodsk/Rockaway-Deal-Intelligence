@@ -73,7 +73,11 @@ from agent.llm import create_llm
 from agent.prompt_library.manager import get_prompt
 from agent.rate_limit import gather_with_concurrency
 from agent.retrieval import retrieve_chunks
-from agent.run_context import get_current_collector
+from agent.run_context import (
+    get_current_collector,
+    get_current_pipeline_policy,
+    use_phase_llm,
+)
 
 GROUNDED_SYSTEM_PROMPT = """\
 You are an investment analyst answering due-diligence questions about a startup.
@@ -355,21 +359,23 @@ async def answer_question_from_evidence(
 
     async def _do_llm_call() -> tuple[str, dict]:
         nonlocal web_search_query, web_search_results, web_search_used, web_search_decision
+        policy = get_current_pipeline_policy()
 
         # Step 1: Always run the grounded LLM call first (documents only)
         if not chunks:
             grounded_answer = "Unknown from provided documents."
         else:
-            llm = create_llm(temperature=0.2)
-            user_content = grounded_user_prompt.format(
-                company_summary=company.get_company_summary(),
-                question=question,
-                chunks_text=chunks_text,
-            )
-            response = await llm.ainvoke([
-                SystemMessage(content=grounded_system_prompt),
-                HumanMessage(content=vc_block + user_content),
-            ])
+            with use_phase_llm(policy.answering if policy else None):
+                llm = create_llm(temperature=0.2)
+                user_content = grounded_user_prompt.format(
+                    company_summary=company.get_company_summary(),
+                    question=question,
+                    chunks_text=chunks_text,
+                )
+                response = await llm.ainvoke([
+                    SystemMessage(content=grounded_system_prompt),
+                    HumanMessage(content=vc_block + user_content),
+                ])
             grounded_answer = _coerce_text(response.content) or "Unknown from provided documents."
 
         # Step 2: Decide whether to run Perplexity based on the answer
@@ -430,17 +436,18 @@ async def answer_question_from_evidence(
             web_search_used = True
             web_search_decision = f"used: {reason}"
 
-            llm = create_llm(temperature=0.2)
-            user_content = hybrid_user_prompt.format(
-                company_summary=company.get_company_summary(),
-                question=question,
-                chunks_text=chunks_text,
-                web_results=web_results,
-            )
-            response = await llm.ainvoke([
-                SystemMessage(content=hybrid_system_prompt),
-                HumanMessage(content=vc_block + user_content),
-            ])
+            with use_phase_llm(policy.answering if policy else None):
+                llm = create_llm(temperature=0.2)
+                user_content = hybrid_user_prompt.format(
+                    company_summary=company.get_company_summary(),
+                    question=question,
+                    chunks_text=chunks_text,
+                    web_results=web_results,
+                )
+                response = await llm.ainvoke([
+                    SystemMessage(content=hybrid_system_prompt),
+                    HumanMessage(content=vc_block + user_content),
+                ])
             answer = _coerce_text(response.content) or "Unknown from provided documents."
             provenance = {
                 "chunk_ids": chunk_ids,

@@ -23,6 +23,8 @@ from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
 from agent.pipeline.state.schemas import SingleArgumentScore
 from agent.rate_limit import gather_with_concurrency
 from agent.pipeline.utils.helpers import format_argument_feedback
+from agent.pipeline.utils.phase_llm import ainvoke_with_phase_fallback
+from agent.run_context import get_current_pipeline_policy
 
 
 @backoff.on_exception(
@@ -36,41 +38,47 @@ async def score_single_argument(
     Uses temperature=0.0 for consistent, reproducible scoring.
     Includes retry logic to ensure we get exactly 14 scores.
     """
-    llm = get_llm(temperature=0.0)
-    llm_with_structured_output = llm.with_structured_output(SingleArgumentScore)
-
     system_prompt = get_prompt("evaluation.system", prompt_overrides)
     user_prompt = get_prompt("evaluation.user", prompt_overrides)
     criteria_mapping = get_criteria_mapping(prompt_overrides)
     critique = (
         "Critique of the argument: " + argument.critique if argument.critique else ""
     )
+    policy = get_current_pipeline_policy()
 
     # Retry logic for getting correct number of scores
     max_retries = 5
     score = None
-    for attempt in range(max_retries):
-        score = await llm_with_structured_output.ainvoke(
-            [
-                SystemMessage(content=system_prompt),
-                HumanMessage(
-                    content=user_prompt.format(
-                        argument=argument.content, critique=critique
-                    )
-                ),
-            ]
-        )
+    async def _invoke() -> SingleArgumentScore:
+        llm = get_llm(temperature=0.0)
+        llm_with_structured_output = llm.with_structured_output(SingleArgumentScore)
+        for attempt in range(max_retries):
+            result = await llm_with_structured_output.ainvoke(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(
+                        content=user_prompt.format(
+                            argument=argument.content, critique=critique
+                        )
+                    ),
+                ]
+            )
 
-        if len(score.scores) == len(criteria_mapping):
-            break
-        elif attempt < max_retries - 1:
-            print(
-                f"Attempt {attempt + 1}: Got {len(score.scores)} scores instead of {len(criteria_mapping)}, retrying..."
-            )
-        else:
+            if len(result.scores) == len(criteria_mapping):
+                return result
+            if attempt < max_retries - 1:
+                print(
+                    f"Attempt {attempt + 1}: Got {len(result.scores)} scores instead of {len(criteria_mapping)}, retrying..."
+                )
+                continue
             raise ValueError(
-                f"After {max_retries} attempts, still got {len(score.scores)} scores instead of {len(criteria_mapping)}"
+                f"After {max_retries} attempts, still got {len(result.scores)} scores instead of {len(criteria_mapping)}"
             )
+
+    score = await ainvoke_with_phase_fallback(
+        policy.evaluation if policy else None,
+        _invoke,
+    )
 
     argument.score = sum(criterion.score for criterion in score.scores)
     argument.argument_feedback = format_argument_feedback(

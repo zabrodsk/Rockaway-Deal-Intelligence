@@ -51,7 +51,7 @@ def _read_positive_int_env(name: str, default: int) -> int:
         return default
 
 
-SCORING_TIMEOUT_SECONDS = _read_positive_int_env("SCORING_TIMEOUT_SECONDS", 900)
+SCORING_TIMEOUT_SECONDS = _read_positive_int_env("SCORING_TIMEOUT_SECONDS", 1800)
 SCORING_HEARTBEAT_SECONDS = _read_positive_int_env("SCORING_HEARTBEAT_SECONDS", 20)
 
 

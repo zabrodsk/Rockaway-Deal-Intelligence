@@ -12,11 +12,14 @@ Environment variables:
 """
 
 import os
+from threading import Lock
 from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage
+import tiktoken
 
 from agent.llm_catalog import normalize_provider
 from agent.rate_limit import wrap_llm
@@ -28,6 +31,7 @@ _DEFAULT_PROVIDER = "gemini"
 _DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
 _DEFAULT_TIMEOUT_SECONDS = 90.0
 _DEFAULT_MAX_RETRIES = 2
+_FALLBACK_ENCODING_NAME = "o200k_base"
 
 
 def _extract_usage_metadata(payload: Any) -> dict[str, int] | None:
@@ -120,23 +124,166 @@ def _extract_usage_metadata(payload: Any) -> dict[str, int] | None:
     }
 
 
+def _estimate_usage_metadata(
+    *,
+    provider: str | None,
+    model: str | None,
+    prompt_text: str,
+    completion_text: str,
+) -> dict[str, int] | None:
+    prompt_tokens = _estimate_text_tokens(prompt_text, provider=provider, model=model)
+    completion_tokens = _estimate_text_tokens(completion_text, provider=provider, model=model)
+    if prompt_tokens is None or completion_tokens is None:
+        return None
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    }
+
+
+def _estimate_text_tokens(
+    text: str,
+    *,
+    provider: str | None,
+    model: str | None,
+) -> int | None:
+    try:
+        encoding = _encoding_for_selection(provider, model)
+        return len(encoding.encode(text or ""))
+    except Exception:
+        normalized = (text or "").strip()
+        if not normalized:
+            return 0
+        return max(1, round(len(normalized) / 4))
+
+
+def _encoding_for_selection(provider: str | None, model: str | None):
+    provider_norm = normalize_provider(provider or _DEFAULT_PROVIDER)
+    model_norm = (model or _DEFAULT_MODEL).strip()
+    if provider_norm == "openai":
+        try:
+            return tiktoken.encoding_for_model(model_norm)
+        except KeyError:
+            return tiktoken.get_encoding(_FALLBACK_ENCODING_NAME)
+    return tiktoken.get_encoding(_FALLBACK_ENCODING_NAME)
+
+
+def _render_message_text(messages: list[list[BaseMessage]]) -> str:
+    rendered_batches: list[str] = []
+    for batch in messages:
+        batch_parts: list[str] = []
+        for message in batch:
+            role = getattr(message, "type", None) or getattr(message, "role", None) or message.__class__.__name__
+            content = _coerce_message_content(getattr(message, "content", ""))
+            batch_parts.append(f"{role}: {content}")
+        rendered_batches.append("\n".join(batch_parts))
+    return "\n\n".join(part for part in rendered_batches if part).strip()
+
+
+def _coerce_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif item.get("type") == "text" and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif item.get("type") == "text" and isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+            else:
+                parts.append(str(item))
+        return "\n".join(part for part in parts if part).strip()
+    if content is None:
+        return ""
+    return str(content)
+
+
+def _extract_completion_text(payload: Any) -> str:
+    generations = getattr(payload, "generations", None)
+    if generations is None and isinstance(payload, dict):
+        generations = payload.get("generations")
+    if not isinstance(generations, list):
+        return ""
+
+    parts: list[str] = []
+    for generation_list in generations:
+        if not generation_list:
+            continue
+        generation = generation_list[0]
+        message = getattr(generation, "message", None)
+        if message is None and isinstance(generation, dict):
+            message = generation.get("message")
+        if message is not None:
+            content = getattr(message, "content", None)
+            if content is None and isinstance(message, dict):
+                content = message.get("content")
+            parts.append(_coerce_message_content(content))
+            continue
+        text = getattr(generation, "text", None)
+        if text is None and isinstance(generation, dict):
+            text = generation.get("text")
+        if text:
+            parts.append(str(text))
+    return "\n".join(part for part in parts if part).strip()
+
+
 class _TelemetryCallbackHandler(BaseCallbackHandler):
     """Collect token usage from LangChain callback payloads."""
 
-    def on_llm_end(self, response, **kwargs: Any) -> Any:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._prompt_text_by_run_id: dict[Any, str] = {}
+
+    def on_llm_start(self, serialized, prompts, *, run_id, **kwargs: Any) -> Any:
+        prompt_text = "\n\n".join(str(prompt or "") for prompt in prompts or []).strip()
+        with self._lock:
+            self._prompt_text_by_run_id[run_id] = prompt_text
+        return None
+
+    def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs: Any) -> Any:
+        with self._lock:
+            self._prompt_text_by_run_id[run_id] = _render_message_text(messages or [])
+        return None
+
+    def on_llm_end(self, response, *, run_id=None, **kwargs: Any) -> Any:
         collector = get_current_collector()
         selection = get_current_llm_selection()
         if not collector or not selection:
             return None
         usage = _extract_usage_metadata(response)
+        estimated = False
+        if usage is None and run_id is not None:
+            with self._lock:
+                prompt_text = self._prompt_text_by_run_id.pop(run_id, "")
+            usage = _estimate_usage_metadata(
+                provider=selection.get("provider"),
+                model=selection.get("model"),
+                prompt_text=prompt_text,
+                completion_text=_extract_completion_text(response),
+            )
+            estimated = usage is not None
+        elif run_id is not None:
+            with self._lock:
+                self._prompt_text_by_run_id.pop(run_id, None)
         collector.record_llm_usage(
             provider=selection["provider"],
             model=selection["model"],
             prompt_tokens=(usage or {}).get("prompt_tokens"),
             completion_tokens=(usage or {}).get("completion_tokens"),
             total_tokens=(usage or {}).get("total_tokens"),
-            metadata={},
+            metadata={"estimated_usage": estimated},
         )
+        return None
+
+    def on_llm_error(self, error: BaseException, *, run_id, **kwargs: Any) -> Any:
+        with self._lock:
+            self._prompt_text_by_run_id.pop(run_id, None)
         return None
 
 

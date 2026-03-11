@@ -21,6 +21,7 @@ from agent.prompt_library.manager import get_prompt
 from agent.pipeline.state.investment_story import IterativeInvestmentStoryState
 from agent.pipeline.state.schemas import ArgumentCritique
 from agent.rate_limit import gather_with_concurrency
+from agent.run_context import get_current_pipeline_policy, use_phase_llm
 
 @backoff.on_exception(
     backoff.expo, RateLimitError, max_tries=5, max_time=60, jitter=backoff.full_jitter
@@ -38,15 +39,16 @@ async def _apply_devils_advocate_to_pro_argument(
     """
     pro_user_prompt = get_prompt("critique.pro_user", prompt_overrides)
     pro_system_prompt = get_prompt("critique.pro_system", prompt_overrides)
-    llm = get_llm(temperature=0.5)
-    llm_with_structured_output = llm.with_structured_output(ArgumentCritique)
+    policy = get_current_pipeline_policy()
+    with use_phase_llm(policy.critique if policy else None):
+        llm = get_llm(temperature=0.5)
+        llm_with_structured_output = llm.with_structured_output(ArgumentCritique)
 
     user_prompt = pro_user_prompt.format(
         questions_and_answers=qa_pairs_formatted, argument=argument.content
     )
     if former_critique:
         user_prompt += f"\nHere is your past critique - do not repeat the same critique but find a new one:\n{former_critique}"
-
     critique: ArgumentCritique = await llm_with_structured_output.ainvoke(
         [
             SystemMessage(content=pro_system_prompt),
@@ -73,15 +75,16 @@ async def _apply_devils_advocate_to_contra_argument(
     """
     contra_user_prompt = get_prompt("critique.contra_user", prompt_overrides)
     contra_system_prompt = get_prompt("critique.contra_system", prompt_overrides)
-    llm = get_llm(temperature=0.5)
-    llm_with_structured_output = llm.with_structured_output(ArgumentCritique)
+    policy = get_current_pipeline_policy()
+    with use_phase_llm(policy.critique if policy else None):
+        llm = get_llm(temperature=0.5)
+        llm_with_structured_output = llm.with_structured_output(ArgumentCritique)
 
     user_prompt = contra_user_prompt.format(
         questions_and_answers=qa_pairs_formatted, argument=argument.content
     )
     if former_critique:
         user_prompt += f"\nHere is your past critique - do not repeat the same critique but find a new one:\n{former_critique}"
-
     critique: ArgumentCritique = await llm_with_structured_output.ainvoke(
         [
             SystemMessage(content=contra_system_prompt),
