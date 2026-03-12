@@ -47,3 +47,38 @@ def test_parallel_decomposition_uses_overridden_root_questions(monkeypatch):
 
     assert seen_questions["market"] == "Custom market root question?"
     assert result["question_trees"]["market"].root_node.question == "Custom market root question?"
+
+
+def test_parallel_decomposition_cache_reuses_by_industry_not_company_name(monkeypatch):
+    seen = {}
+    cached_tree = QuestionTree(
+        aspect="market",
+        root_node=QuestionNode(question="Cached market root?"),
+    )
+
+    def fake_get_cached_question_tree(question, company, aspect):
+        seen["question"] = question
+        seen["company_name"] = company.name
+        seen["industry"] = company.industry
+        seen["aspect"] = aspect
+        return cached_tree
+
+    monkeypatch.setattr(
+        parallel_decomposition,
+        "get_cached_question_tree",
+        fake_get_cached_question_tree,
+    )
+
+    result = asyncio.run(
+        parallel_decomposition._get_or_decompose_question(
+            question="What is the market size?",
+            industry="Vertical SaaS / Hospitality",
+            aspect="market",
+            company_name="Apaleo",
+            prompt_overrides={},
+        )
+    )
+
+    assert seen["company_name"] == "industry:vertical-saas-hospitality"
+    assert seen["industry"] == "Vertical SaaS / Hospitality"
+    assert result["tree"] == cached_tree

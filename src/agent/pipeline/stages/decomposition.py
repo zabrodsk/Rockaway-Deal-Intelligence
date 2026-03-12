@@ -13,6 +13,7 @@ The decomposition uses an LLM to generate a hierarchical question tree (HQDT)
 that captures all the sub-questions needed to fully answer the main question.
 """
 
+import asyncio
 import json
 from typing import Literal
 
@@ -28,7 +29,7 @@ from agent.pipeline.state.decomposition import (
     DecompositionOutput,
     DecompositionTree,
 )
-from agent.pipeline.utils.phase_llm import invoke_with_phase_fallback
+from agent.pipeline.utils.phase_llm import ainvoke_with_phase_fallback, invoke_with_phase_fallback
 from agent.run_context import get_current_pipeline_policy
 
 
@@ -68,7 +69,7 @@ def _build_question_tree_from_decomposition_tree(
     return QuestionTree(root_node=root_node, aspect=aspect)
 
 
-def decompose_question(state: DecompositionInput) -> DecompositionOutput:
+async def decompose_question_async(state: DecompositionInput) -> DecompositionOutput:
     """Decompose a complex question into a hierarchical question tree.
 
     Takes a high-level investment question and uses an LLM to break it
@@ -87,12 +88,12 @@ def decompose_question(state: DecompositionInput) -> DecompositionOutput:
 
     policy = get_current_pipeline_policy()
 
-    def _invoke() -> DecompositionTree:
+    async def _invoke() -> DecompositionTree:
         llm = get_llm(temperature=0.5)
         llm_with_structured_output = llm.with_structured_output(DecompositionTree)
-        return llm_with_structured_output.invoke(messages)
+        return await llm_with_structured_output.ainvoke(messages)
 
-    decomposition_tree = invoke_with_phase_fallback(
+    decomposition_tree = await ainvoke_with_phase_fallback(
         policy.decomposition if policy else None,
         _invoke,
     )
@@ -107,10 +108,15 @@ def decompose_question(state: DecompositionInput) -> DecompositionOutput:
     }
 
 
+def decompose_question(state: DecompositionInput) -> DecompositionOutput:
+    """Synchronous compatibility wrapper for tests and legacy call sites."""
+    return asyncio.run(decompose_question_async(state))
+
+
 # Build the graph
 builder = StateGraph(DecompositionInput, output=DecompositionOutput)
 
-builder.add_node("decompose", decompose_question)
+builder.add_node("decompose", decompose_question_async)
 
 builder.add_edge(START, "decompose")
 builder.add_edge("decompose", END)
