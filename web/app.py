@@ -113,8 +113,20 @@ try:
     MAX_PROGRESS_LOG_ENTRIES = max(1, int(os.getenv("MAX_PROGRESS_LOG_ENTRIES", "200")))
 except Exception:
     MAX_PROGRESS_LOG_ENTRIES = 200
+RESTART_ON_IDLE_AFTER_ANALYSIS = os.getenv("RESTART_ON_IDLE_AFTER_ANALYSIS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+try:
+    RESTART_ON_IDLE_DELAY_SECONDS = max(5, int(os.getenv("RESTART_ON_IDLE_DELAY_SECONDS", "15")))
+except Exception:
+    RESTART_ON_IDLE_DELAY_SECONDS = 15
 _sessions: dict[str, float] = {}
 _results_cache: dict[str, dict[str, Any]] = {}
+_restart_timer: threading.Timer | None = None
+_restart_lock = threading.Lock()
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -335,6 +347,53 @@ def _release_job_runtime_resources(job_id: str, *, drop_results: bool) -> None:
 
     _job_controls.pop(job_id, None)
     gc.collect()
+
+
+def _has_active_analysis_jobs() -> bool:
+    return any(job.status in {"pending", "running", "paused"} for job in _jobs.values())
+
+
+def _has_active_person_jobs() -> bool:
+    return any(job.status in {"pending", "running"} for job in _person_jobs.values())
+
+
+def _cancel_scheduled_restart() -> None:
+    global _restart_timer
+    with _restart_lock:
+        timer = _restart_timer
+        _restart_timer = None
+        if timer and timer.is_alive():
+            timer.cancel()
+
+
+def _restart_process_for_memory_reset() -> None:
+    print("Restarting process after analysis completion to reclaim memory.")
+    os._exit(1)
+
+
+def _schedule_idle_restart_if_enabled(job_id: str) -> None:
+    global _restart_timer
+    if not RESTART_ON_IDLE_AFTER_ANALYSIS:
+        return
+    if not (db and db.is_configured()):
+        return
+    if _has_active_analysis_jobs() or _has_active_person_jobs():
+        return
+
+    with _restart_lock:
+        if _restart_timer and _restart_timer.is_alive():
+            return
+        print(
+            f"Scheduling process restart in {RESTART_ON_IDLE_DELAY_SECONDS}s "
+            f"after terminal analysis job {job_id}.",
+        )
+        timer = threading.Timer(
+            RESTART_ON_IDLE_DELAY_SECONDS,
+            _restart_process_for_memory_reset,
+        )
+        timer.daemon = True
+        _restart_timer = timer
+        timer.start()
 
 
 def _batch_chunking_config(
@@ -1038,6 +1097,8 @@ async def start_analysis(
     if job_id not in _jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    _cancel_scheduled_restart()
+
     quality_tier = normalize_quality_tier(req.quality_tier)
     pipeline_policy = None
     phase_models = normalize_phase_models(req.phase_models) if req.phase_models is not None else None
@@ -1714,6 +1775,7 @@ async def _run_analysis(
                 job_id,
                 drop_results=bool(db and db.is_configured()),
             )
+            _schedule_idle_restart_if_enabled(job_id)
 
 
 def _make_progress_callback(job_id: str):
@@ -2220,6 +2282,8 @@ async def create_person_profile_job(
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    _cancel_scheduled_restart()
+
     job_id = str(uuid.uuid4())[:8]
     _person_jobs[job_id] = PersonProfileJobStatus(
         job_id=job_id,
@@ -2273,6 +2337,8 @@ async def create_bulk_founder_jobs(
     """Create one enrichment job per founder candidate."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    _cancel_scheduled_restart()
 
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []

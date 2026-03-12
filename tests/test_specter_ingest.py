@@ -631,6 +631,86 @@ def test_status_lazy_loads_terminal_results_after_memory_cleanup(monkeypatch) ->
         web_app._results_cache.pop(job_id, None)
 
 
+def test_schedule_idle_restart_when_enabled(monkeypatch) -> None:
+    created: dict[str, object] = {}
+
+    class FakeTimer:
+        def __init__(self, interval, func):
+            created["interval"] = interval
+            created["func"] = func
+            self.started = False
+            self.cancelled = False
+            self.daemon = False
+
+        def start(self):
+            self.started = True
+
+        def is_alive(self):
+            return self.started and not self.cancelled
+
+        def cancel(self):
+            self.cancelled = True
+
+    original_timer = web_app._restart_timer
+    monkeypatch.setattr(web_app, "RESTART_ON_IDLE_AFTER_ANALYSIS", True)
+    monkeypatch.setattr(web_app, "RESTART_ON_IDLE_DELAY_SECONDS", 15)
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        type("DbStub", (), {"is_configured": staticmethod(lambda: True)})(),
+    )
+    monkeypatch.setattr(web_app.threading, "Timer", FakeTimer)
+    web_app._restart_timer = None
+
+    try:
+        web_app._schedule_idle_restart_if_enabled("job-done")
+        assert created["interval"] == 15
+        assert isinstance(web_app._restart_timer, FakeTimer)
+        assert web_app._restart_timer.started is True
+    finally:
+        web_app._restart_timer = original_timer
+
+
+def test_schedule_idle_restart_skips_when_another_job_is_active(monkeypatch) -> None:
+    timer_calls = {"count": 0}
+
+    class FakeTimer:
+        def __init__(self, interval, func):
+            timer_calls["count"] += 1
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def cancel(self):
+            pass
+
+    original_timer = web_app._restart_timer
+    monkeypatch.setattr(web_app, "RESTART_ON_IDLE_AFTER_ANALYSIS", True)
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        type("DbStub", (), {"is_configured": staticmethod(lambda: True)})(),
+    )
+    monkeypatch.setattr(web_app.threading, "Timer", FakeTimer)
+    web_app._restart_timer = None
+    web_app._jobs["job-active"] = web_app.AnalysisStatus(
+        job_id="job-active",
+        status="running",
+        progress="Working",
+        progress_log=[],
+    )
+
+    try:
+        web_app._schedule_idle_restart_if_enabled("job-done")
+        assert timer_calls["count"] == 0
+    finally:
+        web_app._jobs.pop("job-active", None)
+        web_app._restart_timer = original_timer
+
+
 def test_batch_chunking_config_enables_for_large_anthropic_batch() -> None:
     job_id = "job-chunking-config"
     web_app._results_cache[job_id] = {
