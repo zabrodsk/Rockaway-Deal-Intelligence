@@ -525,6 +525,112 @@ def test_status_endpoint_returns_partial_results_for_running_job(monkeypatch) ->
         web_app._results_cache.pop(job_id, None)
 
 
+def test_append_progress_caps_in_memory_log(monkeypatch) -> None:
+    job_id = "job-progress-cap"
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="running",
+        progress="",
+        progress_log=[],
+    )
+    original_cap = web_app.MAX_PROGRESS_LOG_ENTRIES
+    monkeypatch.setattr(web_app, "MAX_PROGRESS_LOG_ENTRIES", 3)
+    monkeypatch.setattr(web_app, "db", None)
+
+    try:
+        for msg in ("one", "two", "three", "four", "five"):
+            web_app._append_progress(job_id, msg)
+        assert web_app._jobs[job_id].progress_log == ["three", "four", "five"]
+    finally:
+        monkeypatch.setattr(web_app, "MAX_PROGRESS_LOG_ENTRIES", original_cap)
+        web_app._jobs.pop(job_id, None)
+
+
+def test_release_job_runtime_resources_drops_heavy_cache(tmp_path: Path) -> None:
+    job_id = "job-release-runtime"
+    upload_dir = tmp_path / "upload"
+    upload_dir.mkdir()
+    results = {
+        "mode": "single",
+        "company_name": "Alpha",
+        "llm_selection": {
+            "provider": "openai",
+            "model": "gpt-5",
+            "label": "GPT-5",
+        },
+    }
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="done",
+        progress="Analysis complete",
+        progress_log=["a", "b", "c"],
+        results=results,
+    )
+    web_app._job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
+    web_app._results_cache[job_id] = {
+        "upload_dir": str(upload_dir),
+        "files": [{"name": "deck.pdf"}],
+        "specter": {"companies": "companies.csv"},
+        "telemetry_collector": object(),
+        "model_executions": [{"provider": "openai"}],
+        "results": results,
+    }
+
+    try:
+        web_app._release_job_runtime_resources(job_id, drop_results=True)
+        assert not upload_dir.exists()
+        assert web_app._jobs[job_id].results is None
+        assert "results" not in web_app._results_cache[job_id]
+        assert "files" not in web_app._results_cache[job_id]
+        assert job_id not in web_app._job_controls
+        assert web_app._results_cache[job_id]["input_mode"] == "single"
+    finally:
+        web_app._jobs.pop(job_id, None)
+        web_app._results_cache.pop(job_id, None)
+        web_app._job_controls.pop(job_id, None)
+
+
+def test_status_lazy_loads_terminal_results_after_memory_cleanup(monkeypatch) -> None:
+    job_id = "job-lazy-status"
+    results = {
+        "mode": "single",
+        "company_name": "Alpha",
+        "job_status": "done",
+        "job_message": "Analysis complete",
+        "llm_selection": {
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5-20251001",
+            "label": "Claude Haiku 4.5",
+        },
+    }
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="done",
+        progress="Analysis complete",
+        progress_log=[],
+        results=None,
+    )
+    web_app._results_cache[job_id] = {"input_mode": "single"}
+
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+    monkeypatch.setattr(
+        web_app,
+        "_load_persisted_job_results",
+        lambda current_job_id, preferred_mode=None: {"results": results} if current_job_id == job_id else None,
+    )
+
+    try:
+        payload = asyncio.run(web_app.get_status(job_id, session_id="session"))
+        assert payload["status"] == "done"
+        assert payload["results"]["company_name"] == "Alpha"
+        assert payload["llm"] == "Claude Haiku 4.5"
+        assert web_app._jobs[job_id].results is None
+        assert "results" not in web_app._results_cache[job_id]
+    finally:
+        web_app._jobs.pop(job_id, None)
+        web_app._results_cache.pop(job_id, None)
+
+
 def test_batch_chunking_config_enables_for_large_anthropic_batch() -> None:
     job_id = "job-chunking-config"
     web_app._results_cache[job_id] = {

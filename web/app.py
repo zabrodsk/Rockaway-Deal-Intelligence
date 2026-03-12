@@ -7,6 +7,7 @@ Provider API keys stay server-side only and are never exposed to the client.
 import asyncio
 import base64
 import contextlib
+import gc
 import hashlib
 import hmac
 import json
@@ -108,6 +109,10 @@ JOBS_STORE_PATH = Path(
         str(Path(tempfile.gettempdir()) / "startup_ranker_jobs.json"),
     ),
 )
+try:
+    MAX_PROGRESS_LOG_ENTRIES = max(1, int(os.getenv("MAX_PROGRESS_LOG_ENTRIES", "200")))
+except Exception:
+    MAX_PROGRESS_LOG_ENTRIES = 200
 _sessions: dict[str, float] = {}
 _results_cache: dict[str, dict[str, Any]] = {}
 
@@ -243,6 +248,93 @@ def _read_positive_int_env(name: str, default: int) -> int:
         return value if value > 0 else default
     except Exception:
         return default
+
+
+def _promote_results_metadata(job_id: str, results: dict[str, Any] | None) -> None:
+    if not isinstance(results, dict):
+        return
+    cache = _results_cache.setdefault(job_id, {})
+
+    mode = results.get("mode")
+    if isinstance(mode, str) and mode:
+        cache["input_mode"] = mode
+
+    selection = _selection_from_payload(results)
+    if selection:
+        cache["llm_selection"] = selection
+
+    pipeline_meta = _pipeline_meta_from_payload(results)
+    if pipeline_meta:
+        run_config = dict(cache.get("run_config") or {})
+        run_config["phase_models"] = pipeline_meta.get("phase_models")
+        run_config["quality_tier"] = pipeline_meta.get("quality_tier")
+        run_config["premium_phase_models"] = pipeline_meta.get("premium_phase_models")
+        run_config["effective_phase_models"] = pipeline_meta.get("effective_phase_models")
+        cache["run_config"] = run_config
+
+
+def _load_local_job_results(job_id: str) -> dict[str, Any] | None:
+    if not JOBS_STORE_PATH.exists():
+        return None
+    try:
+        raw = json.loads(JOBS_STORE_PATH.read_text())
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    data = raw.get(job_id)
+    if not isinstance(data, dict):
+        return None
+    results = data.get("results")
+    if not isinstance(results, dict):
+        return None
+    return {"results": results}
+
+
+def _load_persisted_job_results(
+    job_id: str,
+    *,
+    preferred_mode: str | None = None,
+) -> dict[str, Any] | None:
+    loaded = None
+    if db and db.is_configured():
+        try:
+            loaded = db.load_job_results(job_id, preferred_mode=preferred_mode)
+        except TypeError:
+            loaded = db.load_job_results(job_id)
+        except Exception:
+            loaded = None
+    return loaded or _load_local_job_results(job_id)
+
+
+def _release_job_runtime_resources(job_id: str, *, drop_results: bool) -> None:
+    cache = _results_cache.get(job_id)
+    if cache is None:
+        _job_controls.pop(job_id, None)
+        return
+
+    _promote_results_metadata(job_id, cache.get("results"))
+
+    upload_dir = cache.pop("upload_dir", None)
+    if isinstance(upload_dir, str) and upload_dir:
+        with contextlib.suppress(Exception):
+            shutil.rmtree(upload_dir, ignore_errors=True)
+
+    for key in ("files", "specter", "telemetry_collector", "model_executions"):
+        cache.pop(key, None)
+
+    job = _jobs.get(job_id)
+    if job is not None:
+        log = getattr(job, "progress_log", []) or []
+        job.progress_log = log[-MAX_PROGRESS_LOG_ENTRIES:]
+        if drop_results:
+            job.results = None
+
+    if drop_results:
+        cache.pop("results", None)
+
+    _job_controls.pop(job_id, None)
+    gc.collect()
 
 
 def _batch_chunking_config(
@@ -447,7 +539,8 @@ def _append_progress(job_id: str, msg: str, *, allow_stopped: bool = False) -> N
         return
     job.progress = msg
     log = getattr(job, "progress_log", []) or []
-    job.progress_log = log + [msg]
+    trimmed = log[-(MAX_PROGRESS_LOG_ENTRIES - 1):] if MAX_PROGRESS_LOG_ENTRIES > 1 else []
+    job.progress_log = trimmed + [msg]
     if db and db.is_configured():
         try:
             db.insert_analysis_event(job_id, message=msg, event_type="progress")
@@ -608,7 +701,7 @@ def _persist_jobs() -> None:
                 to_save[job_id] = {
                     "status": job.status,
                     "progress": job.progress,
-                    "progress_log": getattr(job, "progress_log", []) or [],
+                    "progress_log": (getattr(job, "progress_log", []) or [])[-MAX_PROGRESS_LOG_ENTRIES:],
                     "results": job.results,
                 }
         if not to_save:
@@ -620,7 +713,7 @@ def _persist_jobs() -> None:
 
 
 def _load_jobs() -> None:
-    """Load persisted jobs from disk and Supabase on startup."""
+    """Load lightweight completed-job metadata from local persistence on startup."""
     global _jobs, _results_cache
 
     if JOBS_STORE_PATH.exists():
@@ -637,32 +730,11 @@ def _load_jobs() -> None:
                         job_id=job_id,
                         status="done",
                         progress=data.get("progress", "Analysis complete"),
-                        progress_log=data.get("progress_log") or [],
-                        results=results,
+                        progress_log=(data.get("progress_log") or [])[-MAX_PROGRESS_LOG_ENTRIES:],
+                        results=None,
                     )
-                    _results_cache[job_id] = {"results": results}
-        except Exception:
-            pass
-
-    if db and db.is_configured():
-        try:
-            for job_id, entry in db.load_all_completed_jobs().items():
-                if job_id in _jobs:
-                    continue
-                results = entry.get("results")
-                if results is None:
-                    continue
-                _jobs[job_id] = AnalysisStatus(
-                    job_id=job_id,
-                    status="done",
-                    progress="Analysis complete",
-                    progress_log=[],
-                    results=results,
-                )
-                _results_cache[job_id] = {
-                    "results": results,
-                    "excel_storage_path": entry.get("excel_storage_path"),
-                }
+                    _results_cache[job_id] = {}
+                    _promote_results_metadata(job_id, results)
         except Exception:
             pass
 
@@ -671,13 +743,18 @@ _load_jobs()
 
 
 def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
-    results = _results_cache.get(job_id, {}).get("results")
+    cache = _results_cache.get(job_id, {})
+    results = cache.get("results")
     return {
         "job_id": job_id,
         "status": job.status,
         "progress": job.progress,
         "created_at": None,
-        "input_mode": results.get("mode") if isinstance(results, dict) else None,
+        "input_mode": (
+            results.get("mode")
+            if isinstance(results, dict)
+            else cache.get("input_mode")
+        ),
         "use_web_search": None,
         "results": None,
         "llm": _resolve_job_llm_label(job_id, results=results),
@@ -1630,6 +1707,13 @@ async def _run_analysis(
                     stage="run_analysis",
                     error_type=type(exc).__name__,
                 )
+    finally:
+        job = _jobs.get(job_id)
+        if job and job.status in {"done", "error", "stopped"}:
+            _release_job_runtime_resources(
+                job_id,
+                drop_results=bool(db and db.is_configured()),
+            )
 
 
 def _make_progress_callback(job_id: str):
@@ -2266,7 +2350,16 @@ async def get_status(job_id: str, session_id: str | None = Cookie(default=None))
 
     if job_id in _jobs:
         job = _jobs[job_id]
-        results = _results_cache.get(job_id, {}).get("results")
+        cache = _results_cache.get(job_id, {})
+        results = cache.get("results")
+        if results is None and job.status in {"done", "error", "stopped"}:
+            loaded = _load_persisted_job_results(
+                job_id,
+                preferred_mode=cache.get("input_mode"),
+            )
+            if loaded:
+                results = loaded.get("results")
+                _promote_results_metadata(job_id, results)
         return {
             "job_id": job.job_id,
             "status": job.status,
@@ -2276,32 +2369,28 @@ async def get_status(job_id: str, session_id: str | None = Cookie(default=None))
             "llm": _resolve_job_llm_label(job_id, results=results),
         }
 
-    if db and db.is_configured():
-        loaded = db.load_job_results(job_id)
-        if loaded:
-            results = loaded.get("results")
-            loaded_status = (results or {}).get("job_status") or "done"
-            loaded_progress = (results or {}).get("job_message") or "Analysis complete"
-            _jobs[job_id] = AnalysisStatus(
-                job_id=job_id,
-                status=loaded_status,
-                progress=loaded_progress,
-                progress_log=[],
-                results=results,
-            )
-            _results_cache[job_id] = {
-                "results": results,
-            }
-            return {
-                "job_id": job_id,
-                "status": loaded_status,
-                "progress": loaded_progress,
-                "progress_log": [],
-                "results": results,
-                "llm": _selection_from_payload(results)["label"]
-                if _selection_from_payload(results)
-                else _get_llm_display(),
-            }
+    loaded = _load_persisted_job_results(job_id)
+    if loaded:
+        results = loaded.get("results")
+        loaded_status = (results or {}).get("job_status") or "done"
+        loaded_progress = (results or {}).get("job_message") or "Analysis complete"
+        _jobs[job_id] = AnalysisStatus(
+            job_id=job_id,
+            status=loaded_status,
+            progress=loaded_progress,
+            progress_log=[],
+            results=None,
+        )
+        _results_cache[job_id] = {}
+        _promote_results_metadata(job_id, results)
+        return {
+            "job_id": job_id,
+            "status": loaded_status,
+            "progress": loaded_progress,
+            "progress_log": [],
+            "results": results,
+            "llm": _resolve_job_llm_label(job_id, results=results),
+        }
 
     raise HTTPException(status_code=404, detail="Job not found")
 
@@ -2324,10 +2413,11 @@ async def get_analysis(job_id: str, session_id: str | None = Cookie(default=None
     if results:
         return {"job_id": job_id, "results": results}
 
-    if db and db.is_configured():
-        loaded = db.load_job_results(job_id)
-        if loaded:
-            return {"job_id": job_id, "results": loaded.get("results")}
+    loaded = _load_persisted_job_results(job_id, preferred_mode=cache.get("input_mode"))
+    if loaded:
+        results = loaded.get("results")
+        _promote_results_metadata(job_id, results)
+        return {"job_id": job_id, "results": results}
 
     raise HTTPException(status_code=404, detail="Analysis not found")
 
