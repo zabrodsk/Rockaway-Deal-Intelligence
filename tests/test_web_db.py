@@ -425,6 +425,7 @@ def test_list_saved_jobs_prefers_terminal_analysis_status_over_stale_running_sta
             "use_web_search": True,
             "run_config": {},
             "results": None,
+            "has_results": True,
         }
     ]
 

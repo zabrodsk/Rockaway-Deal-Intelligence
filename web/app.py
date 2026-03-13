@@ -1082,6 +1082,7 @@ def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
         ),
         "use_web_search": None,
         "results": None,
+        "has_results": bool(results),
         "llm": _resolve_job_llm_label(job_id, results=results),
     }
 
@@ -1107,6 +1108,7 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
                     "input_mode": entry.get("input_mode") or (existing or {}).get("input_mode"),
                     "use_web_search": entry.get("use_web_search"),
                     "results": None,
+                    "has_results": entry.get("has_results") or (existing or {}).get("has_results") or False,
                     "llm": _resolve_job_llm_label(
                         job_id,
                         results=entry.get("results") or {},

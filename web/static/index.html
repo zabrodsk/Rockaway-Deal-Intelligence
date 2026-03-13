@@ -3550,6 +3550,7 @@ let statusWatchdogTimer = null;
 let savedJobsCache = [];
 let savedCompaniesCache = [];
 let companiesFetched = false;
+let savedJobsRefreshTimer = null;
 let savedCompanySortMode = DEFAULT_SAVED_COMPANY_SORT;
 let savedCompanySearch = '';
 let savedCompanySearchDebounce = null;
@@ -3615,6 +3616,9 @@ function showScreen(id) {
 
   if (id === 'processing-screen') startStatusWatchdog();
   else stopStatusWatchdog();
+
+  if (id === 'analysis-screen') startSavedJobsRefresh();
+  else stopSavedJobsRefresh();
 }
 
 function getActiveScreenId() {
@@ -3630,6 +3634,28 @@ function stopStatusWatchdog() {
     clearInterval(statusWatchdogTimer);
     statusWatchdogTimer = null;
   }
+}
+
+function isTerminalRunStatus(status) {
+  return status === 'done' || status === 'error' || status === 'stopped';
+}
+
+function stopSavedJobsRefresh() {
+  if (savedJobsRefreshTimer) {
+    clearInterval(savedJobsRefreshTimer);
+    savedJobsRefreshTimer = null;
+  }
+}
+
+function startSavedJobsRefresh() {
+  if (savedJobsRefreshTimer) return;
+  savedJobsRefreshTimer = setInterval(() => {
+    if (getActiveScreenId() !== 'analysis-screen') {
+      stopSavedJobsRefresh();
+      return;
+    }
+    fetchSavedJobs({ silent: true });
+  }, 5000);
 }
 
 function startStatusWatchdog() {
@@ -4114,13 +4140,32 @@ function mergeSavedAndRecentRuns() {
 
   for (const run of loadRecentRuns()) {
     if (!run?.jobId) continue;
-    merged.set(run.jobId, {
-      ...(merged.get(run.jobId) || {}),
+    const existing = merged.get(run.jobId) || {};
+    const savedHasResults = existing.hasResults === true;
+    const savedTerminal = savedHasResults || isTerminalRunStatus(existing.status);
+    const recentTerminal = isTerminalRunStatus(run.status);
+    const preferSavedTerminal = savedTerminal && !recentTerminal;
+
+    const mergedRun = {
+      ...existing,
       ...run,
-      createdAt: run.createdAt || merged.get(run.jobId)?.createdAt || null,
-      updatedAt: run.updatedAt || merged.get(run.jobId)?.updatedAt || null,
-      results: run.results || merged.get(run.jobId)?.results || null,
-    });
+      createdAt: existing.createdAt || run.createdAt || null,
+      updatedAt: run.updatedAt || existing.updatedAt || null,
+      results: run.results || existing.results || null,
+      hasResults: savedHasResults || run.hasResults === true || !!run.results,
+      llm: run.llm || existing.llm || null,
+    };
+
+    if (preferSavedTerminal) {
+      mergedRun.status = savedHasResults ? 'done' : (existing.status || 'done');
+      mergedRun.progress = existing.progress || run.progress || 'Analysis complete';
+      mergedRun.results = existing.results || run.results || null;
+    } else if (mergedRun.hasResults && !isTerminalRunStatus(mergedRun.status)) {
+      mergedRun.status = 'done';
+      mergedRun.progress = mergedRun.progress || 'Analysis complete';
+    }
+
+    merged.set(run.jobId, mergedRun);
   }
 
   return Array.from(merged.values()).sort((a, b) => {
@@ -4137,9 +4182,11 @@ function renderSavedJobCards(runs, { limit = null, emptyText = 'No saved jobs fo
   }
 
   return rows.map((run) => {
-    const status = run.status || 'pending';
+    const status = (run.hasResults === true && !isTerminalRunStatus(run.status))
+      ? 'done'
+      : (run.status || 'pending');
     const isUnavailable = status === 'error' && (run.progress || '').includes('no longer available');
-    const hasResults = !!run.results;
+    const hasResults = run.hasResults === true || !!run.results;
     const actionLabel = (status === 'done' || (status === 'stopped' && hasResults))
       ? 'Open results'
       : (isUnavailable ? 'Unavailable' : 'Open');
@@ -4784,6 +4831,7 @@ async function fetchSavedJobs({ silent = true } = {}) {
       input_mode: job.input_mode || null,
       useWebSearch: job.use_web_search === true,
       results: job.results || null,
+      hasResults: job.has_results === true || !!job.results,
       llm: job.llm || null,
     }));
     renderRecentRuns();
@@ -5537,14 +5585,15 @@ async function openSavedRun(jobId) {
 
   const runs = mergeSavedAndRecentRuns();
   const run = runs.find((r) => r.jobId === jobId);
-  if (run?.status === 'done' || run?.status === 'stopped') {
+  if (run?.hasResults === true || run?.status === 'done' || run?.status === 'stopped') {
     try {
       const analysis = await api(`/api/analyses/${jobId}`, { timeoutMs: 15000, retries: 1 });
       upsertRecentRun({
         jobId,
-        status: run?.status || 'done',
+        status: (analysis.results || {}).job_status || run?.status || 'done',
         progress: (analysis.results || {}).job_message || run?.progress || 'Analysis complete',
         results: analysis.results || null,
+        hasResults: !!analysis.results,
         llm: run?.llm ?? undefined,
       });
       renderResults(analysis.results);

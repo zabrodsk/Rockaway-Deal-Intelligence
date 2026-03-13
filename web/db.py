@@ -1267,6 +1267,7 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
                     "use_web_search": row.get("use_web_search"),
                     "run_config": row.get("run_config") or {},
                     "results": None,
+                    "has_results": bool(isinstance(snapshot_payload, dict) and snapshot_payload),
                 }
             )
 

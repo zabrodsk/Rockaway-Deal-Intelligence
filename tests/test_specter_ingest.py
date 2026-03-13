@@ -1057,6 +1057,54 @@ def test_loaded_persisted_terminal_results_do_not_arm_restart(monkeypatch) -> No
         web_app._results_cache.pop(job_id, None)
 
 
+def test_list_jobs_for_ui_prefers_persisted_terminal_state_over_live_running(monkeypatch) -> None:
+    job_id = "job-overview-terminal"
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="running",
+        progress="Chunk 1/2 — Evaluating TopK",
+        progress_log=[],
+    )
+
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            list_saved_jobs=lambda: [
+                {
+                    "job_id": job_id,
+                    "status": "done",
+                    "progress": "Analysis complete",
+                    "created_at": "2026-03-13T10:05:00Z",
+                    "input_mode": "specter",
+                    "use_web_search": True,
+                    "results": None,
+                    "has_results": True,
+                }
+            ],
+        ),
+    )
+
+    try:
+        rows = web_app._list_jobs_for_ui()
+        assert rows == [
+            {
+                "job_id": job_id,
+                "status": "done",
+                "progress": "Analysis complete",
+                "created_at": "2026-03-13T10:05:00Z",
+                "input_mode": "specter",
+                "use_web_search": True,
+                "results": None,
+                "has_results": True,
+                "llm": web_app._get_llm_display(),
+            }
+        ]
+    finally:
+        web_app._jobs.pop(job_id, None)
+
+
 def test_batch_chunking_config_enables_for_large_anthropic_batch() -> None:
     job_id = "job-chunking-config"
     web_app._results_cache[job_id] = {
