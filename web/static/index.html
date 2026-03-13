@@ -4195,9 +4195,9 @@ function renderSavedJobCards(runs, { limit = null, emptyText = 'No saved jobs fo
     const status = (run.hasResults === true && !isTerminalRunStatus(run.status))
       ? 'done'
       : (run.status || 'pending');
-    const isUnavailable = status === 'error' && (run.progress || '').includes('no longer available');
-    const hasResults = run.hasResults === true || !!run.results;
-    const canOpenResults = status === 'done' || (status === 'stopped' && hasResults);
+    const canOpenResults = run.canOpenResults === true || status === 'done';
+    const canViewLog = run.canViewLog === true;
+    const isUnavailable = !canOpenResults && !canViewLog;
     const actionLabel = canOpenResults
       ? 'Open results'
       : (isUnavailable ? 'Unavailable' : 'In progress');
@@ -4215,6 +4215,7 @@ function renderSavedJobCards(runs, { limit = null, emptyText = 'No saved jobs fo
       ? `<div class="saved-jobs-meta">${metaBits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('')}</div>`
       : '';
     const openDisabled = canOpenResults ? '' : ' disabled';
+    const logDisabled = canViewLog ? '' : ' disabled';
     return `<div class="recent-run-card">
       <div class="recent-run-meta">
         <div class="recent-run-title">${escapeHtml(getRunTitle(run))}</div>
@@ -4224,7 +4225,7 @@ function renderSavedJobCards(runs, { limit = null, emptyText = 'No saved jobs fo
       </div>
       <div class="recent-run-actions">
         <span class="recent-run-status ${status}">${escapeHtml(status)}</span>
-        <button class="recent-run-view-log" data-job-log="${escapeHtml(run.jobId)}">View log</button>
+        <button class="recent-run-view-log" data-job-log="${escapeHtml(run.jobId)}"${logDisabled}>View log</button>
         <button class="recent-run-open" data-job-open="${escapeHtml(run.jobId)}"${openDisabled}>${escapeHtml(actionLabel)}</button>
       </div>
     </div>`;
@@ -4241,6 +4242,7 @@ function bindSavedJobActions(root = document) {
   root.querySelectorAll('[data-job-log]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (btn.disabled) return;
       showProgressLogModal(btn.dataset.jobLog);
     });
   });
@@ -4843,6 +4845,8 @@ async function fetchSavedJobs({ silent = true } = {}) {
       useWebSearch: job.use_web_search === true,
       results: job.results || null,
       hasResults: job.has_results === true || !!job.results,
+      canOpenResults: job.can_open_results === true,
+      canViewLog: job.can_view_log === true,
       llm: job.llm || null,
     }));
     renderRecentRuns();
@@ -5595,37 +5599,36 @@ async function openSavedRun(jobId) {
   if (!jobId || jobId === 'null' || jobId === 'undefined') return;
   const runs = mergeSavedAndRecentRuns();
   const run = runs.find((r) => r.jobId === jobId);
-  const canOpenResults = run?.hasResults === true || run?.status === 'done' || run?.status === 'stopped';
+  const canOpenResults = run?.canOpenResults === true || run?.hasResults === true || run?.status === 'done';
   if (!canOpenResults) {
-    showProgressLogModal(jobId);
     return;
   }
 
   persistActiveJob(jobId);
-  if (canOpenResults) {
-    try {
-      const analysis = await api(`/api/analyses/${jobId}`, { timeoutMs: 15000, retries: 1 });
-      upsertRecentRun({
-        jobId,
-        status: (analysis.results || {}).job_status || run?.status || 'done',
-        progress: (analysis.results || {}).job_message || run?.progress || 'Analysis complete',
-        results: analysis.results || null,
-        hasResults: !!analysis.results,
-        llm: run?.llm ?? undefined,
-      });
-      renderResults(analysis.results);
-      showScreen('results-screen');
-      return;
-    } catch (renderErr) {
-      console.error('openSavedRun: failed to load fresh saved results:', renderErr);
-      if (run?.results) {
-        try {
-          renderResults(run.results);
-          showScreen('results-screen');
-          return;
-        } catch (cachedErr) {
-          console.error('openSavedRun: failed to render cached results:', cachedErr);
-        }
+  try {
+    const analysis = await api(`/api/analyses/${jobId}`, { timeoutMs: 15000, retries: 1 });
+    upsertRecentRun({
+      jobId,
+      status: (analysis.results || {}).job_status || run?.status || 'done',
+      progress: (analysis.results || {}).job_message || run?.progress || 'Analysis complete',
+      results: analysis.results || null,
+      hasResults: !!analysis.results,
+      canOpenResults: !!analysis.results,
+      canViewLog: false,
+      llm: run?.llm ?? undefined,
+    });
+    renderResults(analysis.results);
+    showScreen('results-screen');
+    return;
+  } catch (renderErr) {
+    console.error('openSavedRun: failed to load fresh saved results:', renderErr);
+    if (run?.results) {
+      try {
+        renderResults(run.results);
+        showScreen('results-screen');
+        return;
+      } catch (cachedErr) {
+        console.error('openSavedRun: failed to render cached results:', cachedErr);
       }
     }
   }
@@ -6498,7 +6501,7 @@ async function fetchAndRenderProgressLog(jobId) {
   contentEl.textContent = 'Loading...';
   contentEl.innerHTML = '';
   try {
-    const data = await api(`/api/status/${jobId}`, { timeoutMs: 10000, retries: 3 });
+    const data = await api(`/api/jobs/${jobId}/log`, { timeoutMs: 10000, retries: 1 });
     if (_progressLogRetryTimer) {
       clearTimeout(_progressLogRetryTimer);
       _progressLogRetryTimer = null;
@@ -6512,6 +6515,10 @@ async function fetchAndRenderProgressLog(jobId) {
     }
   } catch (err) {
     const msg = err?.message || 'Could not load progress log.';
+    if (msg.includes('only available for active runs') || msg.includes('no longer active')) {
+      contentEl.textContent = msg;
+      return;
+    }
     const retryBtn = document.createElement('button');
     retryBtn.className = 'btn-green';
     retryBtn.textContent = 'Retry';

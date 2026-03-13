@@ -4,6 +4,7 @@ import sys
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from fastapi import Response
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -683,6 +684,52 @@ def test_status_endpoint_returns_partial_results_for_running_job(monkeypatch) ->
         web_app._results_cache.pop(job_id, None)
 
 
+def test_job_log_endpoint_returns_live_progress_for_active_job(monkeypatch) -> None:
+    job_id = "job-live-log"
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="running",
+        progress="Working",
+        progress_log=["one", "two"],
+    )
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+
+    try:
+        payload = asyncio.run(web_app.get_job_log(job_id, response=Response(), session_id="session"))
+        assert payload == {
+            "job_id": job_id,
+            "status": "running",
+            "progress": "Working",
+            "progress_log": ["one", "two"],
+        }
+    finally:
+        web_app._jobs.pop(job_id, None)
+
+
+def test_job_log_endpoint_rejects_interrupted_run(monkeypatch) -> None:
+    job_id = "job-interrupted-log"
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            load_job_status=lambda current_job_id: {
+                "status": "running",
+                "progress": "Chunk 2/2 — Evaluating Delta",
+            }
+            if current_job_id == job_id
+            else None,
+        ),
+    )
+
+    with pytest.raises(web_app.HTTPException) as exc_info:
+        asyncio.run(web_app.get_job_log(job_id, response=Response(), session_id="session"))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Run is no longer active."
+
+
 def test_status_endpoint_promotes_running_job_when_persisted_report_is_terminal(monkeypatch) -> None:
     job_id = "job-running-promoted"
     results = {
@@ -1098,11 +1145,53 @@ def test_list_jobs_for_ui_prefers_persisted_terminal_state_over_live_running(mon
                 "use_web_search": True,
                 "results": None,
                 "has_results": True,
+                "can_open_results": True,
+                "can_view_log": False,
                 "llm": web_app._get_llm_display(),
             }
         ]
     finally:
         web_app._jobs.pop(job_id, None)
+
+
+def test_list_jobs_for_ui_marks_persisted_running_without_live_job_as_interrupted(monkeypatch) -> None:
+    job_id = "job-overview-interrupted"
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            list_saved_jobs=lambda: [
+                {
+                    "job_id": job_id,
+                    "status": "running",
+                    "progress": "Chunk 1/2 — Evaluating TopK",
+                    "created_at": "2026-03-13T10:05:00Z",
+                    "input_mode": "specter",
+                    "use_web_search": True,
+                    "results": None,
+                    "has_results": False,
+                }
+            ],
+        ),
+    )
+
+    rows = web_app._list_jobs_for_ui()
+    assert rows == [
+        {
+            "job_id": job_id,
+            "status": "interrupted",
+            "progress": "Run interrupted before completion.",
+            "created_at": "2026-03-13T10:05:00Z",
+            "input_mode": "specter",
+            "use_web_search": True,
+            "results": None,
+            "has_results": False,
+            "can_open_results": False,
+            "can_view_log": False,
+            "llm": web_app._get_llm_display(),
+        }
+    ]
 
 
 def test_batch_chunking_config_enables_for_large_anthropic_batch() -> None:

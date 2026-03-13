@@ -1070,6 +1070,8 @@ _load_jobs()
 def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
     cache = _results_cache.get(job_id, {})
     results = cache.get("results")
+    has_results = bool(results)
+    is_active = job.status in {"pending", "running", "paused"}
     return {
         "job_id": job_id,
         "status": job.status,
@@ -1082,7 +1084,9 @@ def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
         ),
         "use_web_search": None,
         "results": None,
-        "has_results": bool(results),
+        "has_results": has_results,
+        "can_open_results": job.status == "done" and has_results,
+        "can_view_log": is_active,
         "llm": _resolve_job_llm_label(job_id, results=results),
     }
 
@@ -1109,11 +1113,20 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
                     "use_web_search": entry.get("use_web_search"),
                     "results": None,
                     "has_results": entry.get("has_results") or (existing or {}).get("has_results") or False,
+                    "can_open_results": False,
+                    "can_view_log": False,
                     "llm": _resolve_job_llm_label(
                         job_id,
                         results=entry.get("results") or {},
                     ) if entry.get("results") else (existing or {}).get("llm") or _get_llm_display(),
                 }
+                has_live_job = bool(existing) and (existing or {}).get("status") in {"pending", "running", "paused"}
+                if not has_live_job and merged["status"] in {"pending", "running", "paused"}:
+                    merged["status"] = "interrupted"
+                    merged["progress"] = "Run interrupted before completion."
+                    merged["has_results"] = False
+                merged["can_open_results"] = merged["status"] == "done" and merged["has_results"] is True
+                merged["can_view_log"] = has_live_job and merged["status"] in {"pending", "running", "paused"}
                 jobs_by_id[job_id] = merged
         except Exception:
             pass
@@ -2997,6 +3010,33 @@ async def get_status(
         }
 
     raise HTTPException(status_code=404, detail="Job not found")
+
+
+@app.get("/api/jobs/{job_id}/log")
+async def get_job_log(
+    job_id: str,
+    response: Response,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _set_no_store_headers(response)
+
+    job = _jobs.get(job_id)
+    if job and job.status in {"pending", "running", "paused"}:
+        return {
+            "job_id": job_id,
+            "status": job.status,
+            "progress": job.progress,
+            "progress_log": getattr(job, "progress_log", []) or [],
+        }
+
+    if db and db.is_configured():
+        persisted_status = db.load_job_status(job_id)
+        if persisted_status and persisted_status.get("status") in {"pending", "running", "paused"}:
+            raise HTTPException(status_code=409, detail="Run is no longer active.")
+
+    raise HTTPException(status_code=409, detail="Progress log is only available for active runs.")
 
 
 @app.get("/api/download/{job_id}")
