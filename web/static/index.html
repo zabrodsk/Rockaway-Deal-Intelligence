@@ -5536,13 +5536,30 @@ async function openSavedRun(jobId) {
 
   const runs = mergeSavedAndRecentRuns();
   const run = runs.find((r) => r.jobId === jobId);
-  if ((run?.status === 'done' || run?.status === 'stopped') && run.results) {
+  if (run?.status === 'done' || run?.status === 'stopped') {
     try {
-      renderResults(run.results);
+      const analysis = await api(`/api/analyses/${jobId}`, { timeoutMs: 15000, retries: 1 });
+      upsertRecentRun({
+        jobId,
+        status: run?.status || 'done',
+        progress: (analysis.results || {}).job_message || run?.progress || 'Analysis complete',
+        results: analysis.results || null,
+        llm: run?.llm ?? undefined,
+      });
+      renderResults(analysis.results);
       showScreen('results-screen');
       return;
     } catch (renderErr) {
-      console.error('openSavedRun: failed to render cached results:', renderErr);
+      console.error('openSavedRun: failed to load fresh saved results:', renderErr);
+      if (run?.results) {
+        try {
+          renderResults(run.results);
+          showScreen('results-screen');
+          return;
+        } catch (cachedErr) {
+          console.error('openSavedRun: failed to render cached results:', cachedErr);
+        }
+      }
     }
   }
 

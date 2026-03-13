@@ -542,6 +542,33 @@ def _serialize(obj: Any) -> Any:
     return obj
 
 
+def _execution_metadata(exec_row: dict[str, Any]) -> dict[str, Any]:
+    metadata = _serialize(exec_row.get("metadata") or {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.setdefault("service", exec_row.get("service", "llm"))
+    if exec_row.get("estimated_cost_usd") is not None:
+        metadata["estimated_cost_usd"] = exec_row.get("estimated_cost_usd")
+    if exec_row.get("request_count") is not None:
+        metadata["request_count"] = exec_row.get("request_count")
+    return metadata
+
+
+def _hydrate_execution_row(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    hydrated = dict(row)
+    hydrated["service"] = row.get("service") or metadata.get("service") or "llm"
+    hydrated["request_count"] = row.get("request_count")
+    if hydrated["request_count"] is None:
+        hydrated["request_count"] = metadata.get("request_count")
+    hydrated["estimated_cost_usd"] = row.get("estimated_cost_usd")
+    if hydrated["estimated_cost_usd"] is None:
+        hydrated["estimated_cost_usd"] = metadata.get("estimated_cost_usd")
+    return hydrated
+
+
 def _get_job_uuid(client: Client, job_id_legacy: str) -> str | None:
     try:
         row = (
@@ -808,7 +835,6 @@ def persist_analysis(
                 "job_id": job_uuid,
                 "job_id_legacy": job_id_legacy,
                 "company_slug": exec_row.get("company_slug"),
-                "service": exec_row.get("service", "llm"),
                 "stage": exec_row.get("stage", "scoring"),
                 "provider": exec_row.get("provider"),
                 "model": exec_row.get("model"),
@@ -818,11 +844,9 @@ def persist_analysis(
                 "prompt_tokens": exec_row.get("prompt_tokens"),
                 "completion_tokens": exec_row.get("completion_tokens"),
                 "total_tokens": exec_row.get("total_tokens"),
-                "estimated_cost_usd": exec_row.get("estimated_cost_usd"),
-                "request_count": exec_row.get("request_count"),
                 "status": exec_row.get("status", "done"),
                 "error_message": exec_row.get("error_message"),
-                "metadata": _serialize(exec_row.get("metadata") or {}),
+                "metadata": _execution_metadata(exec_row),
             }
             for exec_row in (model_executions or [])
         ]
@@ -900,7 +924,6 @@ def persist_model_executions(
                 "job_id": job_uuid,
                 "job_id_legacy": job_id_legacy,
                 "company_slug": exec_row.get("company_slug"),
-                "service": exec_row.get("service", "llm"),
                 "stage": exec_row.get("stage", "scoring"),
                 "provider": exec_row.get("provider"),
                 "model": exec_row.get("model"),
@@ -910,11 +933,9 @@ def persist_model_executions(
                 "prompt_tokens": exec_row.get("prompt_tokens"),
                 "completion_tokens": exec_row.get("completion_tokens"),
                 "total_tokens": exec_row.get("total_tokens"),
-                "estimated_cost_usd": exec_row.get("estimated_cost_usd"),
-                "request_count": exec_row.get("request_count"),
                 "status": exec_row.get("status", "done"),
                 "error_message": exec_row.get("error_message"),
-                "metadata": _serialize(exec_row.get("metadata") or {}),
+                "metadata": _execution_metadata(exec_row),
             }
             for exec_row in model_executions
         ]
@@ -1041,14 +1062,14 @@ def load_run_costs(job_id_legacy: str) -> dict[str, Any] | None:
             resp = (
                 client.table("model_executions")
                 .select(
-                    "service, provider, model, prompt_tokens, completion_tokens, "
-                    "total_tokens, estimated_cost_usd, request_count"
+                    "provider, model, prompt_tokens, completion_tokens, "
+                    "total_tokens, metadata"
                 )
                 .eq("job_id_legacy", job_id_legacy)
                 .range(start, start + batch_size - 1)
                 .execute()
             )
-            batch = list(resp.data or [])
+            batch = [_hydrate_execution_row(row) for row in list(resp.data or [])]
             if not batch:
                 break
             rows.extend(batch)

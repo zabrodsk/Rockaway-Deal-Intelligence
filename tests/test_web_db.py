@@ -427,3 +427,66 @@ def test_list_saved_jobs_prefers_terminal_analysis_status_over_stale_running_sta
             "results": None,
         }
     ]
+
+
+def test_load_run_costs_rehydrates_service_and_cost_fields_from_metadata(monkeypatch) -> None:
+    import web.db as web_db
+
+    class FakeResponse:
+        def __init__(self, data):
+            self.data = data
+
+    class FakeQuery:
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def eq(self, *_args, **_kwargs):
+            return self
+
+        def range(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            return FakeResponse(
+                [
+                    {
+                        "provider": "gemini",
+                        "model": "gemini-3.1-flash-lite-preview",
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 500,
+                        "total_tokens": 1500,
+                        "metadata": {
+                            "service": "llm",
+                            "estimated_cost_usd": 0.001,
+                            "request_count": 1,
+                        },
+                    },
+                    {
+                        "provider": "perplexity",
+                        "model": "search_api",
+                        "prompt_tokens": None,
+                        "completion_tokens": None,
+                        "total_tokens": None,
+                        "metadata": {
+                            "service": "perplexity_search",
+                            "estimated_cost_usd": 0.005,
+                            "request_count": 1,
+                        },
+                    },
+                ]
+            )
+
+    class FakeClient:
+        def table(self, table_name: str):
+            assert table_name == "model_executions"
+            return FakeQuery()
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: FakeClient())
+
+    costs = web_db.load_run_costs("job-123")
+
+    assert costs is not None
+    assert costs["llm_tokens"] == {"prompt": 1000, "completion": 500, "total": 1500}
+    assert costs["llm_usd"] == 0.001
+    assert costs["perplexity_usd"] == 0.005
+    assert costs["total_usd"] == 0.006
