@@ -5617,14 +5617,23 @@ async function resumeActiveJob() {
 
 async function openSavedRun(jobId) {
   if (!jobId || jobId === 'null' || jobId === 'undefined') return;
-  const runs = mergeSavedAndRecentRuns();
-  const run = runs.find((r) => r.jobId === jobId);
-  const canOpenResults = run?.canOpenResults === true || run?.hasResults === true || run?.status === 'done';
+  const run = savedJobsCache.find((r) => r.jobId === jobId)
+    || mergeSavedAndRecentRuns().find((r) => r.jobId === jobId);
+  const canOpenResults = run?.canOpenResults === true || run?.hasResults === true;
   if (!canOpenResults) {
     return;
   }
 
-  persistActiveJob(jobId);
+  const subtitleEl = $('#results-subtitle');
+  const rankingsEl = $('#rankings-container');
+  const statsEl = $('#stats-row');
+  const costStripEl = $('#results-cost-strip');
+  if (subtitleEl) subtitleEl.textContent = `Loading saved results for ${jobId.toUpperCase()}...`;
+  if (rankingsEl) rankingsEl.innerHTML = '<p style="color:var(--text-dim)">Loading saved analysis report...</p>';
+  if (statsEl) statsEl.innerHTML = '';
+  if (costStripEl) costStripEl.innerHTML = '';
+  showScreen('results-screen');
+
   try {
     const analysis = await api(`/api/analyses/${jobId}`, { timeoutMs: 15000, retries: 1 });
     upsertRecentRun({
@@ -5637,6 +5646,7 @@ async function openSavedRun(jobId) {
       canViewLog: false,
       llm: run?.llm ?? undefined,
     });
+    persistActiveJob(jobId);
     renderResults(analysis.results);
     showScreen('results-screen');
     return;
@@ -5653,10 +5663,10 @@ async function openSavedRun(jobId) {
     }
   }
 
-  showScreen('processing-screen');
-  resetProgressBar();
-  $('#processing-status').textContent = 'Loading saved run...';
-  await resumeActiveJob();
+  if (subtitleEl) subtitleEl.textContent = `Could not open saved results for ${jobId.toUpperCase()}.`;
+  if (rankingsEl) {
+    rankingsEl.innerHTML = '<p style="color:var(--text-dim)">This saved report could not be loaded right now. Refresh the Analysis page and try again.</p>';
+  }
 }
 
 // Check existing session on load
