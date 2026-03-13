@@ -877,6 +877,55 @@ def persist_analysis(
         return False
 
 
+def persist_model_executions(
+    job_id_legacy: str,
+    model_executions: list[dict[str, Any]],
+    *,
+    run_config: dict[str, Any] | None = None,
+    versions: dict[str, Any] | None = None,
+) -> bool:
+    """Persist model execution telemetry incrementally for long-running chunked jobs."""
+    client = _get_client()
+    if not client or not model_executions:
+        return False
+
+    try:
+        job_uuid = upsert_job(job_id_legacy, run_config=run_config, versions=versions)
+        if not job_uuid:
+            return False
+
+        rows = [
+            {
+                "job_id": job_uuid,
+                "job_id_legacy": job_id_legacy,
+                "company_slug": exec_row.get("company_slug"),
+                "service": exec_row.get("service", "llm"),
+                "stage": exec_row.get("stage", "scoring"),
+                "provider": exec_row.get("provider"),
+                "model": exec_row.get("model"),
+                "request_timeout_seconds": exec_row.get("request_timeout_seconds"),
+                "max_retries": exec_row.get("max_retries"),
+                "latency_ms": exec_row.get("latency_ms"),
+                "prompt_tokens": exec_row.get("prompt_tokens"),
+                "completion_tokens": exec_row.get("completion_tokens"),
+                "total_tokens": exec_row.get("total_tokens"),
+                "estimated_cost_usd": exec_row.get("estimated_cost_usd"),
+                "request_count": exec_row.get("request_count"),
+                "status": exec_row.get("status", "done"),
+                "error_message": exec_row.get("error_message"),
+                "metadata": _serialize(exec_row.get("metadata") or {}),
+            }
+            for exec_row in model_executions
+        ]
+
+        batch_size = 200
+        for i in range(0, len(rows), batch_size):
+            client.table("model_executions").insert(rows[i : i + batch_size]).execute()
+        return True
+    except Exception:
+        return False
+
+
 def persist_company_result(
     *,
     job_id_legacy: str,

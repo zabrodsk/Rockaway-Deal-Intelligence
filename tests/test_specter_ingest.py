@@ -16,6 +16,7 @@ from agent.dataclasses.question_tree import QuestionNode, QuestionTree
 from agent.evidence_answering import answer_all_trees_from_evidence
 from agent.ingest.store import Chunk, EvidenceStore
 from agent.ingest.specter_ingest import ingest_specter
+from agent.run_context import RunTelemetryCollector
 from web import app as web_app
 
 
@@ -391,6 +392,134 @@ def test_run_specter_analysis_persists_first_company_before_starting_second(
     finally:
         web_app._jobs.pop(job_id, None)
         web_app._job_controls.pop(job_id, None)
+        web_app._results_cache.pop(job_id, None)
+
+
+def test_merge_run_cost_summaries_prefers_available_status() -> None:
+    merged = web_app._merge_run_cost_summaries(
+        web_app._empty_run_costs_summary(),
+        {
+            "currency": "USD",
+            "status": "complete",
+            "total_usd": 0.001,
+            "llm_usd": 0.001,
+            "perplexity_usd": 0.0,
+            "llm_tokens": {"prompt": 100, "completion": 50, "total": 150},
+            "perplexity_search": {"requests": 0, "total_usd": 0.0},
+            "by_model": [
+                {
+                    "provider": "gemini",
+                    "model": "gemini-3.1-flash-lite-preview",
+                    "label": "Gemini 3.1 Flash Lite",
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                    "usd": 0.001,
+                    "pricing_available": True,
+                    "partial": False,
+                }
+            ],
+        },
+    )
+
+    assert merged["status"] == "complete"
+    assert merged["llm_usd"] == 0.001
+    assert merged["llm_tokens"] == {"prompt": 100, "completion": 50, "total": 150}
+    assert merged["by_model"][0]["provider"] == "gemini"
+
+
+def test_flush_chunk_telemetry_persists_incremental_rows_and_updates_aggregate() -> None:
+    job_id = "job-flush-telemetry"
+    collector = RunTelemetryCollector()
+    collector.record_llm_usage(
+        provider="gemini",
+        model="gemini-3.1-flash-lite-preview",
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+
+    persisted_rows: list[dict] = []
+
+    class FakeDb:
+        @staticmethod
+        def is_configured() -> bool:
+            return True
+
+        @staticmethod
+        def persist_model_executions(job_id_legacy, rows, *, run_config=None, versions=None) -> bool:
+            assert job_id_legacy == job_id
+            assert run_config == {"input_mode": "specter"}
+            assert versions == {"app_version": "test"}
+            persisted_rows.extend(rows)
+            return True
+
+    original_db = web_app.db
+    web_app.db = FakeDb()
+    web_app._results_cache[job_id] = {
+        "telemetry_collector": collector,
+        "run_costs_aggregate": web_app._empty_run_costs_summary(),
+        "model_executions": [],
+        "run_config": {"input_mode": "specter"},
+        "versions": {"app_version": "test"},
+    }
+
+    try:
+        web_app._flush_chunk_telemetry(job_id)
+
+        assert len(persisted_rows) == 1
+        assert persisted_rows[0]["service"] == "llm"
+        assert collector.snapshot_model_executions() == []
+        assert web_app._results_cache[job_id]["model_executions"] == []
+        assert web_app._results_cache[job_id]["run_costs_aggregate"]["status"] == "complete"
+        assert web_app._results_cache[job_id]["run_costs_aggregate"]["llm_tokens"] == {
+            "prompt": 100,
+            "completion": 50,
+            "total": 150,
+        }
+    finally:
+        web_app.db = original_db
+        web_app._results_cache.pop(job_id, None)
+
+
+def test_flush_chunk_telemetry_retains_rows_for_final_persist_when_incremental_write_fails() -> None:
+    job_id = "job-flush-telemetry-fallback"
+    collector = RunTelemetryCollector()
+    collector.record_llm_usage(
+        provider="gemini",
+        model="gemini-3.1-flash-lite-preview",
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+
+    class FakeDb:
+        @staticmethod
+        def is_configured() -> bool:
+            return True
+
+        @staticmethod
+        def persist_model_executions(job_id_legacy, rows, *, run_config=None, versions=None) -> bool:
+            return False
+
+    original_db = web_app.db
+    web_app.db = FakeDb()
+    web_app._results_cache[job_id] = {
+        "telemetry_collector": collector,
+        "run_costs_aggregate": web_app._empty_run_costs_summary(),
+        "model_executions": [],
+        "run_config": {"input_mode": "specter"},
+        "versions": {"app_version": "test"},
+    }
+
+    try:
+        web_app._flush_chunk_telemetry(job_id)
+
+        assert collector.snapshot_model_executions() == []
+        assert len(web_app._results_cache[job_id]["model_executions"]) == 1
+        assert web_app._results_cache[job_id]["run_costs_aggregate"]["status"] == "complete"
+    finally:
+        web_app.db = original_db
         web_app._results_cache.pop(job_id, None)
 
 

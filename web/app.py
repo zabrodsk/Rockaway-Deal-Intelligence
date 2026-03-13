@@ -69,7 +69,11 @@ from agent.llm_policy import (
     resolve_effective_phase_choices,
     resolve_effective_phase_models,
 )
-from agent.run_context import RunTelemetryCollector, use_run_context
+from agent.run_context import (
+    RunTelemetryCollector,
+    build_run_costs_from_model_executions,
+    use_run_context,
+)
 from agent.dataclasses.company import Company
 from agent.ingest import ingest_startup_folder
 from agent.ingest.store import Chunk, EvidenceStore
@@ -114,6 +118,12 @@ try:
 except Exception:
     MAX_PROGRESS_LOG_ENTRIES = 200
 RESTART_ON_IDLE_AFTER_ANALYSIS = os.getenv("RESTART_ON_IDLE_AFTER_ANALYSIS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ENABLE_CHUNKED_SPECTER_PERSISTENCE = os.getenv("ENABLE_CHUNKED_SPECTER_PERSISTENCE", "").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -574,9 +584,15 @@ def _runtime_versions() -> dict[str, str]:
 
 def _run_costs_from_cache(job_id: str) -> dict[str, Any]:
     cache = _results_cache.get(job_id, {})
+    aggregate = cache.get("run_costs_aggregate")
     collector = cache.get("telemetry_collector")
     if isinstance(collector, RunTelemetryCollector):
-        return collector.build_run_costs()
+        current = collector.build_run_costs()
+        if isinstance(aggregate, dict):
+            return _merge_run_cost_summaries(aggregate, current)
+        return current
+    if isinstance(aggregate, dict):
+        return aggregate
     return {
         "currency": "USD",
         "status": "unavailable",
@@ -587,6 +603,143 @@ def _run_costs_from_cache(job_id: str) -> dict[str, Any]:
         "perplexity_search": {"requests": 0, "total_usd": 0.0},
         "by_model": [],
     }
+
+
+def _empty_run_costs_summary() -> dict[str, Any]:
+    return {
+        "currency": "USD",
+        "status": "unavailable",
+        "total_usd": None,
+        "llm_usd": None,
+        "perplexity_usd": 0.0,
+        "llm_tokens": {"prompt": 0, "completion": 0, "total": 0},
+        "perplexity_search": {"requests": 0, "total_usd": 0.0},
+        "by_model": [],
+    }
+
+
+def _merge_run_cost_summaries(base: dict[str, Any] | None, delta: dict[str, Any] | None) -> dict[str, Any]:
+    merged = _empty_run_costs_summary()
+    base = base or {}
+    delta = delta or {}
+
+    status_order = {"complete": 0, "partial": 1, "unavailable": 2}
+    base_status = base.get("status") or "unavailable"
+    delta_status = delta.get("status") or "unavailable"
+    merged["status"] = (
+        base_status
+        if status_order.get(base_status, 2) <= status_order.get(delta_status, 2)
+        else delta_status
+    )
+
+    for side in (base, delta):
+        llm_tokens = side.get("llm_tokens") or {}
+        merged["llm_tokens"]["prompt"] += int(llm_tokens.get("prompt") or 0)
+        merged["llm_tokens"]["completion"] += int(llm_tokens.get("completion") or 0)
+        merged["llm_tokens"]["total"] += int(llm_tokens.get("total") or 0)
+        merged["perplexity_search"]["requests"] += int((side.get("perplexity_search") or {}).get("requests") or 0)
+        merged["perplexity_search"]["total_usd"] += float((side.get("perplexity_search") or {}).get("total_usd") or 0.0)
+        merged["perplexity_usd"] += float(side.get("perplexity_usd") or 0.0)
+
+    def _sum_optional(left: Any, right: Any) -> float | None:
+        known = [float(v) for v in (left, right) if isinstance(v, (int, float))]
+        return round(sum(known), 8) if known else None
+
+    merged["llm_usd"] = _sum_optional(base.get("llm_usd"), delta.get("llm_usd"))
+    merged["total_usd"] = _sum_optional(base.get("total_usd"), delta.get("total_usd"))
+    merged["perplexity_usd"] = round(merged["perplexity_usd"], 8)
+    merged["perplexity_search"]["total_usd"] = round(merged["perplexity_search"]["total_usd"], 8)
+
+    by_model: dict[tuple[str, str], dict[str, Any]] = {}
+    for side in (base, delta):
+        for item in side.get("by_model") or []:
+            key = (str(item.get("provider") or ""), str(item.get("model") or ""))
+            current = by_model.setdefault(
+                key,
+                {
+                    "provider": item.get("provider"),
+                    "model": item.get("model"),
+                    "label": item.get("label"),
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "usd": 0.0 if item.get("usd") is not None else None,
+                    "pricing_available": item.get("pricing_available", True),
+                    "partial": item.get("partial", False),
+                },
+            )
+            current["prompt_tokens"] += int(item.get("prompt_tokens") or 0)
+            current["completion_tokens"] += int(item.get("completion_tokens") or 0)
+            current["total_tokens"] += int(item.get("total_tokens") or 0)
+            current["pricing_available"] = bool(current.get("pricing_available")) and bool(item.get("pricing_available", True))
+            current["partial"] = bool(current.get("partial")) or bool(item.get("partial", False))
+            if current["usd"] is None or item.get("usd") is None:
+                current["usd"] = None
+            else:
+                current["usd"] += float(item.get("usd") or 0.0)
+
+    merged["by_model"] = sorted(
+        [
+            {**item, "usd": round(item["usd"], 8) if isinstance(item.get("usd"), float) else item.get("usd")}
+            for item in by_model.values()
+        ],
+        key=lambda item: (str(item.get("provider") or ""), str(item.get("model") or "")),
+    )
+    return merged
+
+
+def _flush_chunk_telemetry(job_id: str) -> None:
+    cache = _results_cache.get(job_id, {})
+    collector = cache.get("telemetry_collector")
+    if not isinstance(collector, RunTelemetryCollector):
+        return
+
+    rows = collector.drain_model_executions()
+    if not rows:
+        return
+
+    delta_costs = build_run_costs_from_model_executions(
+        rows,
+        missing_llm_usage=collector.missing_llm_usage,
+    )
+    cache["run_costs_aggregate"] = _merge_run_cost_summaries(
+        cache.get("run_costs_aggregate"),
+        delta_costs,
+    )
+
+    persisted = False
+    if db and db.is_configured():
+        persisted = bool(db.persist_model_executions(
+            job_id,
+            rows,
+            run_config=_run_config_from_cache(job_id),
+            versions=cache.get("versions") or _runtime_versions(),
+        ))
+
+    if persisted:
+        cache["model_executions"] = collector.snapshot_model_executions()
+    else:
+        pending_rows = list(cache.get("model_executions") or [])
+        pending_rows.extend(rows)
+        cache["model_executions"] = pending_rows
+
+
+def _refresh_persisted_batch_results(job_id: str, *, progress_message: str | None = None) -> bool:
+    if not (db and db.is_configured()):
+        return False
+    cache = _results_cache.get(job_id, {})
+    loaded = db.load_job_results(job_id, preferred_mode=cache.get("input_mode"))
+    if not loaded or not isinstance(loaded.get("results"), dict):
+        return False
+
+    payload = _merge_runtime_payload_metadata(job_id, loaded["results"])
+    if progress_message:
+        payload["job_status"] = _jobs.get(job_id).status if _jobs.get(job_id) else "running"
+        payload["job_message"] = progress_message
+    cache["results"] = payload
+    if _jobs.get(job_id):
+        _jobs[job_id].results = payload
+    return True
 
 
 def _llm_telemetry_base() -> dict[str, Any]:
@@ -638,6 +791,11 @@ def _set_job_status(job_id: str, status: str, progress: str | None = None, sourc
     _jobs[job_id].status = status
     if progress is not None:
         _jobs[job_id].progress = progress
+    cache = _results_cache.get(job_id)
+    if isinstance(cache, dict) and isinstance(cache.get("results"), dict):
+        cache["results"]["job_status"] = status
+        if progress is not None:
+            cache["results"]["job_message"] = progress
     if db and db.is_configured():
         try:
             db.insert_job_status_history(
@@ -708,12 +866,14 @@ def _finalize_stopped_results(
 ) -> bool:
     evaluated = [r for r in results_list if not r.get("skipped")]
     if not evaluated:
-        return False
+        if not _refresh_persisted_batch_results(job_id):
+            return False
 
-    _build_results_payload(results_list, job_id, upload_dir)
+    if evaluated:
+        _build_results_payload(results_list, job_id, upload_dir)
     message = (
         "Stopped by user. Partial results ready — "
-        f"{len(evaluated)}/{total} companies ranked"
+        f"{len(evaluated) if evaluated else len((_results_cache.get(job_id, {}).get('results') or {}).get('summary_rows') or [])}/{total} companies ranked"
         if total > 1
         else "Stopped by user. Completed analysis is available."
     )
@@ -1190,6 +1350,7 @@ async def start_analysis(
         "llm": llm_display,
     }
     _results_cache[job_id]["model_executions"] = []
+    _results_cache[job_id]["run_costs_aggregate"] = _empty_run_costs_summary()
     _results_cache[job_id]["versions"] = _runtime_versions()
 
     if db and db.is_configured():
@@ -2126,6 +2287,12 @@ async def _run_specter_analysis(
     total = len(company_store_pairs)
     results_list: list[dict] = []
     chunking = _batch_chunking_config(job_id, total_items=total, mode="specter")
+    chunked_db_mode = bool(
+        ENABLE_CHUNKED_SPECTER_PERSISTENCE
+        and chunking["enabled"]
+        and db
+        and db.is_configured()
+    )
     _results_cache[job_id]["batch_chunking"] = chunking
     company_chunks = _chunk_items(company_store_pairs, chunking["chunk_size"]) if chunking["enabled"] else [company_store_pairs]
     if chunking["enabled"]:
@@ -2170,15 +2337,24 @@ async def _run_specter_analysis(
                         vc_investment_strategy=vc_investment_strategy,
                     )
                     await _cooperate_with_job_control(job_id)
-                    results_list.append(result)
+                    if not chunked_db_mode:
+                        results_list.append(result)
                     _append_progress(job_id, f"{prefix} — Persisting partial result...")
                     persisted_to_db = _persist_company_result_to_db(job_id, result)
                     if persisted_to_db:
                         _minimize_completed_result_for_memory(result)
-                    _update_partial_results_cache(job_id, upload_dir, results_list)
+                    if chunked_db_mode:
+                        refreshed = _refresh_persisted_batch_results(
+                            job_id,
+                            progress_message=f"Partial results updated — {processed}/{total} companies processed.",
+                        )
+                        completed_count = len(((_results_cache.get(job_id, {}).get("results") or {}).get("summary_rows") or [])) if refreshed else processed
+                    else:
+                        _update_partial_results_cache(job_id, upload_dir, results_list)
+                        completed_count = len([r for r in results_list if not r.get('skipped')])
                     _append_progress(
                         job_id,
-                        f"Partial results updated — {len([r for r in results_list if not r.get('skipped')])}/{total} companies completed.",
+                        f"Partial results updated — {completed_count}/{total} companies completed.",
                     )
                 except _JobStoppedError:
                     raise
@@ -2203,18 +2379,30 @@ async def _run_specter_analysis(
                             error_message=str(exc)[:1000],
                             status="timeout" if isinstance(exc, TimeoutError) else "error",
                         )
-                    results_list.append({
+                    failed_result = {
                         "slug": store.startup_slug,
                         "skipped": True,
                         "error": str(exc)[:500],
                         "company_name": company.name,
-                    })
+                    }
+                    if not chunked_db_mode:
+                        results_list.append(failed_result)
 
             if (
                 chunking["enabled"]
                 and chunk_idx < chunking["total_chunks"]
                 and chunking["cooldown_seconds"] > 0
             ):
+                if chunked_db_mode:
+                    _flush_chunk_telemetry(job_id)
+                    _refresh_persisted_batch_results(
+                        job_id,
+                        progress_message=(
+                            f"Chunk {chunk_idx}/{chunking['total_chunks']} complete — "
+                            f"cooling down for {chunking['cooldown_seconds']}s before next chunk."
+                        ),
+                    )
+                    gc.collect()
                 _append_progress(
                     job_id,
                     f"Chunk {chunk_idx}/{chunking['total_chunks']} complete — cooling down for {chunking['cooldown_seconds']}s before next chunk.",
@@ -2232,7 +2420,16 @@ async def _run_specter_analysis(
         raise
 
     evaluated = [r for r in results_list if not r.get("skipped")]
-    if not evaluated:
+    if chunked_db_mode:
+        loaded = db.load_job_results(job_id, preferred_mode=_results_cache.get(job_id, {}).get("input_mode")) if db and db.is_configured() else None
+        summary_rows = ((loaded or {}).get("results") or {}).get("summary_rows") or []
+        failed_rows = ((loaded or {}).get("results") or {}).get("failed_rows") or []
+        evaluated_count = len(summary_rows)
+        total_failures = len(failed_rows)
+    else:
+        evaluated_count = len(evaluated)
+        total_failures = len(results_list) - len(evaluated)
+    if (chunked_db_mode and evaluated_count == 0) or (not chunked_db_mode and not evaluated):
         if _is_stop_requested(job_id):
             raise _JobStoppedError("Job stopped by user")
         msg = "No startups were successfully evaluated."
@@ -2241,8 +2438,14 @@ async def _run_specter_analysis(
         _set_job_status(job_id, "error", msg, source="run_specter_analysis")
         return
 
+    if chunked_db_mode:
+        _flush_chunk_telemetry(job_id)
     _append_progress(job_id, "Finalizing batch results...")
-    _build_results_payload(results_list, job_id, upload_dir)
+    if chunked_db_mode:
+        if not _refresh_persisted_batch_results(job_id, progress_message="Finalizing batch results..."):
+            raise RuntimeError("Failed to reconstruct chunked batch results from persistence.")
+    else:
+        _build_results_payload(results_list, job_id, upload_dir)
     _append_progress(job_id, "Finalizing complete.")
     if _is_stop_requested(job_id):
         if _finalize_stopped_results(
@@ -2257,12 +2460,15 @@ async def _run_specter_analysis(
     _set_job_status(
         job_id,
         "done",
-        f"Analysis complete — {len(evaluated)}/{total} companies ranked",
+        f"Analysis complete — {evaluated_count}/{total} companies ranked",
         source="run_specter_analysis",
     )
     _jobs[job_id].results = _results_cache[job_id]["results"]
     _persist_jobs()
-    _persist_results_to_db(job_id, results_list)
+    if chunked_db_mode:
+        _persist_results_to_db(job_id, [])
+    else:
+        _persist_results_to_db(job_id, results_list)
     _mark_terminal_persistence_complete(job_id)
 
 

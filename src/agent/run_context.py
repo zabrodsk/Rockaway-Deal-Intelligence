@@ -233,107 +233,123 @@ class RunTelemetryCollector:
         )
 
     def build_run_costs(self) -> dict[str, Any]:
-        llm_prompt_tokens = 0
-        llm_completion_tokens = 0
-        llm_total_tokens = 0
-        llm_cost = 0.0
-        llm_cost_known = True
-        llm_cost_rows_seen = False
-        llm_events_seen = False
+        return build_run_costs_from_model_executions(
+            self.model_executions,
+            missing_llm_usage=self.missing_llm_usage,
+        )
 
-        perplexity_requests = 0
-        perplexity_cost = 0.0
-
-        grouped: dict[tuple[str, str], dict[str, Any]] = {}
-        for row in self.model_executions:
-            service = row.get("service")
-            if service == "llm":
-                llm_events_seen = True
-                provider = row.get("provider") or ""
-                model = row.get("model") or ""
-                key = (provider, model)
-                grouped.setdefault(
-                    key,
-                    {
-                        "provider": provider,
-                        "model": model,
-                        "label": model_label(provider, model),
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
-                        "total_tokens": 0,
-                        "usd": 0.0,
-                        "pricing_available": True,
-                        "partial": False,
-                        "has_known_cost": False,
-                    },
-                )
-                prompt_tokens = row.get("prompt_tokens")
-                completion_tokens = row.get("completion_tokens")
-                total_tokens = row.get("total_tokens")
-                if isinstance(prompt_tokens, int):
-                    llm_prompt_tokens += prompt_tokens
-                    grouped[key]["prompt_tokens"] += prompt_tokens
-                if isinstance(completion_tokens, int):
-                    llm_completion_tokens += completion_tokens
-                    grouped[key]["completion_tokens"] += completion_tokens
-                if isinstance(total_tokens, int):
-                    llm_total_tokens += total_tokens
-                    grouped[key]["total_tokens"] += total_tokens
-                estimated_cost_usd = row.get("estimated_cost_usd")
-                if estimated_cost_usd is None:
-                    llm_cost_known = False
-                    grouped[key]["pricing_available"] = False
-                    grouped[key]["partial"] = True
-                else:
-                    llm_cost += float(estimated_cost_usd)
-                    llm_cost_rows_seen = True
-                    grouped[key]["has_known_cost"] = True
-                    grouped[key]["usd"] += float(estimated_cost_usd)
-            elif service == "perplexity_search":
-                perplexity_requests += int(row.get("request_count") or 1)
-                perplexity_cost += float(row.get("estimated_cost_usd") or 0.0)
-
-        if not llm_events_seen and perplexity_requests == 0:
-            status = "unavailable"
-        elif self.missing_llm_usage or not llm_cost_known:
-            status = "partial"
-        else:
-            status = "complete"
-
-        by_model: list[dict[str, Any]] = []
-        for item in grouped.values():
-            if item.get("has_known_cost"):
-                item["usd"] = round(item["usd"], 8)
-            else:
-                item["usd"] = None
-            item.pop("has_known_cost", None)
-            by_model.append(item)
-        by_model.sort(key=lambda item: (item["provider"], item["model"]))
-
-        llm_usd = round(llm_cost, 8) if llm_cost_rows_seen else None
-        total_usd = None
-        if llm_usd is not None:
-            total_usd = round(llm_usd + perplexity_cost, 8)
-        elif perplexity_requests > 0:
-            total_usd = round(perplexity_cost, 8)
-
-        return {
-            "currency": "USD",
-            "status": status,
-            "total_usd": total_usd,
-            "llm_usd": llm_usd,
-            "perplexity_usd": round(perplexity_cost, 8),
-            "llm_tokens": {
-                "prompt": llm_prompt_tokens,
-                "completion": llm_completion_tokens,
-                "total": llm_total_tokens,
-            },
-            "perplexity_search": {
-                "requests": perplexity_requests,
-                "total_usd": round(perplexity_cost, 8),
-            },
-            "by_model": by_model,
-        }
+    def drain_model_executions(self) -> list[dict[str, Any]]:
+        rows = deepcopy(self.model_executions)
+        self.model_executions.clear()
+        return rows
 
     def snapshot_model_executions(self) -> list[dict[str, Any]]:
         return deepcopy(self.model_executions)
+
+
+def build_run_costs_from_model_executions(
+    model_executions: list[dict[str, Any]],
+    *,
+    missing_llm_usage: bool = False,
+) -> dict[str, Any]:
+    llm_prompt_tokens = 0
+    llm_completion_tokens = 0
+    llm_total_tokens = 0
+    llm_cost = 0.0
+    llm_cost_known = True
+    llm_cost_rows_seen = False
+    llm_events_seen = False
+
+    perplexity_requests = 0
+    perplexity_cost = 0.0
+
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in model_executions:
+        service = row.get("service")
+        if service == "llm":
+            llm_events_seen = True
+            provider = row.get("provider") or ""
+            model = row.get("model") or ""
+            key = (provider, model)
+            grouped.setdefault(
+                key,
+                {
+                    "provider": provider,
+                    "model": model,
+                    "label": model_label(provider, model),
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "usd": 0.0,
+                    "pricing_available": True,
+                    "partial": False,
+                    "has_known_cost": False,
+                },
+            )
+            prompt_tokens = row.get("prompt_tokens")
+            completion_tokens = row.get("completion_tokens")
+            total_tokens = row.get("total_tokens")
+            if isinstance(prompt_tokens, int):
+                llm_prompt_tokens += prompt_tokens
+                grouped[key]["prompt_tokens"] += prompt_tokens
+            if isinstance(completion_tokens, int):
+                llm_completion_tokens += completion_tokens
+                grouped[key]["completion_tokens"] += completion_tokens
+            if isinstance(total_tokens, int):
+                llm_total_tokens += total_tokens
+                grouped[key]["total_tokens"] += total_tokens
+            estimated_cost_usd = row.get("estimated_cost_usd")
+            if estimated_cost_usd is None:
+                llm_cost_known = False
+                grouped[key]["pricing_available"] = False
+                grouped[key]["partial"] = True
+            else:
+                llm_cost += float(estimated_cost_usd)
+                llm_cost_rows_seen = True
+                grouped[key]["has_known_cost"] = True
+                grouped[key]["usd"] += float(estimated_cost_usd)
+        elif service == "perplexity_search":
+            perplexity_requests += int(row.get("request_count") or 1)
+            perplexity_cost += float(row.get("estimated_cost_usd") or 0.0)
+
+    if not llm_events_seen and perplexity_requests == 0:
+        status = "unavailable"
+    elif missing_llm_usage or not llm_cost_known:
+        status = "partial"
+    else:
+        status = "complete"
+
+    by_model: list[dict[str, Any]] = []
+    for item in grouped.values():
+        if item.get("has_known_cost"):
+            item["usd"] = round(item["usd"], 8)
+        else:
+            item["usd"] = None
+        item.pop("has_known_cost", None)
+        by_model.append(item)
+    by_model.sort(key=lambda item: (item["provider"], item["model"]))
+
+    llm_usd = round(llm_cost, 8) if llm_cost_rows_seen else None
+    total_usd = None
+    if llm_usd is not None:
+        total_usd = round(llm_usd + perplexity_cost, 8)
+    elif perplexity_requests > 0:
+        total_usd = round(perplexity_cost, 8)
+
+    return {
+        "currency": "USD",
+        "status": status,
+        "total_usd": total_usd,
+        "llm_usd": llm_usd,
+        "perplexity_usd": round(perplexity_cost, 8),
+        "llm_tokens": {
+            "prompt": llm_prompt_tokens,
+            "completion": llm_completion_tokens,
+            "total": llm_total_tokens,
+        },
+        "perplexity_search": {
+            "requests": perplexity_requests,
+            "total_usd": round(perplexity_cost, 8),
+        },
+        "by_model": by_model,
+    }
