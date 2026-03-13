@@ -3694,6 +3694,16 @@ function startStatusWatchdog() {
   }, 5000);
 }
 
+function getFreshestProgressText(data) {
+  const progressText = data?.progress || 'Processing...';
+  const log = Array.isArray(data?.progress_log) ? data.progress_log : [];
+  const lastLogEntry = typeof log[log.length - 1] === 'string' ? log[log.length - 1].trim() : '';
+  if (lastLogEntry && lastLogEntry !== progressText) {
+    return lastLogEntry;
+  }
+  return progressText;
+}
+
 function setCookie(name, value, maxAgeSeconds = 60 * 60 * 24 * 14) {
   const safeValue = encodeURIComponent(value);
   document.cookie = `${name}=${safeValue};path=/;max-age=${maxAgeSeconds};SameSite=Strict`;
@@ -5521,10 +5531,11 @@ async function resumeActiveJob() {
 
   try {
     const data = await api(`/api/status/${savedJobId}`, { timeoutMs: 10000, retries: 0 });
+    const freshestProgress = getFreshestProgressText(data);
     upsertRecentRun({
       jobId: savedJobId,
       status: data.status,
-      progress: data.progress,
+      progress: freshestProgress,
       results: data.results || null,
       llm: data.llm ?? undefined,
     });
@@ -5541,24 +5552,24 @@ async function resumeActiveJob() {
     }
 
     if (data.status === 'error') {
-      $('#processing-status').textContent = data.progress || 'Analysis failed.';
+      $('#processing-status').textContent = freshestProgress || 'Analysis failed.';
       setSpinnerError();
       setProcessingControls('error');
-      renderProgressFeed(data.progress_log || [], data.progress || 'Analysis failed.', 'error');
+      renderProgressFeed(data.progress_log || [], freshestProgress || 'Analysis failed.', 'error');
       return true;
     }
     if (data.status === 'stopped') {
-      $('#processing-status').textContent = data.progress || 'Analysis stopped.';
+      $('#processing-status').textContent = freshestProgress || 'Analysis stopped.';
       setSpinnerError();
       setProcessingControls('stopped');
-      renderProgressFeed(data.progress_log || [], data.progress || 'Analysis stopped.', 'stopped');
+      renderProgressFeed(data.progress_log || [], freshestProgress || 'Analysis stopped.', 'stopped');
       persistActiveJob(null);
       return true;
     }
 
-    $('#processing-status').textContent = data.progress || 'Resuming analysis...';
+    $('#processing-status').textContent = freshestProgress || 'Resuming analysis...';
     setProcessingControls(data.status || 'running');
-    renderProgressFeed(data.progress_log || [], data.progress || 'Resuming analysis...', data.status || 'running');
+    renderProgressFeed(data.progress_log || [], freshestProgress || 'Resuming analysis...', data.status || 'running');
     pollStatus.failures = 0;
     pollStatus();
     return true;
@@ -5860,11 +5871,11 @@ async function pollStatus() {
     upsertRecentRun({
       jobId: currentJobId,
       status: data.status,
-      progress: data.progress || 'Processing...',
+      progress: getFreshestProgressText(data),
       results: data.results || null,
       llm: data.llm ?? undefined,
     });
-    const progressText = data.progress || 'Processing...';
+    const progressText = getFreshestProgressText(data);
     if (data.status === 'paused') {
       pollStatus.stallTicks = 0;
       pollStatus.lastProgress = progressText;
