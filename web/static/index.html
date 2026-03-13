@@ -3735,8 +3735,46 @@ function loadRecentRuns() {
   }
 }
 
+function compactResultsForStorage(results) {
+  if (!results || typeof results !== 'object') return null;
+  const mode = results.mode || null;
+  if (mode === 'batch') {
+    return {
+      mode: 'batch',
+      summary_rows_count: Array.isArray(results.summary_rows) ? results.summary_rows.length : 0,
+      company_name: null,
+    };
+  }
+  return {
+    mode: mode || null,
+    company_name: results.company_name || null,
+    summary_rows_count: Array.isArray(results.summary_rows) ? results.summary_rows.length : 0,
+  };
+}
+
+function compactRunForStorage(run) {
+  if (!run || typeof run !== 'object') return run;
+  const compact = { ...run };
+  if (compact.results) {
+    compact.results_meta = compactResultsForStorage(compact.results);
+    delete compact.results;
+  }
+  return compact;
+}
+
 function saveRecentRuns(runs) {
-  localStorage.setItem(RECENT_RUNS_KEY, JSON.stringify(runs.slice(0, 12)));
+  const compactRuns = runs.slice(0, 12).map(compactRunForStorage);
+  try {
+    localStorage.setItem(RECENT_RUNS_KEY, JSON.stringify(compactRuns));
+  } catch (err) {
+    const emergencyRuns = compactRuns.map((run) => {
+      const lean = { ...run };
+      delete lean.progress;
+      delete lean.llm;
+      return lean;
+    });
+    localStorage.setItem(RECENT_RUNS_KEY, JSON.stringify(emergencyRuns));
+  }
 }
 
 function getSelectedLlmFromConfig() {
@@ -4121,18 +4159,19 @@ function formatRunTimestamp(ts) {
 }
 
 function getRunTitle(run) {
-  if (run.results?.mode === 'batch') {
-    const count = run.results?.summary_rows?.length || 0;
+  const resultMode = run.results?.mode || run.results_meta?.mode;
+  if (resultMode === 'batch') {
+    const count = run.results?.summary_rows?.length || run.results_meta?.summary_rows_count || 0;
     return count ? `${count} companies ranked` : 'Batch analysis';
   }
-  return run.results?.company_name || run.title || `Run ${run.jobId}`;
+  return run.results?.company_name || run.results_meta?.company_name || run.title || `Run ${run.jobId}`;
 }
 
 renderPhaseModelSelector();
 renderLlmSelector();
 
 function getRunModeLabel(run) {
-  const raw = String(run.input_mode || run.results?.mode || '').trim().toLowerCase();
+  const raw = String(run.input_mode || run.results?.mode || run.results_meta?.mode || '').trim().toLowerCase();
   if (!raw) return '';
   if (raw === 'pitchdeck') return 'Pitch deck';
   if (raw === 'specter') return 'Specter';
