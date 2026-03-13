@@ -5675,19 +5675,32 @@ async function openSavedRun(jobId) {
 
   try {
     const analysis = await api(`/api/analyses/${jobId}`, { timeoutMs: 15000, retries: 1 });
-    upsertRecentRun({
-      jobId,
-      status: (analysis.results || {}).job_status || run?.status || 'done',
-      progress: (analysis.results || {}).job_message || run?.progress || 'Analysis complete',
-      results: analysis.results || null,
-      hasResults: !!analysis.results,
-      canOpenResults: !!analysis.results,
-      canViewLog: false,
-      llm: run?.llm ?? undefined,
-    });
-    persistActiveJob(jobId);
-    renderResults(analysis.results);
+    const results = analysis.results || null;
+    if (!results || typeof results !== 'object') {
+      throw new Error('Saved report payload is missing.');
+    }
+    renderResults(results);
     showScreen('results-screen');
+    persistActiveJob(jobId);
+    try {
+      upsertRecentRun({
+        jobId,
+        status: results.job_status || run?.status || 'done',
+        progress: results.job_message || run?.progress || 'Analysis complete',
+        hasResults: true,
+        canOpenResults: true,
+        canViewLog: false,
+        llm: run?.llm ?? undefined,
+        input_mode: run?.input_mode || results.mode || null,
+        title: getRunTitle({
+          jobId,
+          results_meta: compactResultsForStorage(results),
+          title: run?.title,
+        }),
+      });
+    } catch (cacheErr) {
+      console.warn('openSavedRun: non-fatal recent-run cache update failed:', cacheErr);
+    }
     return;
   } catch (renderErr) {
     console.error('openSavedRun: failed to load fresh saved results:', renderErr);
