@@ -5634,8 +5634,9 @@ async function openSavedRun(jobId) {
   if (costStripEl) costStripEl.innerHTML = '';
   showScreen('results-screen');
 
+  let analysis = null;
   try {
-    const analysis = await api(`/api/analyses/${jobId}`, { timeoutMs: 15000, retries: 1 });
+    analysis = await api(`/api/analyses/${jobId}`, { timeoutMs: 15000, retries: 1 });
     upsertRecentRun({
       jobId,
       status: (analysis.results || {}).job_status || run?.status || 'done',
@@ -5647,14 +5648,30 @@ async function openSavedRun(jobId) {
       llm: run?.llm ?? undefined,
     });
     persistActiveJob(jobId);
-    renderResults(analysis.results);
+    try {
+      renderResults(analysis.results);
+    } catch (renderError) {
+      console.error('openSavedRun: rich render failed, using compatibility view:', renderError);
+      renderMinimalSavedResults(
+        analysis.results,
+        renderError?.message ? `Compatibility view: ${renderError.message}` : 'Compatibility view'
+      );
+    }
     showScreen('results-screen');
     return;
   } catch (renderErr) {
     console.error('openSavedRun: failed to load fresh saved results:', renderErr);
     if (run?.results) {
       try {
-        renderResults(run.results);
+        try {
+          renderResults(run.results);
+        } catch (cachedRenderErr) {
+          console.error('openSavedRun: cached rich render failed, using compatibility view:', cachedRenderErr);
+          renderMinimalSavedResults(
+            run.results,
+            cachedRenderErr?.message ? `Compatibility view: ${cachedRenderErr.message}` : 'Compatibility view'
+          );
+        }
         showScreen('results-screen');
         return;
       } catch (cachedErr) {
@@ -5665,7 +5682,10 @@ async function openSavedRun(jobId) {
 
   if (subtitleEl) subtitleEl.textContent = `Could not open saved results for ${jobId.toUpperCase()}.`;
   if (rankingsEl) {
-    rankingsEl.innerHTML = '<p style="color:var(--text-dim)">This saved report could not be loaded right now. Refresh the Analysis page and try again.</p>';
+    const detail = analysis
+      ? 'The saved report loaded, but the page could not render it.'
+      : 'This saved report could not be loaded right now.';
+    rankingsEl.innerHTML = `<p style="color:var(--text-dim)">${escapeHtml(detail)} Refresh the Analysis page and try again.</p>`;
   }
 }
 
@@ -6010,6 +6030,64 @@ function renderResults(r) {
   } else {
     renderSingleResult(r);
   }
+}
+
+function renderMinimalSavedResults(r, reason = '') {
+  if (!r || typeof r !== 'object') {
+    throw new Error('Results payload is missing or invalid');
+  }
+  currentResults = r;
+  renderedTeamMembersBySlug = {};
+  const sortWrap = $('#rankings-sort-wrap');
+  if (sortWrap) sortWrap.style.display = 'none';
+  renderRunCostStrip(r.run_costs, getLlmLabel(r));
+
+  const rows = sortSummaryRows(r.summary_rows || [], 'top_scored');
+  const subtitleParts = [];
+  if (r.mode === 'batch') {
+    subtitleParts.push(`${rows.length} companies ranked`);
+  } else if (r.company_name) {
+    subtitleParts.push(r.company_name);
+  }
+  subtitleParts.push('Saved report (compatibility view)');
+  if (reason) subtitleParts.push(reason);
+  $('#results-subtitle').textContent = subtitleParts.filter(Boolean).join(' — ');
+  $('#stats-row').innerHTML = '';
+
+  if (!rows.length) {
+    $('#rankings-container').innerHTML = '<p style="color:var(--text-dim)">This saved report loaded, but it does not include ranking rows.</p>';
+    return;
+  }
+
+  $('#rankings-container').innerHTML = rows.map((row, idx) => {
+    const rankNum = typeof row.rank === 'number' ? row.rank : idx + 1;
+    const score = typeof row.composite_score === 'number'
+      ? row.composite_score
+      : (typeof row.total_score === 'number' ? row.total_score : null);
+    const keyPoints = Array.isArray(row.key_points)
+      ? row.key_points
+      : (row.key_points ? String(row.key_points).split('\n').filter(Boolean) : []);
+    const redFlags = Array.isArray(row.red_flags)
+      ? row.red_flags
+      : (row.red_flags ? String(row.red_flags).split('\n').filter(Boolean) : []);
+    return `
+      <div class="rank-card">
+        <div class="rank-top">
+          <span class="rank-badge ${rankNum === 1 ? 'first' : ''}">#${rankNum}</span>
+          <span class="rank-name">${escapeHtml(row.company_name || row.startup_slug || `Company ${rankNum}`)}</span>
+        </div>
+        <div class="executive-summary-container">
+          <div class="dim-summary"><strong>Decision:</strong> ${escapeHtml(row.decision || 'Unknown')}</div>
+          ${score !== null ? `<div class="dim-summary"><strong>Score:</strong> ${escapeHtml(String(score))}</div>` : ''}
+          ${row.strategy_fit_summary ? `<div class="dim-summary"><strong>Strategy Fit:</strong> ${escapeHtml(row.strategy_fit_summary)}</div>` : ''}
+          ${row.team_summary ? `<div class="dim-summary"><strong>Team:</strong> ${escapeHtml(row.team_summary)}</div>` : ''}
+          ${row.potential_summary ? `<div class="dim-summary"><strong>Potential:</strong> ${escapeHtml(row.potential_summary)}</div>` : ''}
+          ${keyPoints.length ? `<div class="audit-section-title" style="margin-top:12px">KEY POINTS</div><ul class="key-points-list">${keyPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join('')}</ul>` : ''}
+          ${redFlags.length ? `<div class="audit-section-title red-flags-title" style="margin-top:12px">RED FLAGS (${redFlags.length})</div><ul class="red-flags-list">${redFlags.map((flag) => `<li>${escapeHtml(flag)}</li>`).join('')}</ul>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 const DIMENSION_LABELS = { strategy_fit: 'Strategy Fit', team: 'Team', upside: 'Potential' };
