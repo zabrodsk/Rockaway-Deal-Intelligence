@@ -3648,10 +3648,22 @@ function stopSavedJobsRefresh() {
   }
 }
 
+function hasActiveSavedJobs() {
+  return savedJobsCache.some((job) => {
+    if (job?.canViewLog === true) return true;
+    const status = String(job?.status || '').toLowerCase();
+    return status === 'pending' || status === 'running' || status === 'paused';
+  });
+}
+
 function startSavedJobsRefresh() {
   if (savedJobsRefreshTimer) return;
   savedJobsRefreshTimer = setInterval(() => {
     if (getActiveScreenId() !== 'analysis-screen') {
+      stopSavedJobsRefresh();
+      return;
+    }
+    if (!hasActiveSavedJobs()) {
       stopSavedJobsRefresh();
       return;
     }
@@ -4935,6 +4947,10 @@ async function fetchSavedJobs({ silent = true } = {}) {
     renderRecentRuns();
     renderSavedJobsWindow();
     renderAnalysisHistoryScreen();
+    if (getActiveScreenId() === 'analysis-screen') {
+      if (hasActiveSavedJobs()) startSavedJobsRefresh();
+      else stopSavedJobsRefresh();
+    }
     return savedJobsCache;
   } catch (err) {
     savedJobsLoaded = true;
