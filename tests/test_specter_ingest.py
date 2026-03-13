@@ -781,6 +781,32 @@ def test_status_endpoint_promotes_running_job_when_persisted_report_is_terminal(
         web_app._results_cache.pop(job_id, None)
 
 
+def test_status_endpoint_marks_persisted_running_job_as_interrupted_when_not_live(monkeypatch) -> None:
+    job_id = "job-interrupted-status"
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            load_job_status=lambda current_job_id: {
+                "status": "running",
+                "progress": "Chunk 1/2 — Evaluating TopK",
+            }
+            if current_job_id == job_id
+            else None,
+        ),
+    )
+    monkeypatch.setattr(web_app, "_load_persisted_job_results", lambda current_job_id, preferred_mode=None: None)
+
+    payload = asyncio.run(web_app.get_status(job_id, response=Response(), session_id="session"))
+
+    assert payload["status"] == "stopped"
+    assert payload["progress"] == "Run interrupted before completion."
+    assert payload["results"] is None
+    assert payload["progress_log"] == []
+
+
 def test_append_progress_caps_in_memory_log(monkeypatch) -> None:
     job_id = "job-progress-cap"
     web_app._jobs[job_id] = web_app.AnalysisStatus(

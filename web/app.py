@@ -3009,6 +3009,23 @@ async def get_status(
             "llm": _resolve_job_llm_label(job_id, results=results),
         }
 
+    if db and db.is_configured():
+        persisted_status = db.load_job_status(job_id)
+        if persisted_status:
+            loaded_status = str(persisted_status.get("status") or "pending").strip().lower()
+            loaded_progress = persisted_status.get("progress") or "Analysis in progress"
+            if loaded_status in {"pending", "running", "paused"}:
+                loaded_status = "stopped"
+                loaded_progress = "Run interrupted before completion."
+            return {
+                "job_id": job_id,
+                "status": loaded_status,
+                "progress": loaded_progress,
+                "progress_log": [],
+                "results": None,
+                "llm": _resolve_job_llm_label(job_id, results=None),
+            }
+
     raise HTTPException(status_code=404, detail="Job not found")
 
 
