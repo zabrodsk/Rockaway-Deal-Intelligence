@@ -1542,9 +1542,17 @@ def _merge_runtime_payload_metadata(job_id: str, payload: dict[str, Any]) -> dic
         merged["effective_phase_models"] = pipeline_meta.get("effective_phase_models")
     merged["llm"] = _resolve_job_llm_label(job_id, results=merged)
     merged["llm_selection"] = llm_selection
-    run_costs = _run_costs_from_cache(job_id)
-    if run_costs.get("status") != "unavailable" or "run_costs" not in merged:
-        merged["run_costs"] = run_costs
+    persisted_run_costs = merged.get("run_costs") if isinstance(merged.get("run_costs"), dict) else None
+    runtime_run_costs = _run_costs_from_cache(job_id)
+    job = _jobs.get(job_id)
+    if (
+        persisted_run_costs
+        and job is not None
+        and (job.status in {"done", "error", "stopped"} or job.persistence_complete)
+    ):
+        merged["run_costs"] = persisted_run_costs
+    elif runtime_run_costs.get("status") != "unavailable" or "run_costs" not in merged:
+        merged["run_costs"] = runtime_run_costs
     chunking = _results_cache.get(job_id, {}).get("batch_chunking")
     if isinstance(chunking, dict):
         merged["batch_chunking"] = chunking

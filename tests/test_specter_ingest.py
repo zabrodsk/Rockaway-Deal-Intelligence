@@ -1425,3 +1425,57 @@ def test_run_document_analysis_passes_specter_overlay_in_multi_file_mode(
         web_app._jobs.pop(job_id, None)
         web_app._job_controls.pop(job_id, None)
         web_app._results_cache.pop(job_id, None)
+
+
+def test_merge_runtime_payload_metadata_keeps_persisted_batch_run_costs_for_terminal_job() -> None:
+    job_id = "job-terminal-costs"
+    persisted_run_costs = {
+        "currency": "USD",
+        "status": "complete",
+        "total_usd": 0.1694,
+        "llm_usd": 0.0444,
+        "perplexity_usd": 0.125,
+        "llm_tokens": {"prompt": 105030, "completion": 12098, "total": 117128},
+        "perplexity_search": {"requests": 25, "total_usd": 0.125},
+        "by_model": [{"provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "usd": 0.0444}],
+    }
+    stale_runtime_run_costs = {
+        "currency": "USD",
+        "status": "complete",
+        "total_usd": 0.0169,
+        "llm_usd": 0.0044,
+        "perplexity_usd": 0.0125,
+        "llm_tokens": {"prompt": 10030, "completion": 1098, "total": 11128},
+        "perplexity_search": {"requests": 2, "total_usd": 0.0125},
+        "by_model": [{"provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "usd": 0.0044}],
+    }
+
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="done",
+        progress="Analysis complete",
+        persistence_complete=True,
+    )
+    web_app._results_cache[job_id] = {
+        "run_costs_aggregate": stale_runtime_run_costs,
+        "results": {
+            "mode": "batch",
+            "job_status": "done",
+            "job_message": "Analysis complete",
+        },
+    }
+
+    try:
+        merged = web_app._merge_runtime_payload_metadata(
+            job_id,
+            {
+                "mode": "batch",
+                "job_status": "done",
+                "job_message": "Analysis complete",
+                "run_costs": persisted_run_costs,
+            },
+        )
+        assert merged["run_costs"] == persisted_run_costs
+    finally:
+        web_app._jobs.pop(job_id, None)
+        web_app._results_cache.pop(job_id, None)
