@@ -609,6 +609,28 @@ def test_list_saved_jobs_marks_worker_backed_runs_active(monkeypatch) -> None:
     ]
 
 
+def test_ensure_source_files_bucket_accepts_dict_bucket_rows(monkeypatch) -> None:
+    import web.db as web_db
+
+    calls: list[str] = []
+
+    class FakeStorage:
+        def list_buckets(self):
+            return [{"name": web_db.SOURCE_FILES_BUCKET}]
+
+        def create_bucket(self, *_args, **_kwargs):
+            calls.append("create_bucket")
+
+    class FakeClient:
+        storage = FakeStorage()
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: FakeClient())
+
+    web_db.ensure_source_files_bucket()
+
+    assert calls == []
+
+
 def test_load_run_costs_rehydrates_service_and_cost_fields_from_metadata(monkeypatch) -> None:
     import web.db as web_db
 

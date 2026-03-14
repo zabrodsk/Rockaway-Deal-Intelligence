@@ -723,7 +723,14 @@ def ensure_source_files_bucket() -> None:
         return
     try:
         existing = client.storage.list_buckets()
-        if any(getattr(bucket, "name", None) == SOURCE_FILES_BUCKET for bucket in existing or []):
+        if any(
+            (
+                getattr(bucket, "name", None)
+                or (bucket.get("name") if isinstance(bucket, dict) else None)
+            )
+            == SOURCE_FILES_BUCKET
+            for bucket in existing or []
+        ):
             return
     except Exception:
         pass
@@ -752,11 +759,11 @@ def upload_source_file(
     file_token = re.sub(r"[^a-zA-Z0-9._-]+", "-", file_name or source_path.name).strip("-") or source_path.name
     storage_path = f"jobs/{job_id_legacy}/inputs/{file_token}"
     try:
-        with source_path.open("rb") as handle:
-            options = {"upsert": "true"}
-            if mime_type:
-                options["content-type"] = mime_type
-            client.storage.from_(SOURCE_FILES_BUCKET).upload(storage_path, handle, options)
+        payload = source_path.read_bytes()
+        options = {"upsert": True}
+        if mime_type:
+            options["content-type"] = mime_type
+        client.storage.from_(SOURCE_FILES_BUCKET).upload(storage_path, payload, options)
         return storage_path
     except Exception as exc:
         _log_supabase_error("upload_source_file", "storage", exc, job_id_legacy=job_id_legacy)
