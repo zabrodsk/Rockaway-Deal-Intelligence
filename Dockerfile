@@ -19,4 +19,4 @@ EXPOSE 8000
 ENV PORT=8000
 ENV APP_PASSWORD=9876
 
-CMD ["python", "-m", "web.app"]
+CMD ["python", "-m", "agent.railway_service"]
