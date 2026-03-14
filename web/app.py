@@ -128,6 +128,12 @@ ENABLE_SPECTER_SUBPROCESS_CHUNKS = os.getenv("ENABLE_SPECTER_SUBPROCESS_CHUNKS",
     "yes",
     "on",
 }
+ENABLE_SPECTER_WORKER_SERVICE = os.getenv("ENABLE_SPECTER_WORKER_SERVICE", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 try:
     RESTART_ON_IDLE_DELAY_SECONDS = max(5, int(os.getenv("RESTART_ON_IDLE_DELAY_SECONDS", "15")))
 except Exception:
@@ -1297,12 +1303,14 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
                     ) if entry.get("results") else (existing or {}).get("llm") or _get_llm_display(),
                 }
                 has_live_job = bool(existing) and (existing or {}).get("status") in {"pending", "running", "paused"}
-                if not has_live_job and merged["status"] in {"pending", "running", "paused"}:
+                worker_active = bool(entry.get("worker_active"))
+                merged["status"] = _normalize_worker_status(merged["status"])
+                if not has_live_job and not worker_active and merged["status"] in {"pending", "running", "paused"}:
                     merged["status"] = "interrupted"
                     merged["progress"] = "Run interrupted before completion."
                     merged["has_results"] = False
                 merged["can_open_results"] = merged["status"] == "done" and merged["has_results"] is True
-                merged["can_view_log"] = has_live_job and merged["status"] in {"pending", "running", "paused"}
+                merged["can_view_log"] = (has_live_job or worker_active) and merged["status"] in {"pending", "running", "paused"}
                 jobs_by_id[job_id] = merged
         except Exception:
             pass
@@ -1639,6 +1647,15 @@ async def start_analysis(
 
     vc_str = _ensure_str(req.vc_investment_strategy).strip() or None
     inst = _ensure_str(req.instructions).strip() or None
+    if req.input_mode == "specter":
+        queued, worker_message = _queue_worker_backed_specter_job(job_id)
+        if queued:
+            _set_job_status(job_id, "running", worker_message or "Queued for worker...", source="start_analysis")
+            _append_progress_and_log(job_id, worker_message or "Queued for worker...")
+            return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
+        if worker_message:
+            _append_progress_and_log(job_id, f"Worker queue unavailable — falling back to in-web execution. {worker_message}")
+
     # Run the analysis loop in a dedicated thread/event-loop to keep
     # the main FastAPI loop responsive for pause/resume/stop controls.
     threading.Thread(
@@ -1935,6 +1952,162 @@ def _run_config_from_cache(job_id: str) -> dict[str, Any]:
         "llm_model": llm_selection["model"],
         "llm": _resolve_job_llm_label(job_id, results=cache.get("results")),
     }
+
+
+def _is_worker_backed_job(job_id: str) -> bool:
+    return bool((_results_cache.get(job_id) or {}).get("worker_backed"))
+
+
+def _normalize_worker_status(status: str | None) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in {"queued", "claimed", "running", "finalizing"}:
+        return "running"
+    if normalized == "interrupted":
+        return "stopped"
+    return normalized or "pending"
+
+
+def _load_worker_progress_log(job_id: str) -> list[str]:
+    if not (db and db.is_configured()):
+        return []
+    load_events = getattr(db, "load_analysis_events", None)
+    if not callable(load_events):
+        return []
+    try:
+        return load_events(job_id, limit=MAX_PROGRESS_LOG_ENTRIES) or []
+    except Exception:
+        return []
+
+
+def _prepare_worker_source_files(job_id: str) -> list[dict[str, Any]] | None:
+    if not (db and db.is_configured()):
+        return None
+    cache = _results_cache.get(job_id, {})
+    files = list(cache.get("files") or [])
+    if not files:
+        return None
+
+    prepared: list[dict[str, Any]] = []
+    for file_info in files:
+        current = dict(file_info)
+        storage_path = current.get("storage_path")
+        if not storage_path:
+            local_path = current.get("local_path")
+            if not local_path:
+                return None
+            storage_path = db.upload_source_file(
+                job_id,
+                local_path,
+                file_name=current.get("name"),
+                mime_type=current.get("mime_type"),
+            )
+            if not storage_path:
+                return None
+            current["storage_path"] = storage_path
+        prepared.append(current)
+
+    cache["files"] = prepared
+    specter = cache.get("specter") or {}
+    for file_info in prepared:
+        name = file_info.get("name")
+        local_path = file_info.get("local_path")
+        if specter.get("companies") == local_path:
+            specter["companies_storage_path"] = file_info.get("storage_path")
+        if specter.get("people") == local_path:
+            specter["people_storage_path"] = file_info.get("storage_path")
+    cache["specter"] = specter
+    return prepared
+
+
+def _queue_worker_backed_specter_job(job_id: str) -> tuple[bool, str | None]:
+    if not (ENABLE_SPECTER_WORKER_SERVICE and db and db.is_configured()):
+        return (False, None)
+
+    cache = _results_cache.get(job_id, {})
+    specter = cache.get("specter") or {}
+    companies_csv = specter.get("companies")
+    companies_storage_path = specter.get("companies_storage_path")
+    if not companies_csv:
+        return (False, "Missing Specter company export.")
+
+    source_files = _prepare_worker_source_files(job_id)
+    if not source_files:
+        return (False, "Could not prepare shared Specter source files.")
+
+    companies_storage_path = companies_storage_path or (
+        next(
+            (
+                item.get("storage_path")
+                for item in source_files
+                if item.get("local_path") == companies_csv
+            ),
+            None,
+        )
+    )
+    if not companies_storage_path:
+        return (False, "Could not upload Specter company export to shared storage.")
+    specter["companies_storage_path"] = companies_storage_path
+
+    if specter.get("people"):
+        people_storage_path = specter.get("people_storage_path") or next(
+            (
+                item.get("storage_path")
+                for item in source_files
+                if item.get("local_path") == specter.get("people")
+            ),
+            None,
+        )
+        if not people_storage_path:
+            return (False, "Could not upload Specter people export to shared storage.")
+        specter["people_storage_path"] = people_storage_path
+
+    company_descriptors = list_specter_companies(companies_csv)
+    max_startups = _parse_max_startups_from_instructions(cache.get("instructions"))
+    if max_startups is not None:
+        company_descriptors = company_descriptors[:max_startups]
+    total_companies = len(company_descriptors)
+    if total_companies <= 0:
+        return (False, "No companies found in Specter data.")
+
+    cache["specter"] = specter
+    run_config = dict(_run_config_from_cache(job_id))
+    run_config["specter_worker_files"] = {
+        "companies_storage_path": specter.get("companies_storage_path"),
+        "people_storage_path": specter.get("people_storage_path"),
+        "companies_name": Path(companies_csv).name if companies_csv else None,
+        "people_name": Path(str(specter.get("people") or "")).name if specter.get("people") else None,
+    }
+    cache["run_config"] = run_config
+    progress = f"Queued for worker — 0/{total_companies} companies completed."
+
+    if not db.persist_source_files(
+        job_id,
+        source_files,
+        run_config=run_config,
+        versions=cache.get("versions") or _runtime_versions(),
+        worker_state={
+            "status": "queued",
+            "progress": progress,
+            "worker_service_enabled": True,
+            "total_companies": total_companies,
+            "completed_companies": 0,
+            "failed_companies": 0,
+        },
+    ):
+        return (False, "Could not persist Specter source file metadata.")
+
+    if not db.queue_specter_worker_job(
+        job_id,
+        run_config=run_config,
+        versions=cache.get("versions") or _runtime_versions(),
+        total_companies=total_companies,
+        progress=progress,
+    ):
+        return (False, "Could not queue Specter worker job.")
+
+    cache["worker_backed"] = True
+    cache["results"] = None
+    return (True, progress)
 
 
 def _chunk_worker_config_path(upload_dir: Path, job_id: str, chunk_idx: int) -> Path:
@@ -3178,6 +3351,12 @@ async def get_status(
     if job_id in _jobs:
         job = _jobs[job_id]
         cache = _results_cache.get(job_id, {})
+        if _is_worker_backed_job(job_id) and db and db.is_configured():
+            persisted_status = db.load_job_status(job_id)
+            if persisted_status:
+                job.status = _normalize_worker_status(persisted_status.get("status"))
+                job.progress = persisted_status.get("progress") or job.progress
+                job.progress_log = _load_worker_progress_log(job_id)
         results = cache.get("results")
         if _is_compact_results_payload(results) and job.status in {"done", "error", "stopped"}:
             results = None
@@ -3231,11 +3410,28 @@ async def get_status(
     if db and db.is_configured():
         persisted_status = db.load_job_status(job_id)
         if persisted_status:
-            loaded_status = str(persisted_status.get("status") or "pending").strip().lower()
+            loaded_status = _normalize_worker_status(persisted_status.get("status"))
             loaded_progress = persisted_status.get("progress") or "Analysis in progress"
+            progress_log = _load_worker_progress_log(job_id)
+            worker_active = bool(progress_log)
+            if loaded_status in {"pending", "running", "paused"} and worker_active:
+                return {
+                    "job_id": job_id,
+                    "status": loaded_status,
+                    "progress": loaded_progress,
+                    "progress_log": progress_log,
+                    "results": None,
+                    "llm": _resolve_job_llm_label(job_id, results=None),
+                }
             if loaded_status in {"pending", "running", "paused"}:
-                loaded_status = "stopped"
-                loaded_progress = "Run interrupted before completion."
+                return {
+                    "job_id": job_id,
+                    "status": "stopped",
+                    "progress": "Run interrupted before completion.",
+                    "progress_log": [],
+                    "results": None,
+                    "llm": _resolve_job_llm_label(job_id, results=None),
+                }
             return {
                 "job_id": job_id,
                 "status": loaded_status,
@@ -3270,6 +3466,12 @@ async def get_job_log(
 
     job = _jobs.get(job_id)
     if job and job.status in {"pending", "running", "paused"}:
+        if _is_worker_backed_job(job_id) and db and db.is_configured():
+            persisted_status = db.load_job_status(job_id)
+            if persisted_status:
+                job.status = _normalize_worker_status(persisted_status.get("status"))
+                job.progress = persisted_status.get("progress") or job.progress
+                job.progress_log = _load_worker_progress_log(job_id)
         return {
             "job_id": job_id,
             "status": job.status,
@@ -3279,10 +3481,20 @@ async def get_job_log(
 
     if db and db.is_configured():
         persisted_status = db.load_job_status(job_id)
-        if persisted_status and persisted_status.get("status") in {"pending", "running", "paused"}:
-            raise HTTPException(status_code=409, detail="Run is no longer active.")
+        progress_log = _load_worker_progress_log(job_id) if persisted_status else []
+        if (
+            persisted_status
+            and persisted_status.get("status") in {"pending", "running", "paused"}
+            and progress_log
+        ):
+            return {
+                "job_id": job_id,
+                "status": _normalize_worker_status(persisted_status.get("status")),
+                "progress": persisted_status.get("progress") or "Analysis in progress",
+                "progress_log": progress_log,
+            }
 
-    raise HTTPException(status_code=409, detail="Progress log is only available for active runs.")
+    raise HTTPException(status_code=409, detail="Run is no longer active.")
 
 
 @app.get("/api/download/{job_id}")

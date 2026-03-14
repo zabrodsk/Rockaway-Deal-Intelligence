@@ -119,6 +119,28 @@ python -m web
 uvicorn web.app:app --reload --port 8000
 ```
 
+### Local Specter worker
+
+The dedicated Specter worker is designed to run separately from the web app so
+long-running Specter batches do not bloat the web process.
+
+```bash
+python -m agent.specter_batch_worker
+```
+
+For a single polling pass during testing:
+
+```bash
+python -m agent.specter_batch_worker --run-once
+```
+
+Safe rollout:
+
+- Keep the web app on `python -m web.app`
+- Run the worker separately on `python -m agent.specter_batch_worker`
+- Enable the worker-backed Specter path with `ENABLE_SPECTER_WORKER_SERVICE=true`
+- Leave the flag unset or `false` to keep the current in-web Specter fallback
+
 ### Deploy via Cloudflare Tunnel
 
 ```bash
@@ -200,6 +222,8 @@ Copy `.env.example` to `.env` and set:
 | `LLM_MAX_RETRIES` | optional | Max retries on transient LLM failures (default: `2`) |
 | `SUPABASE_URL` | optional | Supabase project URL for persistent storage |
 | `SUPABASE_SERVICE_ROLE_KEY` | optional | Supabase service-role key |
+| `ENABLE_SPECTER_WORKER_SERVICE` | optional | Queue Specter runs for the dedicated worker service instead of executing them in the web process |
+| `SPECTER_WORKER_POLL_SECONDS` | optional | Poll interval for the dedicated Specter worker (default: `5`) |
 | `LANGSMITH_API_KEY` | optional | LangSmith tracing |
 
 **Example for Gemini (free tier):**

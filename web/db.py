@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -15,6 +17,28 @@ load_dotenv()
 
 _client: Client | None = None
 _client_config: tuple[str, str] | None = None
+logger = logging.getLogger(__name__)
+SOURCE_FILES_BUCKET = os.getenv("SUPABASE_SOURCE_FILES_BUCKET", "analysis-inputs")
+WORKER_ACTIVE_STATUSES = {"queued", "claimed", "running", "finalizing"}
+WORKER_TERMINAL_STATUSES = {"done", "error", "interrupted", "stopped"}
+
+
+def _log_supabase_error(
+    operation: str,
+    table: str,
+    exc: Exception,
+    *,
+    job_id_legacy: str | None = None,
+    include_traceback: bool = False,
+) -> None:
+    log_fn = logger.exception if include_traceback else logger.warning
+    log_fn(
+        "Supabase operation failed: operation=%s table=%s job_id_legacy=%s error=%s",
+        operation,
+        table,
+        job_id_legacy or "-",
+        exc,
+    )
 
 
 def _normalize_company_key(name: str | None, domain: str | None = None, slug: str | None = None) -> str:
@@ -325,8 +349,8 @@ def _upsert_company(
         row = client.table("companies").upsert(payload, on_conflict="company_key").execute()
         if row.data:
             return row.data[0].get("id")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("upsert_company", "companies", exc)
 
     try:
         row = (
@@ -338,8 +362,8 @@ def _upsert_company(
         )
         if row.data:
             return row.data[0].get("id")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("select_company_after_upsert", "companies", exc)
     return None
 
 
@@ -360,7 +384,13 @@ def _select_existing_company_analyses(
             .execute()
         )
         return list(rows.data or [])
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error(
+            "select_existing_company_analyses",
+            "analyses",
+            exc,
+            job_id_legacy=job_id_legacy,
+        )
         return []
 
 
@@ -382,19 +412,34 @@ def _replace_company_analysis_records(
     if company_id:
         try:
             client.table("analyses").delete().eq("job_id_legacy", job_id_legacy).eq("company_id", company_id).execute()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_supabase_error(
+                "delete_existing_company_analyses",
+                "analyses",
+                exc,
+                job_id_legacy=job_id_legacy,
+            )
 
     if replace_documents:
         for pitch_deck_id in pitch_deck_ids:
             try:
                 client.table("chunks").delete().eq("pitch_deck_id", pitch_deck_id).execute()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_supabase_error(
+                    "delete_existing_chunks",
+                    "chunks",
+                    exc,
+                    job_id_legacy=job_id_legacy,
+                )
             try:
                 client.table("pitch_decks").delete().eq("id", pitch_deck_id).execute()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_supabase_error(
+                    "delete_existing_pitch_decks",
+                    "pitch_decks",
+                    exc,
+                    job_id_legacy=job_id_legacy,
+                )
 
     return preserved_pitch_deck_id
 
@@ -569,6 +614,55 @@ def _hydrate_execution_row(row: dict[str, Any]) -> dict[str, Any]:
     return hydrated
 
 
+def _extract_worker_state(run_config: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(run_config, dict):
+        return {}
+    worker_state = run_config.get("worker_state")
+    return _serialize(worker_state) if isinstance(worker_state, dict) else {}
+
+
+def _merge_worker_state(
+    run_config: dict[str, Any] | None,
+    updates: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged = dict(run_config or {})
+    worker_state = dict(_extract_worker_state(merged))
+    for key, value in (updates or {}).items():
+        if value is None:
+            worker_state.pop(key, None)
+        else:
+            worker_state[key] = _serialize(value)
+    if worker_state:
+        merged["worker_state"] = worker_state
+    else:
+        merged.pop("worker_state", None)
+    return merged
+
+
+def _worker_progress_from_state(worker_state: dict[str, Any]) -> str | None:
+    progress = worker_state.get("progress")
+    if isinstance(progress, str) and progress.strip():
+        return progress
+    status = str(worker_state.get("status") or "").strip().lower()
+    active_company = str(worker_state.get("active_company_slug") or "").strip()
+    completed = worker_state.get("completed_companies")
+    total = worker_state.get("total_companies")
+    if status == "queued":
+        return "Queued for worker..."
+    if status == "claimed":
+        return "Worker claimed job..."
+    if status == "finalizing":
+        return "Finalizing batch results..."
+    if status == "running" and active_company:
+        if isinstance(completed, int) and isinstance(total, int) and total > 0:
+            next_index = min(completed + 1, total)
+            return f"Worker running — {active_company} ({next_index}/{total})"
+        return f"Worker running — {active_company}"
+    if status in WORKER_TERMINAL_STATUSES:
+        return "Worker finished." if status == "done" else "Worker interrupted."
+    return None
+
+
 def _get_job_uuid(client: Client, job_id_legacy: str) -> str | None:
     try:
         row = (
@@ -580,8 +674,8 @@ def _get_job_uuid(client: Client, job_id_legacy: str) -> str | None:
         )
         if row.data:
             return row.data[0].get("id")
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("get_job_uuid", "jobs", exc, job_id_legacy=job_id_legacy)
     return None
 
 
@@ -590,13 +684,14 @@ def upsert_job(
     *,
     run_config: dict[str, Any] | None = None,
     versions: dict[str, Any] | None = None,
+    worker_state: dict[str, Any] | None = None,
 ) -> str | None:
     """Insert/update a job row by legacy id and return UUID if available."""
     client = _get_client()
     if not client:
         return None
 
-    rc = run_config or {}
+    rc = _merge_worker_state(run_config or {}, worker_state)
     vv = versions or {}
     payload = {
         "job_id_legacy": job_id_legacy,
@@ -615,10 +710,373 @@ def upsert_job(
         result = client.table("jobs").upsert(payload, on_conflict="job_id_legacy").execute()
         if result.data:
             return result.data[0].get("id")
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("upsert_job", "jobs", exc, job_id_legacy=job_id_legacy)
         return _get_job_uuid(client, job_id_legacy)
 
     return _get_job_uuid(client, job_id_legacy)
+
+
+def ensure_source_files_bucket() -> None:
+    client = _get_client()
+    if not client:
+        return
+    try:
+        existing = client.storage.list_buckets()
+        if any(getattr(bucket, "name", None) == SOURCE_FILES_BUCKET for bucket in existing or []):
+            return
+    except Exception:
+        pass
+    try:
+        client.storage.create_bucket(SOURCE_FILES_BUCKET, {"public": False})
+    except Exception as exc:
+        _log_supabase_error("ensure_source_files_bucket", "storage", exc)
+
+
+def upload_source_file(
+    job_id_legacy: str,
+    local_path: str | Path,
+    *,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+) -> str | None:
+    client = _get_client()
+    if not client:
+        return None
+
+    source_path = Path(local_path)
+    if not source_path.exists():
+        return None
+
+    ensure_source_files_bucket()
+    file_token = re.sub(r"[^a-zA-Z0-9._-]+", "-", file_name or source_path.name).strip("-") or source_path.name
+    storage_path = f"jobs/{job_id_legacy}/inputs/{file_token}"
+    try:
+        with source_path.open("rb") as handle:
+            options = {"upsert": "true"}
+            if mime_type:
+                options["content-type"] = mime_type
+            client.storage.from_(SOURCE_FILES_BUCKET).upload(storage_path, handle, options)
+        return storage_path
+    except Exception as exc:
+        _log_supabase_error("upload_source_file", "storage", exc, job_id_legacy=job_id_legacy)
+        return None
+
+
+def download_source_file_to_path(
+    storage_path: str,
+    destination_path: str | Path,
+) -> bool:
+    client = _get_client()
+    if not client:
+        return False
+    try:
+        data = client.storage.from_(SOURCE_FILES_BUCKET).download(storage_path)
+        destination = Path(destination_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+        return True
+    except Exception as exc:
+        _log_supabase_error("download_source_file_to_path", "storage", exc)
+        return False
+
+
+def persist_source_files(
+    job_id_legacy: str,
+    source_files: list[dict[str, Any]],
+    *,
+    run_config: dict[str, Any] | None = None,
+    versions: dict[str, Any] | None = None,
+    worker_state: dict[str, Any] | None = None,
+) -> bool:
+    client = _get_client()
+    if not client:
+        return False
+
+    job_uuid = upsert_job(
+        job_id_legacy,
+        run_config=run_config,
+        versions=versions,
+        worker_state=worker_state,
+    )
+    if not job_uuid:
+        return False
+
+    try:
+        client.table("source_files").delete().eq("job_id_legacy", job_id_legacy).execute()
+    except Exception as exc:
+        _log_supabase_error("persist_source_files.delete_existing", "source_files", exc, job_id_legacy=job_id_legacy)
+
+    success = True
+    for file_info in source_files or []:
+        try:
+            client.table("source_files").insert(
+                {
+                    "job_id": job_uuid,
+                    "job_id_legacy": job_id_legacy,
+                    "file_name": file_info.get("name"),
+                    "file_size_bytes": file_info.get("size"),
+                    "mime_type": file_info.get("mime_type"),
+                    "sha256": file_info.get("sha256"),
+                    "local_path": file_info.get("local_path"),
+                    "storage_path": file_info.get("storage_path"),
+                }
+            ).execute()
+        except Exception as exc:
+            success = False
+            _log_supabase_error("persist_source_files.insert", "source_files", exc, job_id_legacy=job_id_legacy)
+    return success
+
+
+def load_source_files(job_id_legacy: str) -> list[dict[str, Any]]:
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        rows = (
+            client.table("source_files")
+            .select("file_name, file_size_bytes, mime_type, sha256, local_path, storage_path")
+            .eq("job_id_legacy", job_id_legacy)
+            .order("created_at")
+            .execute()
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows.data or []:
+            out.append(
+                {
+                    "name": row.get("file_name"),
+                    "size": row.get("file_size_bytes"),
+                    "mime_type": row.get("mime_type"),
+                    "sha256": row.get("sha256"),
+                    "local_path": row.get("local_path"),
+                    "storage_path": row.get("storage_path"),
+                }
+            )
+        return out
+    except Exception as exc:
+        _log_supabase_error("load_source_files", "source_files", exc, job_id_legacy=job_id_legacy)
+        return []
+
+
+def queue_specter_worker_job(
+    job_id_legacy: str,
+    *,
+    run_config: dict[str, Any],
+    versions: dict[str, Any] | None = None,
+    total_companies: int,
+    progress: str | None = None,
+) -> bool:
+    worker_state = {
+        "status": "queued",
+        "progress": progress or "Queued for worker...",
+        "total_companies": total_companies,
+        "completed_companies": 0,
+        "failed_companies": 0,
+        "active_company_slug": None,
+        "active_company_index": None,
+        "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+        "run_started_at": None,
+        "run_finished_at": None,
+        "worker_service_enabled": True,
+    }
+    job_uuid = upsert_job(
+        job_id_legacy,
+        run_config=run_config,
+        versions=versions,
+        worker_state=worker_state,
+    )
+    if not job_uuid:
+        return False
+    insert_job_status_history(
+        job_id_legacy,
+        status="running",
+        progress=worker_state["progress"],
+        source="worker_queue",
+    )
+    insert_analysis_event(
+        job_id_legacy,
+        message=worker_state["progress"],
+        event_type="worker_queue",
+        stage="queue",
+        payload={"worker_state": worker_state},
+    )
+    return True
+
+
+def list_claimable_specter_worker_jobs(limit: int = 10) -> list[dict[str, Any]]:
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        rows = (
+            client.table("jobs")
+            .select("job_id_legacy, input_mode, use_web_search, created_at, run_config")
+            .eq("input_mode", "specter")
+            .order("created_at")
+            .limit(max(limit * 10, 50))
+            .execute()
+        )
+    except Exception as exc:
+        _log_supabase_error("list_claimable_specter_worker_jobs", "jobs", exc)
+        return []
+
+    claimable: list[dict[str, Any]] = []
+    for row in rows.data or []:
+        worker_state = _extract_worker_state(row.get("run_config") or {})
+        status = str(worker_state.get("status") or "").strip().lower()
+        if status in {"queued", "claimed", "running", "finalizing"}:
+            claimable.append(
+                {
+                    "job_id": row.get("job_id_legacy"),
+                    "input_mode": row.get("input_mode"),
+                    "use_web_search": row.get("use_web_search"),
+                    "created_at": row.get("created_at"),
+                    "run_config": _serialize(row.get("run_config") or {}),
+                    "worker_state": worker_state,
+                }
+            )
+        if len(claimable) >= limit:
+            break
+    return claimable
+
+
+def claim_specter_worker_job(
+    job_id_legacy: str,
+    *,
+    worker_id: str,
+) -> dict[str, Any] | None:
+    client = _get_client()
+    if not client:
+        return None
+    try:
+        rows = (
+            client.table("jobs")
+            .select("job_id_legacy, input_mode, use_web_search, created_at, run_config")
+            .eq("job_id_legacy", job_id_legacy)
+            .limit(1)
+            .execute()
+        ).data or []
+        if not rows:
+            return None
+        row = rows[0]
+        worker_state = _extract_worker_state(row.get("run_config") or {})
+        status = str(worker_state.get("status") or "").strip().lower()
+        if status not in {"queued", "claimed", "running"}:
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        updated_state = {
+            "status": "running",
+            "progress": worker_state.get("progress") or "Worker claimed job...",
+            "worker_id": worker_id,
+            "last_heartbeat_at": now,
+            "run_started_at": worker_state.get("run_started_at") or now,
+            "worker_service_enabled": True,
+        }
+        run_config = _merge_worker_state(row.get("run_config") or {}, updated_state)
+        upsert_job(job_id_legacy, run_config=run_config)
+        return {
+            "job_id": row.get("job_id_legacy"),
+            "input_mode": row.get("input_mode"),
+            "use_web_search": row.get("use_web_search"),
+            "created_at": row.get("created_at"),
+            "run_config": run_config,
+            "worker_state": _extract_worker_state(run_config),
+        }
+    except Exception as exc:
+        _log_supabase_error("claim_specter_worker_job", "jobs", exc, job_id_legacy=job_id_legacy)
+        return None
+
+
+def heartbeat_specter_worker_job(
+    job_id_legacy: str,
+    *,
+    progress: str | None = None,
+    status: str | None = None,
+    active_company_slug: str | None = None,
+    active_company_index: int | None = None,
+    completed_companies: int | None = None,
+    failed_companies: int | None = None,
+    total_companies: int | None = None,
+    worker_id: str | None = None,
+) -> bool:
+    client = _get_client()
+    if not client:
+        return False
+    try:
+        rows = (
+            client.table("jobs")
+            .select("run_config")
+            .eq("job_id_legacy", job_id_legacy)
+            .limit(1)
+            .execute()
+        ).data or []
+        if not rows:
+            return False
+        run_config = rows[0].get("run_config") or {}
+        updates = {
+            "status": status,
+            "progress": progress,
+            "active_company_slug": active_company_slug,
+            "active_company_index": active_company_index,
+            "completed_companies": completed_companies,
+            "failed_companies": failed_companies,
+            "total_companies": total_companies,
+            "worker_id": worker_id,
+            "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+            "worker_service_enabled": True,
+        }
+        upsert_job(job_id_legacy, run_config=run_config, worker_state=updates)
+        return True
+    except Exception as exc:
+        _log_supabase_error("heartbeat_specter_worker_job", "jobs", exc, job_id_legacy=job_id_legacy)
+        return False
+
+
+def finish_specter_worker_job(
+    job_id_legacy: str,
+    *,
+    status: str,
+    progress: str | None,
+    completed_companies: int | None = None,
+    failed_companies: int | None = None,
+    total_companies: int | None = None,
+) -> bool:
+    client = _get_client()
+    if not client:
+        return False
+    try:
+        rows = (
+            client.table("jobs")
+            .select("run_config")
+            .eq("job_id_legacy", job_id_legacy)
+            .limit(1)
+            .execute()
+        ).data or []
+        if not rows:
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        run_config = rows[0].get("run_config") or {}
+        upsert_job(
+            job_id_legacy,
+            run_config=run_config,
+            worker_state={
+                "status": status,
+                "progress": progress,
+                "completed_companies": completed_companies,
+                "failed_companies": failed_companies,
+                "total_companies": total_companies,
+                "active_company_slug": None,
+                "active_company_index": None,
+                "last_heartbeat_at": now,
+                "run_finished_at": now,
+                "worker_service_enabled": True,
+            },
+        )
+        insert_job_status_history(job_id_legacy, status=status, progress=progress, source="worker_finish")
+        return True
+    except Exception as exc:
+        _log_supabase_error("finish_specter_worker_job", "jobs", exc, job_id_legacy=job_id_legacy)
+        return False
 
 
 def insert_analysis_event(
@@ -644,8 +1102,8 @@ def insert_analysis_event(
                 "payload": _serialize(payload or {}),
             }
         ).execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("insert_analysis_event", "analysis_events", exc, job_id_legacy=job_id_legacy)
 
 
 def upsert_job_control(
@@ -670,8 +1128,8 @@ def upsert_job_control(
             },
             on_conflict="job_id_legacy",
         ).execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("upsert_job_control", "job_controls", exc, job_id_legacy=job_id_legacy)
 
 
 def insert_job_status_history(
@@ -695,8 +1153,13 @@ def insert_job_status_history(
                 "source": source,
             }
         ).execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error(
+            "insert_job_status_history",
+            "job_status_history",
+            exc,
+            job_id_legacy=job_id_legacy,
+        )
 
 
 def insert_analysis_error(
@@ -724,8 +1187,8 @@ def insert_analysis_error(
                 "details": _serialize(details or {}),
             }
         ).execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("insert_analysis_error", "analysis_errors", exc, job_id_legacy=job_id_legacy)
 
 
 def upsert_person_profile_job(
@@ -755,8 +1218,8 @@ def upsert_person_profile_job(
     }
     try:
         client.table("person_profile_jobs").upsert(payload, on_conflict="person_job_id").execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("upsert_person_profile_job", "person_profile_jobs", exc)
 
 
 def load_person_profile_job(person_job_id: str) -> dict[str, Any] | None:
@@ -774,7 +1237,8 @@ def load_person_profile_job(person_job_id: str) -> dict[str, Any] | None:
         if not row.data:
             return None
         return row.data[0]
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("load_person_profile_job", "person_profile_jobs", exc)
         return None
 
 
@@ -826,8 +1290,13 @@ def persist_analysis(
                         "storage_path": file_info.get("storage_path"),
                     }
                 ).execute()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_supabase_error(
+                    "persist_analysis.insert_source_file",
+                    "source_files",
+                    exc,
+                    job_id_legacy=job_id_legacy,
+                )
 
         _EXEC_BATCH_SIZE = 200
         exec_rows_to_insert = [
@@ -856,14 +1325,24 @@ def persist_analysis(
                 client.table("model_executions").insert(
                     exec_rows_to_insert[i : i + _EXEC_BATCH_SIZE]
                 ).execute()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log_supabase_error(
+                    "persist_analysis.insert_model_executions_batch",
+                    "model_executions",
+                    exc,
+                    job_id_legacy=job_id_legacy,
+                )
         print(f"[persist_analysis] model_executions done ({_time.monotonic()-_t0:.1f}s)")
 
         try:
             client.table("analyses").delete().eq("job_id_legacy", job_id_legacy).is_("company_id", "null").execute()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log_supabase_error(
+                "persist_analysis.delete_snapshot_rows",
+                "analyses",
+                exc,
+                job_id_legacy=job_id_legacy,
+            )
 
         print(f"[persist_analysis] inserting analyses row, payload size={len(str(snapshot_payload))} chars ({_time.monotonic()-_t0:.1f}s)")
         client.table("analyses").insert(
@@ -896,9 +1375,86 @@ def persist_analysis(
         print(f"[persist_analysis] done total={_time.monotonic()-_t0:.1f}s")
 
         return True
-    except Exception:
-        import traceback
-        traceback.print_exc()
+    except Exception as exc:
+        _log_supabase_error(
+            "persist_analysis",
+            "jobs,source_files,model_executions,analyses,job_status_history,job_controls",
+            exc,
+            job_id_legacy=job_id_legacy,
+            include_traceback=True,
+        )
+        return False
+
+
+def persist_analysis_snapshot(
+    job_id_legacy: str,
+    *,
+    results_payload: dict[str, Any],
+    run_config: dict[str, Any],
+    versions: dict[str, Any] | None = None,
+    worker_state: dict[str, Any] | None = None,
+) -> bool:
+    client = _get_client()
+    if not client:
+        return False
+
+    snapshot_payload = _serialize(results_payload or {})
+    if not snapshot_payload:
+        return False
+
+    try:
+        job_uuid = upsert_job(
+            job_id_legacy,
+            run_config=run_config,
+            versions=versions,
+            worker_state=worker_state,
+        )
+        if not job_uuid:
+            return False
+        try:
+            client.table("analyses").delete().eq("job_id_legacy", job_id_legacy).is_("company_id", "null").execute()
+        except Exception as exc:
+            _log_supabase_error(
+                "persist_analysis_snapshot.delete_existing",
+                "analyses",
+                exc,
+                job_id_legacy=job_id_legacy,
+            )
+
+        client.table("analyses").insert(
+            {
+                "pitch_deck_id": None,
+                "company_id": None,
+                "job_id": job_uuid,
+                "job_id_legacy": job_id_legacy,
+                "state": {},
+                "results_payload": snapshot_payload,
+                "status": snapshot_payload.get("job_status") or "done",
+                "run_config": _serialize(run_config),
+                "excel_storage_path": None,
+            }
+        ).execute()
+        insert_job_status_history(
+            job_id_legacy,
+            status=snapshot_payload.get("job_status") or "done",
+            progress=snapshot_payload.get("job_message") or "Analysis complete",
+            source="persist_analysis_snapshot",
+        )
+        upsert_job_control(
+            job_id_legacy,
+            pause_requested=False,
+            stop_requested=(snapshot_payload.get("job_status") == "stopped"),
+            last_action=snapshot_payload.get("job_status") or "done",
+        )
+        return True
+    except Exception as exc:
+        _log_supabase_error(
+            "persist_analysis_snapshot",
+            "jobs,analyses,job_status_history,job_controls",
+            exc,
+            job_id_legacy=job_id_legacy,
+            include_traceback=True,
+        )
         return False
 
 
@@ -944,7 +1500,14 @@ def persist_model_executions(
         for i in range(0, len(rows), batch_size):
             client.table("model_executions").insert(rows[i : i + batch_size]).execute()
         return True
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error(
+            "persist_model_executions",
+            "jobs,model_executions",
+            exc,
+            job_id_legacy=job_id_legacy,
+            include_traceback=True,
+        )
         return False
 
 
@@ -976,7 +1539,14 @@ def persist_company_result(
             excel_storage_path=None,
             replace_documents=True,
         )
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error(
+            "persist_company_result",
+            "jobs,companies,pitch_decks,chunks,analyses,company_runs",
+            exc,
+            job_id_legacy=job_id_legacy,
+            include_traceback=True,
+        )
         return False
 
 
@@ -1008,7 +1578,14 @@ def persist_company_failure_result(
             excel_storage_path=None,
             replace_documents=True,
         )
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error(
+            "persist_company_failure_result",
+            "jobs,companies,pitch_decks,chunks,analyses,company_runs",
+            exc,
+            job_id_legacy=job_id_legacy,
+            include_traceback=True,
+        )
         return False
 
 
@@ -1027,7 +1604,13 @@ def _load_latest_analysis_snapshot(
         )
         if analyses.data:
             return analyses.data[0]
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error(
+            "load_latest_analysis_snapshot",
+            "analyses",
+            exc,
+            job_id_legacy=job_id_legacy,
+        )
         return None
     return None
 
@@ -1045,7 +1628,8 @@ def _load_company_run_rows_for_job(client: Client, job_id_legacy: str) -> list[d
             .execute()
         )
         return rows.data or []
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("load_company_run_rows_for_job", "company_runs", exc, job_id_legacy=job_id_legacy)
         return []
 
 
@@ -1059,7 +1643,29 @@ def _load_company_progress_rows_for_job(client: Client, job_id_legacy: str) -> l
             .execute()
         )
         return rows.data or []
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("load_company_progress_rows_for_job", "company_runs", exc, job_id_legacy=job_id_legacy)
+        return []
+
+
+def load_analysis_events(job_id_legacy: str, limit: int = 200) -> list[str]:
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        rows = (
+            client.table("analysis_events")
+            .select("message, created_at")
+            .eq("job_id_legacy", job_id_legacy)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        messages = [str(row.get("message") or "") for row in rows.data or [] if str(row.get("message") or "").strip()]
+        messages.reverse()
+        return messages
+    except Exception as exc:
+        _log_supabase_error("load_analysis_events", "analysis_events", exc, job_id_legacy=job_id_legacy)
         return []
 
 
@@ -1117,7 +1723,8 @@ def load_job_progress_snapshot(
                 if key in snapshot_payload:
                     payload[key] = snapshot_payload.get(key)
         return {"results": payload}
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("load_job_progress_snapshot", "analyses,company_runs", exc, job_id_legacy=job_id_legacy)
         return None
 
 
@@ -1150,7 +1757,8 @@ def load_run_costs(job_id_legacy: str) -> dict[str, Any] | None:
             start += batch_size
 
         return build_run_costs_from_model_executions(rows)
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("load_run_costs", "model_executions", exc, job_id_legacy=job_id_legacy)
         return None
 
 
@@ -1180,7 +1788,8 @@ def load_job_results(
         ):
             results["run_costs"] = run_costs
         return {"results": results}
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("load_job_results", "analyses,company_runs,model_executions", exc, job_id_legacy=job_id_legacy)
         return None
 
 
@@ -1191,6 +1800,22 @@ def load_job_status(job_id_legacy: str) -> dict[str, Any] | None:
         return None
 
     latest_status: dict[str, Any] = {}
+    job_row: dict[str, Any] = {}
+    worker_state: dict[str, Any] = {}
+    try:
+        job_resp = (
+            client.table("jobs")
+            .select("run_config")
+            .eq("job_id_legacy", job_id_legacy)
+            .limit(1)
+            .execute()
+        )
+        job_row = (job_resp.data or [{}])[0] or {}
+        worker_state = _extract_worker_state(job_row.get("run_config") or {})
+    except Exception as exc:
+        _log_supabase_error("load_job_status.jobs", "jobs", exc, job_id_legacy=job_id_legacy)
+        job_row = {}
+        worker_state = {}
     try:
         status_resp = (
             client.table("job_status_history")
@@ -1201,19 +1826,25 @@ def load_job_status(job_id_legacy: str) -> dict[str, Any] | None:
             .execute()
         )
         latest_status = (status_resp.data or [{}])[0] or {}
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("load_job_status", "job_status_history", exc, job_id_legacy=job_id_legacy)
         latest_status = {}
 
     latest_analysis = _load_latest_analysis_snapshot(client, job_id_legacy) or {}
-    if not latest_status and not latest_analysis:
+    worker_status = str(worker_state.get("status") or "").strip().lower()
+    if not latest_status and not latest_analysis and not worker_status:
         return None
 
     analysis_status = str(latest_analysis.get("status") or "").strip().lower()
-    status = str(latest_status.get("status") or analysis_status or "pending").strip().lower()
-    progress = latest_status.get("progress")
+    status = str(latest_status.get("status") or analysis_status or worker_status or "pending").strip().lower()
+    progress = latest_status.get("progress") or _worker_progress_from_state(worker_state)
     snapshot_payload = latest_analysis.get("results_payload")
     if isinstance(snapshot_payload, dict) and not progress:
         progress = snapshot_payload.get("job_message")
+
+    if worker_status in WORKER_ACTIVE_STATUSES and analysis_status not in {"done", "error", "stopped"}:
+        status = worker_status if worker_status != "claimed" else "running"
+        progress = _worker_progress_from_state(worker_state) or progress
 
     if analysis_status in {"done", "error", "stopped"} and status not in {"done", "error", "stopped"}:
         status = analysis_status
@@ -1264,8 +1895,8 @@ def load_all_completed_jobs() -> dict[str, dict[str, Any]]:
             out[jid] = {
                 "results": rebuilt.get("results"),
             }
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("load_all_completed_jobs", "analyses", exc)
     return out
 
 
@@ -1327,10 +1958,16 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
 
             latest_status = latest_status_by_job.get(jid, {})
             latest_analysis = latest_analysis_by_job.get(jid, {})
+            run_config = row.get("run_config") or {}
+            worker_state = _extract_worker_state(run_config)
+            worker_status = str(worker_state.get("status") or "").strip().lower()
             analysis_status = str(latest_analysis.get("status") or "").strip().lower()
-            status = latest_status.get("status") or analysis_status or "pending"
-            progress = latest_status.get("progress")
+            status = latest_status.get("status") or analysis_status or worker_status or "pending"
+            progress = latest_status.get("progress") or _worker_progress_from_state(worker_state)
             snapshot_payload = latest_analysis.get("results_payload")
+            if worker_status in WORKER_ACTIVE_STATUSES and analysis_status not in {"done", "error", "stopped"}:
+                status = worker_status if worker_status != "claimed" else "running"
+                progress = _worker_progress_from_state(worker_state) or progress
             if analysis_status in {"done", "error", "stopped"} and str(status).strip().lower() not in {"done", "error", "stopped"}:
                 status = analysis_status
                 if isinstance(snapshot_payload, dict):
@@ -1345,14 +1982,16 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
                     "created_at": created_at,
                     "input_mode": row.get("input_mode"),
                     "use_web_search": row.get("use_web_search"),
-                    "run_config": row.get("run_config") or {},
+                    "run_config": run_config,
                     "results": None,
                     "has_results": bool(isinstance(snapshot_payload, dict) and snapshot_payload),
+                    "worker_active": worker_status in WORKER_ACTIVE_STATUSES,
                 }
             )
 
         return out
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("list_saved_jobs", "jobs,job_status_history,analyses", exc)
         return []
 
 
@@ -1427,9 +2066,15 @@ def _reconcile_missing_company_runs(
                         on_conflict="job_id_legacy,company_key",
                     ).execute()
                     inserted += 1
-                except Exception:
-                    pass
-    except Exception:
+                except Exception as exc:
+                    _log_supabase_error(
+                        "reconcile_missing_company_runs.upsert",
+                        "company_runs",
+                        exc,
+                        job_id_legacy=job_id_legacy,
+                    )
+    except Exception as exc:
+        _log_supabase_error("reconcile_missing_company_runs", "analyses,jobs,company_runs", exc)
         return inserted
 
     return inserted
@@ -1532,7 +2177,8 @@ def list_company_histories(
                 entry["latest_run_at"] = latest.get("created_at")
 
         return list(grouped.values())
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("list_company_histories", "company_runs,analyses,jobs", exc)
         return []
 
 
@@ -1663,7 +2309,8 @@ def backfill_company_runs_from_analyses(limit_jobs: int = 500) -> int:
         )
         if (existing.count or 0) > 0:
             return 0
-    except Exception:
+    except Exception as exc:
+        _log_supabase_error("backfill_company_runs_from_analyses.check_existing", "company_runs", exc)
         return 0
 
     try:
@@ -1700,9 +2347,15 @@ def backfill_company_runs_from_analyses(limit_jobs: int = 500) -> int:
                         on_conflict="job_id_legacy,company_key",
                     ).execute()
                     inserted += 1
-                except Exception:
-                    pass
-    except Exception:
+                except Exception as exc:
+                    _log_supabase_error(
+                        "backfill_company_runs_from_analyses.upsert",
+                        "company_runs",
+                        exc,
+                        job_id_legacy=job_id_legacy,
+                    )
+    except Exception as exc:
+        _log_supabase_error("backfill_company_runs_from_analyses", "analyses,jobs,company_runs", exc)
         return inserted
 
     return inserted
@@ -1749,9 +2402,15 @@ def backfill_all_company_runs_from_analyses(limit_jobs: int = 500) -> int:
                         on_conflict="job_id_legacy,company_key",
                     ).execute()
                     inserted += 1
-                except Exception:
-                    pass
-    except Exception:
+                except Exception as exc:
+                    _log_supabase_error(
+                        "backfill_all_company_runs_from_analyses.upsert",
+                        "company_runs",
+                        exc,
+                        job_id_legacy=job_id_legacy,
+                    )
+    except Exception as exc:
+        _log_supabase_error("backfill_all_company_runs_from_analyses", "analyses,jobs,company_runs", exc)
         return inserted
 
     return inserted
@@ -1788,8 +2447,8 @@ def load_analyses_by_company(company_name: str) -> list[dict[str, Any]]:
                         "created_at": r.get("run_created_at"),
                     })
             return out
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("load_analyses_by_company.company_runs", "company_runs", exc)
 
     try:
         companies = (
@@ -1819,8 +2478,8 @@ def load_analyses_by_company(company_name: str) -> list[dict[str, Any]]:
                     "results": payload,
                     "created_at": r.get("created_at"),
                 })
-    except Exception:
-        pass
+    except Exception as exc:
+        _log_supabase_error("load_analyses_by_company", "companies,analyses", exc)
     return out
 
 

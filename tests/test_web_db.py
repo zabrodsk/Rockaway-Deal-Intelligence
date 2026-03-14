@@ -1,4 +1,5 @@
 import importlib
+import logging
 import sys
 from pathlib import Path
 
@@ -385,6 +386,67 @@ def test_load_job_status_prefers_terminal_analysis_over_stale_running_status(mon
     assert status == {"status": "done", "progress": "Analysis complete"}
 
 
+def test_load_job_status_prefers_active_worker_state_over_stale_status_history(monkeypatch) -> None:
+    import web.db as web_db
+
+    class FakeResponse:
+        def __init__(self, data):
+            self.data = data
+
+    class FakeQuery:
+        def __init__(self, table_name: str):
+            self.table_name = table_name
+
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def eq(self, *_args, **_kwargs):
+            return self
+
+        def order(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            if self.table_name == "jobs":
+                return FakeResponse(
+                    [
+                        {
+                            "run_config": {
+                                "worker_state": {
+                                    "status": "running",
+                                    "progress": "Worker running — alpha (2/10)",
+                                }
+                            }
+                        }
+                    ]
+                )
+            if self.table_name == "job_status_history":
+                return FakeResponse(
+                    [
+                        {
+                            "status": "running",
+                            "progress": "Chunk 1/2 - Evaluating company 1",
+                            "created_at": "2026-03-13T10:00:00Z",
+                        }
+                    ]
+                )
+            raise AssertionError(f"Unexpected table lookup: {self.table_name}")
+
+    class FakeClient:
+        def table(self, table_name: str):
+            return FakeQuery(table_name)
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: FakeClient())
+    monkeypatch.setattr(web_db, "_load_latest_analysis_snapshot", lambda client, job_id_legacy: {})
+
+    status = web_db.load_job_status("job-123")
+
+    assert status == {"status": "running", "progress": "Worker running — alpha (2/10)"}
+
+
 def test_list_saved_jobs_prefers_terminal_analysis_status_over_stale_running_status(monkeypatch) -> None:
     import web.db as web_db
 
@@ -466,6 +528,83 @@ def test_list_saved_jobs_prefers_terminal_analysis_status_over_stale_running_sta
             "run_config": {},
             "results": None,
             "has_results": True,
+            "worker_active": False,
+        }
+    ]
+
+
+def test_list_saved_jobs_marks_worker_backed_runs_active(monkeypatch) -> None:
+    import web.db as web_db
+
+    class FakeResponse:
+        def __init__(self, data):
+            self.data = data
+
+    class FakeQuery:
+        def __init__(self, table_name: str):
+            self.table_name = table_name
+
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def order(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def in_(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            if self.table_name == "jobs":
+                return FakeResponse(
+                    [
+                        {
+                            "job_id_legacy": "job-123",
+                            "input_mode": "specter",
+                            "use_web_search": True,
+                            "created_at": "2026-03-13T10:00:00Z",
+                            "run_config": {
+                                "worker_state": {
+                                    "status": "running",
+                                    "progress": "Worker running — alpha (2/10)",
+                                }
+                            },
+                        }
+                    ]
+                )
+            if self.table_name == "job_status_history":
+                return FakeResponse([])
+            if self.table_name == "analyses":
+                return FakeResponse([])
+            raise AssertionError(f"Unexpected table lookup: {self.table_name}")
+
+    class FakeClient:
+        def table(self, table_name: str):
+            return FakeQuery(table_name)
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: FakeClient())
+
+    rows = web_db.list_saved_jobs(limit=10)
+
+    assert rows == [
+        {
+            "job_id": "job-123",
+            "status": "running",
+            "progress": "Worker running — alpha (2/10)",
+            "created_at": "2026-03-13T10:00:00Z",
+            "input_mode": "specter",
+            "use_web_search": True,
+            "run_config": {
+                "worker_state": {
+                    "status": "running",
+                    "progress": "Worker running — alpha (2/10)",
+                }
+            },
+            "results": None,
+            "has_results": False,
+            "worker_active": True,
         }
     ]
 
@@ -531,3 +670,27 @@ def test_load_run_costs_rehydrates_service_and_cost_fields_from_metadata(monkeyp
     assert costs["llm_usd"] == 0.001
     assert costs["perplexity_usd"] == 0.005
     assert costs["total_usd"] == 0.006
+
+
+def test_upsert_job_logs_supabase_failures(monkeypatch, caplog) -> None:
+    import web.db as web_db
+
+    class FakeQuery:
+        def upsert(self, *_args, **_kwargs):
+            raise RuntimeError("permission denied for table jobs")
+
+    class FakeClient:
+        def table(self, table_name: str):
+            assert table_name == "jobs"
+            return FakeQuery()
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: FakeClient())
+    monkeypatch.setattr(web_db, "_get_job_uuid", lambda client, job_id_legacy: None)
+
+    with caplog.at_level(logging.WARNING):
+        result = web_db.upsert_job("job-123")
+
+    assert result is None
+    assert "operation=upsert_job" in caplog.text
+    assert "table=jobs" in caplog.text
+    assert "job_id_legacy=job-123" in caplog.text

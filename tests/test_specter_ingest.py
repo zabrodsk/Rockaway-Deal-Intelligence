@@ -936,6 +936,36 @@ def test_job_log_endpoint_rejects_interrupted_run(monkeypatch) -> None:
     assert exc_info.value.detail == "Run is no longer active."
 
 
+def test_job_log_endpoint_returns_db_progress_for_worker_backed_job(monkeypatch) -> None:
+    job_id = "job-worker-log"
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            load_job_status=lambda current_job_id: {
+                "status": "running",
+                "progress": "Worker running — alpha (2/10)",
+            }
+            if current_job_id == job_id
+            else None,
+            load_analysis_events=lambda current_job_id, limit=200: ["Queued for worker...", "Worker running — alpha (2/10)"]
+            if current_job_id == job_id
+            else [],
+        ),
+    )
+
+    payload = asyncio.run(web_app.get_job_log(job_id, response=Response(), session_id="session"))
+
+    assert payload == {
+        "job_id": job_id,
+        "status": "running",
+        "progress": "Worker running — alpha (2/10)",
+        "progress_log": ["Queued for worker...", "Worker running — alpha (2/10)"],
+    }
+
+
 def test_status_endpoint_promotes_running_job_when_persisted_report_is_terminal(monkeypatch) -> None:
     job_id = "job-running-promoted"
     results = {
@@ -1040,6 +1070,76 @@ def test_status_endpoint_marks_saved_job_without_status_history_as_interrupted(m
     assert payload["progress"] == "Run interrupted before completion."
     assert payload["results"] is None
     assert payload["llm"] == "Gemini 3.1 Flash Lite"
+
+
+def test_start_analysis_queues_worker_backed_specter_job_without_starting_thread(tmp_path: Path, monkeypatch) -> None:
+    job_id = "job-worker-start"
+    original_flag = web_app.ENABLE_SPECTER_WORKER_SERVICE
+    web_app.ENABLE_SPECTER_WORKER_SERVICE = True
+    web_app._jobs[job_id] = web_app.AnalysisStatus(job_id=job_id, status="pending", progress="Queued", progress_log=[])
+    web_app._results_cache[job_id] = {
+        "files": [
+            {
+                "name": "companies.csv",
+                "local_path": str(tmp_path / "companies.csv"),
+                "mime_type": "text/csv",
+                "size": 123,
+            }
+        ],
+        "specter": {"companies": str(tmp_path / "companies.csv")},
+    }
+    (tmp_path / "companies.csv").write_text("Company Name\nAlpha\n", encoding="utf-8")
+
+    queued_calls: list[dict[str, object]] = []
+    thread_started = {"value": False}
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            thread_started["value"] = True
+
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+    monkeypatch.setattr(
+        web_app,
+        "validate_requested_selection",
+        lambda provider, model: SimpleNamespace(provider="openai", model="gpt-5"),
+    )
+    monkeypatch.setattr(web_app, "_runtime_versions", lambda: {"app_version": "test"})
+    monkeypatch.setattr(web_app, "list_specter_companies", lambda path: [{"index": 0, "name": "Alpha", "slug": "alpha"}])
+    monkeypatch.setattr(web_app.threading, "Thread", FakeThread)
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            upsert_job=lambda *args, **kwargs: "job-uuid",
+            upsert_job_control=lambda *args, **kwargs: None,
+            upload_source_file=lambda *args, **kwargs: "jobs/job-worker-start/inputs/companies.csv",
+            persist_source_files=lambda job_id_legacy, source_files, **kwargs: True,
+            queue_specter_worker_job=lambda job_id_legacy, **kwargs: queued_calls.append({"job_id": job_id_legacy, **kwargs}) or True,
+        ),
+    )
+
+    try:
+        payload = asyncio.run(
+            web_app.start_analysis(
+                job_id,
+                web_app.AnalyzeRequest(input_mode="specter"),
+                session_id="session",
+            )
+        )
+
+        assert payload["status"] == "running"
+        assert thread_started["value"] is False
+        assert queued_calls and queued_calls[0]["job_id"] == job_id
+        assert web_app._results_cache[job_id]["worker_backed"] is True
+        assert "Queued for worker" in web_app._jobs[job_id].progress
+    finally:
+        web_app.ENABLE_SPECTER_WORKER_SERVICE = original_flag
+        web_app._jobs.pop(job_id, None)
+        web_app._results_cache.pop(job_id, None)
 
 
 def test_append_progress_caps_in_memory_log(monkeypatch) -> None:
