@@ -676,6 +676,12 @@ def _resolved_worker_state(worker_state: dict[str, Any]) -> tuple[str, str | Non
     return status, progress, True
 
 
+def _worker_state_terminal_timestamp(worker_state: dict[str, Any]) -> datetime | None:
+    return _parse_timestamp(worker_state.get("run_finished_at")) or _parse_timestamp(
+        worker_state.get("last_heartbeat_at")
+    )
+
+
 def _merge_worker_state(
     run_config: dict[str, Any] | None,
     updates: dict[str, Any] | None,
@@ -1922,6 +1928,9 @@ def load_job_status(job_id_legacy: str) -> dict[str, Any] | None:
 
     latest_analysis = _load_latest_analysis_snapshot(client, job_id_legacy) or {}
     worker_status, worker_progress, worker_active = _resolved_worker_state(worker_state)
+    latest_status_ts = _parse_timestamp(latest_status.get("created_at"))
+    latest_analysis_ts = _parse_timestamp(latest_analysis.get("created_at"))
+    worker_terminal_ts = _worker_state_terminal_timestamp(worker_state)
     if not latest_status and not latest_analysis and not worker_status:
         return None
 
@@ -1935,14 +1944,24 @@ def load_job_status(job_id_legacy: str) -> dict[str, Any] | None:
     if worker_active and analysis_status not in {"done", "error", "stopped"}:
         status = worker_status if worker_status != "claimed" else "running"
         progress = worker_progress or progress
+    elif analysis_status in {"done", "error", "stopped"} and (
+        latest_status_ts is None or (latest_analysis_ts is not None and latest_analysis_ts >= latest_status_ts)
+    ):
+        status = analysis_status
+        if isinstance(snapshot_payload, dict):
+            progress = snapshot_payload.get("job_message") or progress
+    elif worker_status in WORKER_TERMINAL_STATUSES and (
+        latest_status_ts is None or (worker_terminal_ts is not None and worker_terminal_ts >= latest_status_ts)
+    ):
+        status = worker_status
+        progress = worker_progress or progress
     elif worker_status == "interrupted" and analysis_status not in {"done", "error", "stopped"}:
         status = "interrupted"
         progress = worker_progress or progress
     elif worker_status in WORKER_TERMINAL_STATUSES and status not in {"done", "error", "stopped"}:
         status = worker_status
         progress = worker_progress or progress
-
-    if analysis_status in {"done", "error", "stopped"} and status not in {"done", "error", "stopped"}:
+    elif analysis_status in {"done", "error", "stopped"} and status not in {"done", "error", "stopped"}:
         status = analysis_status
         if isinstance(snapshot_payload, dict):
             progress = snapshot_payload.get("job_message") or progress
@@ -2024,7 +2043,7 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
             .select("job_id_legacy, status, progress, created_at")
             .in_("job_id_legacy", job_ids)
             .order("created_at", desc=True)
-            .limit(max(limit * 8, 200))
+            .limit(max(limit * 20, 1000))
             .execute()
         )
         latest_status_by_job: dict[str, dict[str, Any]] = {}
@@ -2116,6 +2135,9 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
             run_config = row.get("run_config") or {}
             worker_state = _extract_worker_state(run_config)
             worker_status, worker_progress, worker_active = _resolved_worker_state(worker_state)
+            latest_status_ts = _parse_timestamp(latest_status.get("created_at"))
+            latest_analysis_ts = _parse_timestamp(latest_analysis.get("created_at"))
+            worker_terminal_ts = _worker_state_terminal_timestamp(worker_state)
             analysis_status = str(latest_analysis.get("status") or "").strip().lower()
             status = latest_status.get("status") or analysis_status or worker_status or "pending"
             progress = latest_status.get("progress") or worker_progress
@@ -2123,13 +2145,24 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
             if worker_active and analysis_status not in {"done", "error", "stopped"}:
                 status = worker_status if worker_status != "claimed" else "running"
                 progress = worker_progress or progress
+            elif analysis_status in {"done", "error", "stopped"} and (
+                latest_status_ts is None or (latest_analysis_ts is not None and latest_analysis_ts >= latest_status_ts)
+            ):
+                status = analysis_status
+                if isinstance(snapshot_payload, dict):
+                    progress = snapshot_payload.get("job_message") or progress
+            elif worker_status in WORKER_TERMINAL_STATUSES and (
+                latest_status_ts is None or (worker_terminal_ts is not None and worker_terminal_ts >= latest_status_ts)
+            ):
+                status = worker_status
+                progress = worker_progress or progress
             elif worker_status == "interrupted" and analysis_status not in {"done", "error", "stopped"}:
                 status = "interrupted"
                 progress = worker_progress or progress
             elif worker_status in WORKER_TERMINAL_STATUSES and str(status).strip().lower() not in {"done", "error", "stopped"}:
                 status = worker_status
                 progress = worker_progress or progress
-            if analysis_status in {"done", "error", "stopped"} and str(status).strip().lower() not in {"done", "error", "stopped"}:
+            elif analysis_status in {"done", "error", "stopped"} and str(status).strip().lower() not in {"done", "error", "stopped"}:
                 status = analysis_status
                 if isinstance(snapshot_payload, dict):
                     progress = snapshot_payload.get("job_message") or progress
