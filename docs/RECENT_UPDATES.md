@@ -93,6 +93,8 @@ screen.
 - **Run naming and navigation polish** — Optional run names are supported for
   all analysis types, and the main header now highlights the active section
   consistently across New Analysis, Analysis, Companies, and results flows.
+  The Analysis overview header also exposes the same manual **Refresh** action
+  as the Companies page for an immediate server sync.
 
 ## Model Catalog
 

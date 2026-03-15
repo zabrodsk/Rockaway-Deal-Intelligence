@@ -168,7 +168,8 @@ The primary live monitoring surface is now the **Analysis overview** page.
 New analyses navigate directly there instead of relying on a separate progress
 screen. Finished runs always expose an **Open results** action and the server
 decides whether the saved report can be opened, which avoids stale browser-side
-availability state.
+availability state. Both the **Analysis** and **Companies** headers expose a
+manual **Refresh** action for an immediate server sync.
 
 ### Deploy via Cloudflare Tunnel
 
