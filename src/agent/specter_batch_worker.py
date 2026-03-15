@@ -27,6 +27,7 @@ import web.db as db
 
 EVENT_PREFIX = "__SPECTER_COMPANY_EVENT__"
 POLL_SECONDS = max(1, int(os.getenv("SPECTER_WORKER_POLL_SECONDS", "5")))
+HEARTBEAT_SECONDS = max(10, int(os.getenv("SPECTER_WORKER_HEARTBEAT_SECONDS", "20")))
 
 
 def _log(message: str) -> None:
@@ -217,10 +218,15 @@ async def _run_company_subprocess(
     prefix = f"Worker evaluating {company_name} ({absolute_index}/{total_companies})"
     _log(f"{job_id}: starting company {absolute_index}/{total_companies} ({company_name})")
     db.insert_analysis_event(job_id, message=f"{prefix} — starting", event_type="worker_company", stage="company")
+    heartbeat_state: dict[str, Any] = {
+        "progress": f"{prefix} — starting",
+        "completed_companies": completed_companies,
+        "failed_companies": failed_companies,
+    }
     db.heartbeat_specter_worker_job(
         job_id,
         status="running",
-        progress=f"{prefix} — starting",
+        progress=str(heartbeat_state["progress"]),
         active_company_slug=company_descriptor.get("slug"),
         active_company_index=absolute_index,
         completed_companies=completed_companies,
@@ -265,6 +271,28 @@ async def _run_company_subprocess(
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
 
+    heartbeat_stop = asyncio.Event()
+
+    async def _heartbeat_loop() -> None:
+        while True:
+            try:
+                await asyncio.wait_for(heartbeat_stop.wait(), timeout=HEARTBEAT_SECONDS)
+                return
+            except asyncio.TimeoutError:
+                db.heartbeat_specter_worker_job(
+                    job_id,
+                    status="running",
+                    progress=str(heartbeat_state.get("progress") or f"{prefix} — working"),
+                    active_company_slug=company_descriptor.get("slug"),
+                    active_company_index=absolute_index,
+                    completed_companies=int(heartbeat_state.get("completed_companies") or 0),
+                    failed_companies=int(heartbeat_state.get("failed_companies") or 0),
+                    total_companies=total_companies,
+                    worker_id=worker_id,
+                )
+
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
     saw_completion_event = False
     company_failed = False
     try:
@@ -287,6 +315,7 @@ async def _run_company_subprocess(
                     message = str(event.get("message") or "").strip()
                     if message:
                         full_message = f"{prefix} — {message}"
+                        heartbeat_state["progress"] = full_message
                         db.insert_analysis_event(job_id, message=full_message, event_type="progress", stage="company")
                         db.heartbeat_specter_worker_job(
                             job_id,
@@ -314,6 +343,9 @@ async def _run_company_subprocess(
                             f"{job_id}: company {absolute_index}/{total_companies} completed "
                             f"(completed={completed_companies}, failed={failed_companies})"
                         )
+                    heartbeat_state["progress"] = message
+                    heartbeat_state["completed_companies"] = completed_companies
+                    heartbeat_state["failed_companies"] = failed_companies
                     db.insert_analysis_event(job_id, message=message, event_type="company_complete", stage="company", payload=event)
                     db.heartbeat_specter_worker_job(
                         job_id,
@@ -346,6 +378,9 @@ async def _run_company_subprocess(
                 error_message=error_message,
             )
             failed_companies += 1
+            heartbeat_state["progress"] = f"{prefix} — error: {error_message}"
+            heartbeat_state["completed_companies"] = completed_companies
+            heartbeat_state["failed_companies"] = failed_companies
             db.insert_analysis_event(job_id, message=f"{prefix} — error: {error_message}", event_type="company_complete", stage="company")
             db.heartbeat_specter_worker_job(
                 job_id,
@@ -360,6 +395,10 @@ async def _run_company_subprocess(
             )
         return completed_companies, failed_companies
     finally:
+        heartbeat_stop.set()
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
         with contextlib.suppress(Exception):
             config_path.unlink()
 
