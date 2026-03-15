@@ -30,10 +30,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-load_dotenv()
-
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from agent.batch import (
     build_argument_rows,
@@ -45,10 +46,11 @@ from agent.batch import (
     evaluate_startup,
     rank_batch_companies,
 )
+from agent.company_chat import answer_company_question, build_company_chat_store
 from agent.llm_catalog import (
     available_models_payload,
-    current_default_selection,
     model_label,
+    current_default_selection,
     pricing_catalog_payload,
     serialize_selection,
     validate_requested_selection,
@@ -110,6 +112,7 @@ JOBS_STORE_PATH = Path(
 )
 _sessions: dict[str, float] = {}
 _results_cache: dict[str, dict[str, Any]] = {}
+_company_chat_sessions: dict[tuple[str, str], dict[str, Any]] = {}
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -388,6 +391,73 @@ class PersonProfileJobStatus(BaseModel):
 
 _person_jobs: dict[str, PersonProfileJobStatus] = {}
 _person_service = PersonIntelService()
+
+
+class CompanyChatRequest(BaseModel):
+    message: str
+    active_job_id: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def _validate_message(cls, v: str) -> str:
+        text = (v or "").strip()
+        if not text:
+            raise ValueError("message is required")
+        return text[:4000]
+
+
+class CompanyChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    citations: list[dict[str, Any]] = []
+    created_at: str
+
+
+class CompanyChatResponse(BaseModel):
+    company_lookup_key: str
+    transcript: list[CompanyChatMessage]
+    run_count: int = 0
+    source_counts: dict[str, int] = {}
+    web_search_enabled: bool = True
+    model_label: str = "Gemini 3.1 Flash Lite"
+    used_run_ids: list[str] = []
+    used_web_search: bool = False
+    web_search_query: str | None = None
+
+
+def _chat_session_key(session_id: str, company_lookup_key: str) -> tuple[str, str]:
+    return (session_id, company_lookup_key.strip().lower())
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _truncate_summary(text: str, limit: int = 4000) -> str:
+    normalized = " ".join((text or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
+
+def _compress_company_chat_session(session: dict[str, Any], max_messages: int = 24) -> None:
+    transcript = session.setdefault("transcript", [])
+    while len(transcript) > max_messages:
+        oldest = transcript.pop(0)
+        summary = session.get("summary") or ""
+        summary_line = f"{oldest.get('role', 'unknown')}: {oldest.get('content', '')}"
+        session["summary"] = _truncate_summary(f"{summary}\n{summary_line}".strip())
+
+
+def _get_or_create_company_chat_session(session_id: str, company_lookup_key: str) -> dict[str, Any]:
+    return _company_chat_sessions.setdefault(
+        _chat_session_key(session_id, company_lookup_key),
+        {"summary": "", "transcript": []},
+    )
+
+
+def _company_chat_model_label() -> str:
+    return model_label("gemini", "gemini-3.1-flash-lite-preview")
 
 
 def _runtime_versions() -> dict[str, str]:
@@ -672,6 +742,21 @@ _load_jobs()
 
 def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
     results = _results_cache.get(job_id, {}).get("results")
+    result_summary = None
+    if isinstance(results, dict):
+        summary_rows = results.get("summary_rows") or []
+        first_summary = summary_rows[0] if summary_rows else {}
+        ranking = results.get("ranking_result") or {}
+        result_summary = {
+            "mode": results.get("mode"),
+            "company_name": results.get("company_name") or first_summary.get("company_name"),
+            "startup_slug": results.get("startup_slug") or first_summary.get("startup_slug"),
+            "summary_count": len(summary_rows),
+            "decision": results.get("decision") or first_summary.get("decision"),
+            "total_score": results.get("total_score") if results.get("total_score") is not None else first_summary.get("total_score"),
+            "composite_score": ranking.get("composite_score") if ranking.get("composite_score") is not None else first_summary.get("composite_score"),
+            "bucket": ranking.get("bucket") or first_summary.get("bucket"),
+        }
     return {
         "job_id": job_id,
         "status": job.status,
@@ -679,7 +764,8 @@ def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
         "created_at": None,
         "input_mode": results.get("mode") if isinstance(results, dict) else None,
         "use_web_search": None,
-        "results": results,
+        "results": None,
+        "result_summary": result_summary,
         "llm": _resolve_job_llm_label(job_id, results=results),
     }
 
@@ -705,6 +791,7 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
                     "input_mode": entry.get("input_mode") or (existing or {}).get("input_mode"),
                     "use_web_search": entry.get("use_web_search"),
                     "results": entry.get("results") or (existing or {}).get("results"),
+                    "result_summary": entry.get("result_summary") or (existing or {}).get("result_summary"),
                     "llm": _resolve_job_llm_label(
                         job_id,
                         results=entry.get("results") or {},
@@ -719,6 +806,180 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
         return (created_at, item.get("job_id") or "")
 
     return sorted(jobs_by_id.values(), key=_sort_key, reverse=True)
+
+
+def _company_histories_from_saved_jobs() -> list[dict[str, Any]]:
+    def _normalize_token(value: str | None) -> str:
+        text = str(value or "").strip().lower()
+        return re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+
+    def _group_key(company_name: str | None, startup_slug: str | None) -> str:
+        if company_name:
+            token = _normalize_token(company_name)
+            if token:
+                return f"name:{token}"
+        if startup_slug:
+            token = _normalize_token(startup_slug)
+            if token:
+                return f"slug:{token}"
+        return "name:unknown"
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for entry in _list_jobs_for_ui():
+        job_id = entry.get("job_id")
+        raw_results = entry.get("results") or {}
+        if isinstance(raw_results, dict):
+            results = raw_results
+        elif db and hasattr(db, "_serialize"):
+            results = db._serialize(raw_results)  # type: ignore[attr-defined]
+        else:
+            results = raw_results
+        created_at = entry.get("created_at")
+        mode = entry.get("input_mode")
+        if not job_id or not isinstance(results, dict):
+            continue
+
+        extracted_runs: list[dict[str, Any]] = []
+        payload_mode = results.get("mode")
+        if payload_mode == "single":
+            company_name = results.get("company_name") or results.get("startup_slug") or job_id
+            startup_slug = results.get("startup_slug")
+            ranking = results.get("ranking_result") or {}
+            extracted_runs.append(
+                {
+                    "job_id_legacy": job_id,
+                    "company_key": startup_slug or company_name,
+                    "company_name": company_name,
+                    "startup_slug": startup_slug,
+                    "input_order": None,
+                    "decision": results.get("decision"),
+                    "total_score": results.get("total_score"),
+                    "composite_score": ranking.get("composite_score"),
+                    "bucket": ranking.get("bucket"),
+                    "mode": mode or payload_mode,
+                    "run_created_at": created_at,
+                    "result_payload": results,
+                }
+            )
+        else:
+            for summary_row in results.get("summary_rows") or []:
+                company_name = summary_row.get("company_name") or summary_row.get("startup_slug") or job_id
+                startup_slug = summary_row.get("startup_slug")
+                row_payload = {
+                    "mode": "single",
+                    "source_mode": payload_mode or "batch",
+                    "startup_slug": startup_slug,
+                    "company_name": company_name,
+                    "decision": summary_row.get("decision"),
+                    "total_score": summary_row.get("total_score"),
+                    "avg_pro": summary_row.get("avg_pro"),
+                    "avg_contra": summary_row.get("avg_contra"),
+                    "summary_rows": [summary_row],
+                    "argument_rows": [
+                        row for row in (results.get("argument_rows") or [])
+                        if (row.get("startup_slug") or "") == startup_slug
+                    ],
+                    "qa_provenance_rows": [
+                        row for row in (results.get("qa_provenance_rows") or [])
+                        if (row.get("startup_slug") or "") == startup_slug
+                    ],
+                    "founders": summary_row.get("founders") or [],
+                    "team_members": summary_row.get("team_members") or [],
+                    "ranking_result": {
+                        "rank": summary_row.get("rank"),
+                        "percentile": summary_row.get("percentile"),
+                        "composite_score": summary_row.get("composite_score"),
+                        "strategy_fit_score": summary_row.get("strategy_fit_score"),
+                        "team_score": summary_row.get("team_score"),
+                        "upside_score": summary_row.get("upside_score"),
+                        "bucket": summary_row.get("bucket"),
+                        "strategy_fit_summary": summary_row.get("strategy_fit_summary"),
+                        "team_summary": summary_row.get("team_summary"),
+                        "potential_summary": summary_row.get("potential_summary"),
+                        "key_points": summary_row.get("key_points"),
+                        "red_flags": summary_row.get("red_flags"),
+                    },
+                }
+                extracted_runs.append(
+                    {
+                        "job_id_legacy": job_id,
+                        "company_key": startup_slug or company_name,
+                        "company_name": company_name,
+                        "startup_slug": startup_slug,
+                        "input_order": summary_row.get("specter_input_order"),
+                        "decision": summary_row.get("decision"),
+                        "total_score": summary_row.get("total_score"),
+                        "composite_score": summary_row.get("composite_score"),
+                        "bucket": summary_row.get("bucket"),
+                        "mode": mode or payload_mode,
+                        "run_created_at": created_at,
+                        "result_payload": row_payload,
+                    }
+                )
+
+        for row in extracted_runs:
+            company_key = row.get("company_key")
+            if not company_key:
+                continue
+
+            group_key = _group_key(row.get("company_name"), row.get("startup_slug"))
+            run = {
+                "job_id": row.get("job_id_legacy"),
+                "startup_slug": row.get("startup_slug"),
+                "decision": row.get("decision"),
+                "total_score": row.get("total_score"),
+                "composite_score": row.get("composite_score"),
+                "bucket": row.get("bucket"),
+                "mode": row.get("mode"),
+                "input_order": row.get("input_order"),
+                "created_at": row.get("run_created_at") or created_at,
+                "results": row.get("result_payload"),
+            }
+            history = grouped.setdefault(
+                group_key,
+                {
+                    "company_key": company_key,
+                    "company_lookup_key": group_key,
+                    "company_name": row.get("company_name") or row.get("startup_slug") or company_key,
+                    "latest_score": row.get("composite_score"),
+                    "latest_total_score": row.get("total_score"),
+                    "latest_input_order": row.get("input_order"),
+                    "latest_run_at": row.get("run_created_at") or created_at,
+                    "runs": [],
+                },
+            )
+            history["runs"].append(run)
+
+    for history in grouped.values():
+        history["runs"].sort(key=lambda run: str(run.get("created_at") or ""), reverse=True)
+        if history["runs"]:
+            latest = history["runs"][0]
+            latest_result = latest.get("results") or {}
+            latest_summary = ((latest_result.get("summary_rows") or [{}]) or [{}])[0]
+            history["company_key"] = (
+                latest.get("startup_slug")
+                or latest_result.get("startup_slug")
+                or latest_summary.get("startup_slug")
+                or history.get("company_key")
+            )
+            history["company_name"] = (
+                latest_result.get("company_name")
+                or latest_summary.get("company_name")
+                or history.get("company_name")
+            )
+            history["latest_score"] = latest.get("composite_score")
+            history["latest_total_score"] = latest.get("total_score")
+            history["latest_input_order"] = latest.get("input_order")
+            history["latest_run_at"] = latest.get("created_at")
+
+    return sorted(
+        grouped.values(),
+        key=lambda item: (
+            str(item.get("latest_run_at") or ""),
+            str(item.get("company_name") or ""),
+        ),
+        reverse=True,
+    )
 
 
 def _check_session(session_id: str | None) -> bool:
@@ -2348,7 +2609,111 @@ async def list_company_runs(session_id: str | None = Cookie(default=None)):
     if not db or not db.is_configured():
         return {"companies": []}
 
-    return {"companies": db.list_company_histories()}
+    companies = db.list_company_histories(limit_runs=200)
+    if companies:
+        return {"companies": companies}
+
+    return {"companies": _company_histories_from_saved_jobs()}
+
+
+@app.get("/api/companies/{company_lookup_key}/chat")
+async def get_company_chat(
+    company_lookup_key: str,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=501, detail="Supabase not configured")
+
+    context = db.load_company_chat_context(company_lookup_key)
+    if not context:
+        raise HTTPException(status_code=404, detail="Company chat context not found")
+
+    chat_session = _get_or_create_company_chat_session(session_id, company_lookup_key)
+    _company, _store, _citation_map, meta = build_company_chat_store(context)
+    return CompanyChatResponse(
+        company_lookup_key=company_lookup_key,
+        transcript=[CompanyChatMessage(**item) for item in chat_session.get("transcript") or []],
+        run_count=meta["run_count"],
+        source_counts=meta["source_counts"],
+        web_search_enabled=True,
+        model_label=_company_chat_model_label(),
+    )
+
+
+@app.post("/api/companies/{company_lookup_key}/chat")
+async def post_company_chat(
+    company_lookup_key: str,
+    req: CompanyChatRequest,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=501, detail="Supabase not configured")
+
+    context = db.load_company_chat_context(company_lookup_key)
+    if not context:
+        raise HTTPException(status_code=404, detail="Company chat context not found")
+
+    chat_session = _get_or_create_company_chat_session(session_id, company_lookup_key)
+    transcript = list(chat_session.get("transcript") or [])
+    transcript.append(
+        CompanyChatMessage(
+            role="user",
+            content=req.message,
+            citations=[],
+            created_at=_now_iso(),
+        ).model_dump()
+    )
+    transient_session = {"transcript": transcript, "summary": chat_session.get("summary") or ""}
+    _compress_company_chat_session(transient_session)
+
+    result = await answer_company_question(
+        context=context,
+        transcript=transient_session["transcript"],
+        conversation_summary=transient_session["summary"],
+        question=req.message,
+        use_web_search=True,
+        active_job_id=req.active_job_id,
+    )
+
+    chat_session["summary"] = transient_session["summary"]
+    chat_session["transcript"] = transcript + [
+        CompanyChatMessage(
+            role="assistant",
+            content=result["answer"],
+            citations=result["citations"],
+            created_at=_now_iso(),
+        ).model_dump()
+    ]
+    _compress_company_chat_session(chat_session)
+
+    return {
+        "company_lookup_key": company_lookup_key,
+        "answer": result["answer"],
+        "citations": result["citations"],
+        "transcript": chat_session["transcript"],
+        "run_count": result["run_count"],
+        "source_counts": result["source_counts"],
+        "web_search_enabled": True,
+        "model_label": result["model_label"],
+        "used_run_ids": result["used_run_ids"],
+        "used_web_search": result["used_web_search"],
+        "web_search_query": result["web_search_query"],
+    }
+
+
+@app.delete("/api/companies/{company_lookup_key}/chat")
+async def delete_company_chat(
+    company_lookup_key: str,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _company_chat_sessions.pop(_chat_session_key(session_id, company_lookup_key), None)
+    return {"company_lookup_key": company_lookup_key, "cleared": True}
 
 
 @app.get("/api/companies/{company_name}/analyses")

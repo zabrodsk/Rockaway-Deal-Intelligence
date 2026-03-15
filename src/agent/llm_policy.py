@@ -118,9 +118,10 @@ def normalize_premium_phase_models(
 def normalize_phase_models(
     payload: dict[str, Any] | None,
 ) -> dict[UserSelectablePhase, dict[str, str]]:
-    normalized = default_phase_model_selections()
     if not isinstance(payload, dict):
-        return normalized
+        return default_phase_model_selections()
+
+    normalized: dict[UserSelectablePhase, dict[str, str]] = {}
 
     for phase in _USER_SELECTABLE_PHASES:
         raw = payload.get(phase)
@@ -130,6 +131,14 @@ def normalize_phase_models(
         model = str(raw.get("model") or "").strip()
         if provider and model:
             normalized[phase] = {"provider": provider, "model": model}
+
+    missing_phases = [phase for phase in _USER_SELECTABLE_PHASES if phase not in normalized]
+    if not missing_phases:
+        return normalized
+
+    defaults = default_phase_model_selections()
+    for phase in missing_phases:
+        normalized[phase] = dict(defaults[phase])
     return normalized
 
 
@@ -460,4 +469,7 @@ def premium_phase_options_payload() -> dict[str, dict[str, Any]]:
 
 
 def phase_model_defaults_payload() -> dict[UserSelectablePhase, dict[str, str]]:
-    return default_phase_model_selections()
+    try:
+        return default_phase_model_selections()
+    except ValueError:
+        return {}

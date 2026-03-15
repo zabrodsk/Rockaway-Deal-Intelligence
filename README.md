@@ -119,13 +119,13 @@ python -m web
 uvicorn web.app:app --reload --port 8000
 ```
 
-### Deploy via Cloudflare Tunnel
+### Share via Slim
 
 ```bash
 ./deploy.sh
 ```
 
-Runs the FastAPI server and exposes it via `cloudflared` tunnel. Use the printed URL and `APP_PASSWORD` from your `.env`.
+Runs the FastAPI server and exposes it via `slim share`. Use the printed URL and the app's `APP_PASSWORD` from your `.env`.
 
 ---
 
@@ -189,6 +189,8 @@ Copy `.env.example` to `.env` and set:
 | `LLM_PROVIDER` | ✓ | `gemini`, `openai`, `anthropic`, or `openrouter` |
 | `GOOGLE_API_KEY` | if Gemini | For `LLM_PROVIDER=gemini` |
 | `OPENAI_API_KEY` | if OpenAI | For `LLM_PROVIDER=openai` |
+| `OPENROUTER_API_KEY` | if OpenRouter | Preferred for `LLM_PROVIDER=openrouter` |
+| `OPENROUTER_BASE_URL` | optional | Defaults to `https://openrouter.ai/api/v1` |
 | `ANTHROPIC_API_KEY` | if Anthropic | For `LLM_PROVIDER=anthropic` |
 | `APP_PASSWORD` | optional | Web app login |
 | `PPLX_API_KEY` | optional | Perplexity for web search |
@@ -227,6 +229,17 @@ OPENAI_API_KEY=your_openai_api_key_here
 ```
 
 Available OpenAI models in the UI: `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-4.1-mini`
+
+**Example for OpenRouter:**
+
+```bash
+LLM_PROVIDER=openrouter
+MODEL_NAME=openrouter/hunter-alpha
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+Available OpenRouter models in the UI: `openai/gpt-5-mini`, `openai/gpt-5`, `openai/gpt-4.1-mini`, `openrouter/hunter-alpha`
 
 ---
 

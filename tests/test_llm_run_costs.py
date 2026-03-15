@@ -58,6 +58,7 @@ def test_model_catalog_validation_accepts_only_available_entries(monkeypatch) ->
 def test_available_models_payload_marks_availability(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "google")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     models = available_models_payload()
     gemini = next(item for item in models if item["model"] == "gemini-3.1-flash-lite-preview")
     assert {item["model"] for item in models} == {
@@ -67,6 +68,10 @@ def test_available_models_payload_marks_availability(monkeypatch) -> None:
         "gpt-5-mini",
         "gpt-5",
         "gpt-4.1-mini",
+        "openai/gpt-5-mini",
+        "openai/gpt-5",
+        "openai/gpt-4.1-mini",
+        "openrouter/hunter-alpha",
     }
 
     assert gemini["available"] is True
@@ -76,6 +81,11 @@ def test_available_models_payload_marks_availability(monkeypatch) -> None:
         item["available"] is False
         for item in models
         if item["provider"] == "openai"
+    )
+    assert all(
+        item["available"] is False
+        for item in models
+        if item["provider"] == "openrouter"
     )
     assert gemini["tier"] == "budget"
 
@@ -111,6 +121,7 @@ def test_build_pipeline_policy_resolves_cheap_and_premium(monkeypatch) -> None:
 def test_build_pipeline_policy_falls_back_between_claude_and_gpt5(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "google")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
 
     premium = build_pipeline_policy("premium", {"evaluation": "gpt5"})
@@ -188,6 +199,26 @@ def test_model_catalog_validation_accepts_openai_entries_when_key_present(monkey
     assert entry.model == "gpt-5-mini"
 
 
+def test_model_catalog_validation_accepts_openrouter_entries_when_key_present(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    entry = validate_requested_selection("openrouter", "openai/gpt-5-mini")
+
+    assert entry is not None
+    assert entry.provider == "openrouter"
+    assert entry.model == "openai/gpt-5-mini"
+
+
+def test_model_catalog_validation_accepts_hunter_alpha_when_key_present(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    entry = validate_requested_selection("openrouter", "openrouter/hunter-alpha")
+
+    assert entry is not None
+    assert entry.provider == "openrouter"
+    assert entry.model == "openrouter/hunter-alpha"
+
+
 def test_create_llm_prefers_run_context_selection_over_env(monkeypatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("MODEL_NAME", "gemini-3.1-flash-lite-preview")
@@ -215,6 +246,50 @@ def test_create_llm_prefers_run_context_selection_over_env(monkeypatch) -> None:
         "provider": "anthropic",
         "model": "claude-haiku-4-5-20251001",
     }
+
+
+def test_create_chat_llm_always_uses_fixed_gemini_model(monkeypatch) -> None:
+    called = {}
+
+    def fake_gemini(model, temperature, timeout_s, max_retries):
+        called["model"] = model
+        called["temperature"] = temperature
+        return object()
+
+    monkeypatch.setattr(llm_module, "_create_gemini", fake_gemini)
+    monkeypatch.setattr(llm_module, "wrap_llm", lambda runnable: runnable)
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("MODEL_NAME", "claude-haiku-4-5-20251001")
+
+    llm_module.create_chat_llm()
+
+    assert called["model"] == "gemini-3.1-flash-lite-preview"
+
+
+def test_create_llm_uses_openrouter_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("MODEL_NAME", "openai/gpt-5-mini")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    called = {}
+
+    def fake_openrouter(model, temperature, timeout_s, max_retries):
+        called["provider"] = "openrouter"
+        called["model"] = model
+        called["temperature"] = temperature
+        called["timeout_s"] = timeout_s
+        called["max_retries"] = max_retries
+        return object()
+
+    monkeypatch.setattr(llm_module, "_create_openrouter", fake_openrouter)
+    monkeypatch.setattr(llm_module, "wrap_llm", lambda runnable: runnable)
+
+    llm_module.create_llm(temperature=0.3)
+
+    assert called["provider"] == "openrouter"
+    assert called["model"] == "openai/gpt-5-mini"
 
 
 def test_use_phase_llm_temporarily_overrides_selection() -> None:
@@ -435,6 +510,7 @@ def test_api_config_exposes_default_and_available_models(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     with TestClient(app) as client:
         _login(client)
@@ -446,7 +522,7 @@ def test_api_config_exposes_default_and_available_models(monkeypatch) -> None:
     assert payload["default_llm"]["model"] == "gemini-3.1-flash-lite-preview"
     assert payload["default_llm"]["label"] == "Gemini 3.1 Flash Lite"
     providers = {item["provider"] for item in payload["available_models"]}
-    assert providers == {"gemini", "anthropic", "openai"}
+    assert providers == {"gemini", "anthropic", "openai", "openrouter"}
     assert any(item["model"] == "gemini-3.1-flash-lite-preview" and item["available"] for item in payload["available_models"])
     assert any(item["model"] == "gpt-5-mini" and item["available"] for item in payload["available_models"])
     assert payload["phase_model_defaults"] == phase_model_defaults_payload()
