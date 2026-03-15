@@ -3361,6 +3361,7 @@
     </a>
     <div class="header-right">
       <button type="button" class="btn-ghost is-active" aria-current="page">Analysis</button>
+      <button type="button" class="btn-ghost" id="saved-jobs-open-analysis">Companies</button>
       <button type="button" class="btn-ghost" id="analysis-refresh-btn">Refresh</button>
       <button class="btn-ghost" id="new-analysis-btn-history">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -6916,7 +6917,7 @@ $('#progress-log-modal-close').addEventListener('click', hideProgressLogModal);
 $('#progress-log-modal-overlay').addEventListener('click', (e) => {
   if (e.target === $('#progress-log-modal-overlay')) hideProgressLogModal();
 });
-['#saved-jobs-open-upload', '#saved-jobs-open-processing', '#saved-jobs-open-results'].forEach((sel) => {
+['#saved-jobs-open-upload', '#saved-jobs-open-processing', '#saved-jobs-open-results', '#saved-jobs-open-analysis'].forEach((sel) => {
   const el = $(sel);
   if (el) el.addEventListener('click', openCompaniesPage);
 });
