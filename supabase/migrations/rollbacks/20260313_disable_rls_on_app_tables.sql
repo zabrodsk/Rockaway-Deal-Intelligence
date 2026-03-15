@@ -1,0 +1,20 @@
+-- Manual rollback script for the staged RLS rollout.
+-- Do not apply with `supabase db push`.
+-- Run only the phase you need to roll back.
+
+-- Phase 2 rollback
+ALTER TABLE jobs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE companies DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pitch_decks DISABLE ROW LEVEL SECURITY;
+ALTER TABLE chunks DISABLE ROW LEVEL SECURITY;
+ALTER TABLE analyses DISABLE ROW LEVEL SECURITY;
+ALTER TABLE company_runs DISABLE ROW LEVEL SECURITY;
+
+-- Phase 1 rollback
+ALTER TABLE analysis_events DISABLE ROW LEVEL SECURITY;
+ALTER TABLE job_controls DISABLE ROW LEVEL SECURITY;
+ALTER TABLE job_status_history DISABLE ROW LEVEL SECURITY;
+ALTER TABLE analysis_errors DISABLE ROW LEVEL SECURITY;
+ALTER TABLE source_files DISABLE ROW LEVEL SECURITY;
+ALTER TABLE model_executions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE person_profile_jobs DISABLE ROW LEVEL SECURITY;
