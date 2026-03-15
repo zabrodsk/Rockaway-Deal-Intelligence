@@ -3559,8 +3559,11 @@ let currentResults = null;
 let uploadedFiles = [];
 let inputMode = 'pitchdeck';
 let inputModeTouched = false;
+const APP_STATE_VERSION = '2026-03-15-analysis-state-v2';
+const APP_STATE_VERSION_KEY = 'app_state_version';
 const ACTIVE_JOB_KEY = 'active_job_id';
-const RECENT_RUNS_KEY = 'recent_runs_v1';
+const LEGACY_RECENT_RUNS_KEYS = ['recent_runs_v1'];
+const RECENT_RUNS_KEY = 'recent_runs_v2';
 const VC_STRATEGY_KEY = 'vc_investment_strategy';
 const PERSON_INTEL_CACHE_KEY = 'person_intel_cache_v3_harvest_only';
 const SHOW_PRO_CONTRA_ARGUMENTS = true;
@@ -3604,6 +3607,23 @@ let selectedPhaseModelKeys = {};
 let analysisConfigLoadState = 'idle';
 let analysisFocusJobId = null;
 let analysisFocusClearTimer = null;
+
+function migrateClientState() {
+  try {
+    const existingVersion = localStorage.getItem(APP_STATE_VERSION_KEY);
+    if (existingVersion === APP_STATE_VERSION) return;
+    for (const key of LEGACY_RECENT_RUNS_KEYS) {
+      localStorage.removeItem(key);
+    }
+    localStorage.removeItem(RECENT_RUNS_KEY);
+    localStorage.removeItem(ACTIVE_JOB_KEY);
+    localStorage.setItem(APP_STATE_VERSION_KEY, APP_STATE_VERSION);
+  } catch (_) {
+    // Ignore localStorage migration issues; app can still run without cached state.
+  }
+}
+
+migrateClientState();
 
 function _finalizeVisibleScreens(activeId) {
   $$('.screen').forEach((screen) => {
