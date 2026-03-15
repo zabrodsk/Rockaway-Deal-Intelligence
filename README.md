@@ -141,6 +141,29 @@ Safe rollout:
 - Enable the worker-backed Specter path with `ENABLE_SPECTER_WORKER_SERVICE=true`
 - Leave the flag unset or `false` to keep the current in-web Specter fallback
 
+The worker polls the queue on a configurable interval via
+`SPECTER_WORKER_POLL_SECONDS`. The code default is `5` seconds; the current
+Railway production worker overrides this to `10` seconds to reduce idle polling
+noise and network chatter.
+
+### Railway production layout
+
+Railway runs the same image in two service roles:
+
+- `startup-ranker-web` starts `python -m agent.railway_service` with `SERVICE_ROLE=web`
+- `startup-ranker-worker` starts `python -m agent.railway_service` with `SERVICE_ROLE=worker`
+
+Current production behavior:
+
+- `ENABLE_SPECTER_WORKER_SERVICE=true` on web, so Specter runs queue to the dedicated worker
+- `RESTART_ON_IDLE_AFTER_ANALYSIS=true` on web, so the web process can recycle after completed analyses and reclaim idle memory
+- `SPECTER_WORKER_POLL_SECONDS=10` on worker, to reduce idle queue polling overhead
+
+Worker-backed runs only expose saved results once the terminal batch snapshot has
+been persisted. While a run is still active, `/api/analyses/<job_id>` returns
+`409 Conflict` instead of serving partial per-company results as if the batch
+were complete.
+
 ### Deploy via Cloudflare Tunnel
 
 ```bash
@@ -223,7 +246,8 @@ Copy `.env.example` to `.env` and set:
 | `SUPABASE_URL` | optional | Supabase project URL for persistent storage |
 | `SUPABASE_SERVICE_ROLE_KEY` | optional | Supabase service-role key |
 | `ENABLE_SPECTER_WORKER_SERVICE` | optional | Queue Specter runs for the dedicated worker service instead of executing them in the web process |
-| `SPECTER_WORKER_POLL_SECONDS` | optional | Poll interval for the dedicated Specter worker (default: `5`) |
+| `SPECTER_WORKER_POLL_SECONDS` | optional | Poll interval for the dedicated Specter worker (code default: `5`; current Railway production override: `10`) |
+| `RESTART_ON_IDLE_AFTER_ANALYSIS` | optional | When `true`, the web service can restart after completed analyses have been persisted/served so idle memory is reclaimed |
 | `LANGSMITH_API_KEY` | optional | LangSmith tracing |
 
 **Example for Gemini (free tier):**

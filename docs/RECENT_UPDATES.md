@@ -60,6 +60,32 @@ Improved detection of Specter company + people CSV/Excel pairs:
 
 ---
 
+## Worker-Backed Specter Hardening (Production)
+
+Recent production work focused on making the dedicated Specter worker path
+behave consistently across the worker, the saved-job overview, and the results
+screen.
+
+- **Newest queued jobs first** — The worker now prefers the newest queued
+  Specter jobs when claiming work, avoiding starvation behind old rows.
+- **Batch snapshots only** — Saved-run loading now treats only `analyses` rows
+  with `company_id IS NULL` as terminal batch snapshots. Per-company rows no
+  longer make a batch look complete early.
+- **No early result opening** — Worker-backed runs return `409 Conflict` from
+  `/api/analyses/<job_id>` while still active, instead of serving partial
+  persisted company results.
+- **Overview consistency** — The Analysis overview no longer promotes
+  `has_results` to `DONE` on the client side for active worker-backed runs.
+- **Stale worker detection** — Saved runs with stale worker heartbeats are
+  marked interrupted rather than remaining indefinitely queued/running.
+- **Idle memory reclaim** — Railway web production now uses
+  `RESTART_ON_IDLE_AFTER_ANALYSIS=true` so the web process can recycle after
+  terminal analyses and reclaim idle RSS.
+- **Lower idle polling cost** — Railway worker production now uses
+  `SPECTER_WORKER_POLL_SECONDS=10` to reduce idle polling overhead.
+
+---
+
 ## Files Changed (v0.0.6)
 
 | File | Summary |
