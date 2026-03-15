@@ -5,6 +5,15 @@ from fastapi.testclient import TestClient
 from web.app import app
 
 
+def test_person_profile_job_status_model_instantiates() -> None:
+    from web.app import PersonProfileJobStatus
+
+    status = PersonProfileJobStatus(job_id="job-123", status="pending")
+
+    assert status.job_id == "job-123"
+    assert status.status == "pending"
+
+
 def test_person_profile_job_lifecycle(monkeypatch) -> None:
     from web import app as web_app_module
     from agent.pipeline.state.schemas import (
