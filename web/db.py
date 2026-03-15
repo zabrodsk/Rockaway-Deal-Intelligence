@@ -2006,6 +2006,7 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
             client.table("analyses")
             .select("job_id_legacy, status, results_payload, created_at")
             .in_("job_id_legacy", job_ids)
+            .is_("company_id", "null")
             .order("created_at", desc=True)
             .limit(max(limit * 4, 100))
             .execute()

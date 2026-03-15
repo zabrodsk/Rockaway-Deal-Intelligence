@@ -603,6 +603,10 @@ def test_list_saved_jobs_prefers_terminal_analysis_status_over_stale_running_sta
             self._filters[key] = values
             return self
 
+        def is_(self, key, value):
+            self._filters[key] = value
+            return self
+
         def execute(self):
             if self.table_name == "jobs":
                 return FakeResponse(
@@ -664,6 +668,89 @@ def test_list_saved_jobs_prefers_terminal_analysis_status_over_stale_running_sta
     ]
 
 
+def test_list_saved_jobs_ignores_company_level_analysis_rows(monkeypatch) -> None:
+    import web.db as web_db
+
+    class FakeResponse:
+        def __init__(self, data):
+            self.data = data
+
+    class FakeQuery:
+        def __init__(self, table_name: str):
+            self.table_name = table_name
+            self.filters: list[tuple[str, str, object]] = []
+
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def order(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def in_(self, key, values):
+            self.filters.append(("in", key, tuple(values)))
+            return self
+
+        def is_(self, key, value):
+            self.filters.append(("is", key, value))
+            return self
+
+        def execute(self):
+            if self.table_name == "jobs":
+                return FakeResponse(
+                    [
+                        {
+                            "job_id_legacy": "job-123",
+                            "input_mode": "specter",
+                            "use_web_search": True,
+                            "created_at": "2026-03-13T10:00:00Z",
+                            "run_config": {
+                                "worker_state": {
+                                    "status": "running",
+                                    "progress": "Worker running — alpha (2/6)",
+                                }
+                            },
+                        }
+                    ]
+                )
+            if self.table_name == "job_status_history":
+                return FakeResponse([])
+            if self.table_name == "analyses":
+                assert ("is", "company_id", "null") in self.filters
+                return FakeResponse([])
+            raise AssertionError(f"Unexpected table lookup: {self.table_name}")
+
+    class FakeClient:
+        def table(self, table_name: str):
+            return FakeQuery(table_name)
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: FakeClient())
+
+    rows = web_db.list_saved_jobs(limit=10)
+
+    assert rows == [
+        {
+            "job_id": "job-123",
+            "status": "running",
+            "progress": "Worker running — alpha (2/6)",
+            "created_at": "2026-03-13T10:00:00Z",
+            "input_mode": "specter",
+            "use_web_search": True,
+            "run_config": {
+                "worker_state": {
+                    "status": "running",
+                    "progress": "Worker running — alpha (2/6)",
+                }
+            },
+            "results": None,
+            "has_results": False,
+            "worker_active": True,
+        }
+    ]
+
+
 def test_list_saved_jobs_marks_worker_backed_runs_active(monkeypatch) -> None:
     import web.db as web_db
 
@@ -685,6 +772,9 @@ def test_list_saved_jobs_marks_worker_backed_runs_active(monkeypatch) -> None:
             return self
 
         def in_(self, *_args, **_kwargs):
+            return self
+
+        def is_(self, *_args, **_kwargs):
             return self
 
         def execute(self):
@@ -761,6 +851,9 @@ def test_list_saved_jobs_marks_stale_worker_execution_interrupted(monkeypatch) -
             return self
 
         def in_(self, *_args, **_kwargs):
+            return self
+
+        def is_(self, *_args, **_kwargs):
             return self
 
         def execute(self):
@@ -844,6 +937,9 @@ def test_list_saved_jobs_keeps_recent_queued_worker_job_active(monkeypatch) -> N
             return self
 
         def in_(self, *_args, **_kwargs):
+            return self
+
+        def is_(self, *_args, **_kwargs):
             return self
 
         def execute(self):

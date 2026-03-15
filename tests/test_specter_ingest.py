@@ -1797,6 +1797,46 @@ def test_list_jobs_for_ui_marks_persisted_running_without_live_job_as_interrupte
     }
 
 
+def test_list_jobs_for_ui_keeps_partial_worker_backed_results_non_terminal(monkeypatch) -> None:
+    job_id = "job-overview-partial-active"
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            list_saved_jobs=lambda: [
+                {
+                    "job_id": job_id,
+                    "status": "running",
+                    "progress": "Worker running — alpha (3/6)",
+                    "created_at": "2026-03-13T10:05:00Z",
+                    "input_mode": "specter",
+                    "use_web_search": True,
+                    "results": None,
+                    "has_results": True,
+                    "worker_active": True,
+                }
+            ],
+        ),
+    )
+
+    rows = web_app._list_jobs_for_ui()
+    row = next(item for item in rows if item["job_id"] == job_id)
+    assert row == {
+        "job_id": job_id,
+        "status": "running",
+        "progress": "Worker running — alpha (3/6)",
+        "created_at": "2026-03-13T10:05:00Z",
+        "input_mode": "specter",
+        "use_web_search": True,
+        "results": None,
+        "has_results": True,
+        "can_open_results": False,
+        "can_view_log": True,
+        "llm": web_app._get_llm_display(),
+    }
+
+
 def test_batch_chunking_config_enables_for_large_anthropic_batch() -> None:
     job_id = "job-chunking-config"
     web_app._results_cache[job_id] = {

@@ -4224,7 +4224,7 @@ function mergeSavedAndRecentRuns() {
     if (!run?.jobId) continue;
     const existing = merged.get(run.jobId) || {};
     const savedHasResults = existing.hasResults === true;
-    const savedTerminal = savedHasResults || isTerminalRunStatus(existing.status);
+    const savedTerminal = isTerminalRunStatus(existing.status);
     const recentTerminal = isTerminalRunStatus(run.status);
     const preferSavedTerminal = savedTerminal && !recentTerminal;
 
@@ -4242,9 +4242,6 @@ function mergeSavedAndRecentRuns() {
       mergedRun.status = savedHasResults ? 'done' : (existing.status || 'done');
       mergedRun.progress = existing.progress || run.progress || 'Analysis complete';
       mergedRun.results = existing.results || run.results || null;
-    } else if (mergedRun.hasResults && !isTerminalRunStatus(mergedRun.status)) {
-      mergedRun.status = 'done';
-      mergedRun.progress = mergedRun.progress || 'Analysis complete';
     }
 
     merged.set(run.jobId, mergedRun);
@@ -4264,10 +4261,8 @@ function renderSavedJobCards(runs, { limit = null, emptyText = 'No saved jobs fo
   }
 
   return rows.map((run) => {
-    const status = (run.hasResults === true && !isTerminalRunStatus(run.status))
-      ? 'done'
-      : (run.status || 'pending');
-    const canOpenResults = run.canOpenResults === true || status === 'done';
+    const status = run.status || 'pending';
+    const canOpenResults = run.canOpenResults === true;
     const canViewLog = run.canViewLog === true;
     const isUnavailable = !canOpenResults && !canViewLog;
     const actionLabel = canOpenResults
@@ -4478,7 +4473,7 @@ function renderAnalysisHistoryScreen() {
         <div class="analysis-history-head">
           <div class="analysis-history-title">Analysis</div>
         </div>
-        <div class="saved-jobs-empty">Loading saved analyses...</div>
+        ${renderAnalysesLoadingState()}
       </div>
     `;
     return;
@@ -4715,12 +4710,12 @@ function getCompaniesContentEl() {
   return $('#companies-screen-content');
 }
 
-function renderCompaniesLoadingState() {
-  const letters = 'Loading'.split('').map((letter, idx) => (
+function renderAnimatedLoadingState(label = 'Loading', ariaLabel = 'Content is loading') {
+  const letters = label.split('').map((letter, idx) => (
     `<span class="loading-lines-letter" style="animation-delay:${(0.1 + idx * 0.105).toFixed(3)}s">${letter}</span>`
   )).join('');
   return `
-    <div class="saved-jobs-empty loading-state" role="status" aria-live="polite" aria-label="Database is loading">
+    <div class="saved-jobs-empty loading-state" role="status" aria-live="polite" aria-label="${escapeHtml(ariaLabel)}">
       <div class="loading-lines">
         ${letters}
         <div class="loading-lines-backdrop" aria-hidden="true">
@@ -4729,6 +4724,14 @@ function renderCompaniesLoadingState() {
       </div>
     </div>
   `;
+}
+
+function renderCompaniesLoadingState() {
+  return renderAnimatedLoadingState('Loading', 'Companies are loading');
+}
+
+function renderAnalysesLoadingState() {
+  return renderAnimatedLoadingState('Loading', 'Saved analyses are loading');
 }
 
 function renderSavedCompaniesWindow() {
@@ -5701,7 +5704,7 @@ async function openSavedRun(jobId) {
   if (!jobId || jobId === 'null' || jobId === 'undefined') return;
   const run = savedJobsCache.find((r) => r.jobId === jobId)
     || mergeSavedAndRecentRuns().find((r) => r.jobId === jobId);
-  const canOpenResults = run?.canOpenResults === true || run?.hasResults === true;
+  const canOpenResults = run?.canOpenResults === true;
   if (!canOpenResults) {
     return;
   }
