@@ -1235,6 +1235,55 @@ def test_get_analysis_rejects_partial_persisted_results_for_active_job(monkeypat
     assert exc_info.value.detail == "Analysis is still in progress."
 
 
+def test_get_analysis_prefers_terminal_saved_job_over_stale_in_memory_status(monkeypatch) -> None:
+    job_id = "job-worker-terminal-saved"
+    final_results = {
+        "mode": "batch",
+        "summary_rows": [{"startup_slug": "alpha", "company_name": "Alpha"}],
+        "job_status": "done",
+        "job_message": "Analysis complete — 1/1 companies ranked",
+    }
+
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+    web_app._jobs[job_id] = web_app.AnalysisStatus(
+        job_id=job_id,
+        status="running",
+        progress="Worker evaluating alpha (1/1)",
+        progress_log=[],
+    )
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            load_saved_job=lambda current_job_id: {
+                "job_id": job_id,
+                "status": "done",
+                "progress": "Analysis complete — 1/1 companies ranked",
+                "has_results": True,
+            }
+            if current_job_id == job_id
+            else None,
+            load_job_status=lambda current_job_id: {
+                "status": "running",
+                "progress": "Worker evaluating alpha (1/1)",
+            }
+            if current_job_id == job_id
+            else None,
+        ),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_load_persisted_job_results",
+        lambda current_job_id, preferred_mode=None: {"results": final_results} if current_job_id == job_id else None,
+    )
+
+    payload = asyncio.run(web_app.get_analysis(job_id, response=Response(), session_id="session"))
+
+    assert payload == {"job_id": job_id, "results": final_results}
+    assert web_app._jobs[job_id].status == "done"
+
+
 def test_start_analysis_queues_worker_backed_specter_job_without_starting_thread(tmp_path: Path, monkeypatch) -> None:
     job_id = "job-worker-start"
     original_flag = web_app.ENABLE_SPECTER_WORKER_SERVICE
