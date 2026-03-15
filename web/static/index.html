@@ -4299,7 +4299,10 @@ function mergeSavedAndRecentRuns() {
   for (const run of loadRecentRuns()) {
     if (!run?.jobId) continue;
     const existing = merged.get(run.jobId) || {};
+    const hasSavedRun = Boolean(existing.jobId);
     const savedHasResults = existing.hasResults === true;
+    const savedCanOpenResults = existing.canOpenResults === true;
+    const savedCanViewLog = existing.canViewLog === true;
     const savedTerminal = isTerminalRunStatus(existing.status);
     const savedActive = existing.canViewLog === true || isLiveRunStatus(existing.status);
     const recentTerminal = isTerminalRunStatus(run.status);
@@ -4313,6 +4316,8 @@ function mergeSavedAndRecentRuns() {
       updatedAt: run.updatedAt || existing.updatedAt || null,
       results: run.results || existing.results || null,
       hasResults: savedHasResults || recentHasResults,
+      canOpenResults: hasSavedRun ? savedCanOpenResults : run.canOpenResults === true,
+      canViewLog: hasSavedRun ? savedCanViewLog : run.canViewLog === true,
       llm: existing.llm || run.llm || null,
       runName: run.runName || existing.runName || null,
     };
@@ -4322,12 +4327,14 @@ function mergeSavedAndRecentRuns() {
       mergedRun.progress = existing.progress || run.progress || 'Analysis in progress';
       mergedRun.results = existing.results || null;
       mergedRun.hasResults = savedHasResults;
-      mergedRun.canOpenResults = existing.canOpenResults === true;
-      mergedRun.canViewLog = existing.canViewLog === true;
+      mergedRun.canOpenResults = savedCanOpenResults;
+      mergedRun.canViewLog = savedCanViewLog;
     } else if (preferSavedTerminal) {
       mergedRun.status = savedHasResults ? 'done' : (existing.status || 'done');
       mergedRun.progress = existing.progress || run.progress || 'Analysis complete';
       mergedRun.results = existing.results || run.results || null;
+      mergedRun.canOpenResults = savedCanOpenResults;
+      mergedRun.canViewLog = savedCanViewLog;
     }
 
     merged.set(run.jobId, mergedRun);
