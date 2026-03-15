@@ -1043,6 +1043,50 @@ def test_status_endpoint_marks_persisted_running_job_as_interrupted_when_not_liv
     assert payload["progress_log"] == []
 
 
+def test_status_endpoint_does_not_return_partial_persisted_results_for_active_worker_job(monkeypatch) -> None:
+    job_id = "job-worker-partial-status"
+    partial_results = {
+        "mode": "batch",
+        "summary_rows": [{"startup_slug": "alpha", "company_name": "Alpha"}],
+        "job_status": "running",
+        "job_message": "Worker evaluating beta (2/6)",
+    }
+
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            load_job_status=lambda current_job_id: {
+                "status": "running",
+                "progress": "Worker evaluating beta (2/6)",
+            }
+            if current_job_id == job_id
+            else None,
+            load_saved_job=lambda current_job_id: None,
+            load_analysis_events=lambda current_job_id, limit=200: [
+                "Queued for worker...",
+                "Worker evaluating beta (2/6)",
+            ]
+            if current_job_id == job_id
+            else [],
+        ),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_load_persisted_job_results",
+        lambda current_job_id, preferred_mode=None: {"results": partial_results} if current_job_id == job_id else None,
+    )
+
+    payload = asyncio.run(web_app.get_status(job_id, response=Response(), session_id="session"))
+
+    assert payload["status"] == "running"
+    assert payload["progress"] == "Worker evaluating beta (2/6)"
+    assert payload["results"] is None
+    assert payload["progress_log"] == ["Queued for worker...", "Worker evaluating beta (2/6)"]
+
+
 def test_status_endpoint_marks_saved_job_without_status_history_as_interrupted(monkeypatch) -> None:
     job_id = "job-saved-only"
     monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
@@ -1070,6 +1114,42 @@ def test_status_endpoint_marks_saved_job_without_status_history_as_interrupted(m
     assert payload["progress"] == "Run interrupted before completion."
     assert payload["results"] is None
     assert payload["llm"] == "Gemini 3.1 Flash Lite"
+
+
+def test_get_analysis_rejects_partial_persisted_results_for_active_job(monkeypatch) -> None:
+    job_id = "job-worker-partial-analysis"
+    partial_results = {
+        "mode": "batch",
+        "summary_rows": [{"startup_slug": "alpha", "company_name": "Alpha"}],
+        "job_status": "running",
+        "job_message": "Worker evaluating beta (2/6)",
+    }
+
+    monkeypatch.setattr(web_app, "_check_session", lambda session_id: True)
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            load_job_status=lambda current_job_id: {
+                "status": "running",
+                "progress": "Worker evaluating beta (2/6)",
+            }
+            if current_job_id == job_id
+            else None,
+        ),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_load_persisted_job_results",
+        lambda current_job_id, preferred_mode=None: {"results": partial_results} if current_job_id == job_id else None,
+    )
+
+    with pytest.raises(web_app.HTTPException) as exc_info:
+        asyncio.run(web_app.get_analysis(job_id, response=Response(), session_id="session"))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Analysis is still in progress."
 
 
 def test_start_analysis_queues_worker_backed_specter_job_without_starting_thread(tmp_path: Path, monkeypatch) -> None:

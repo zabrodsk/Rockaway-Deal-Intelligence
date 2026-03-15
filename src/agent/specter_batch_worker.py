@@ -29,6 +29,10 @@ EVENT_PREFIX = "__SPECTER_COMPANY_EVENT__"
 POLL_SECONDS = max(1, int(os.getenv("SPECTER_WORKER_POLL_SECONDS", "5")))
 
 
+def _log(message: str) -> None:
+    print(f"[specter-worker] {message}", flush=True)
+
+
 def _worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
@@ -194,6 +198,7 @@ async def _run_company_subprocess(
 ) -> tuple[int, int]:
     company_name = str(company_descriptor.get("name") or company_descriptor.get("slug") or "company")
     prefix = f"Worker evaluating {company_name} ({absolute_index}/{total_companies})"
+    _log(f"{job_id}: starting company {absolute_index}/{total_companies} ({company_name})")
     db.insert_analysis_event(job_id, message=f"{prefix} — starting", event_type="worker_company", stage="company")
     db.heartbeat_specter_worker_job(
         job_id,
@@ -284,9 +289,14 @@ async def _run_company_subprocess(
                         company_failed = True
                         failed_companies += 1
                         message = f"{prefix} — {status}: {str(event.get('error') or '').strip()}"
+                        _log(f"{job_id}: company {absolute_index}/{total_companies} finished with status={status}")
                     else:
                         completed_companies += 1
                         message = f"Partial results updated — {completed_companies}/{total_companies} companies completed."
+                        _log(
+                            f"{job_id}: company {absolute_index}/{total_companies} completed "
+                            f"(completed={completed_companies}, failed={failed_companies})"
+                        )
                     db.insert_analysis_event(job_id, message=message, event_type="company_complete", stage="company", payload=event)
                     db.heartbeat_specter_worker_job(
                         job_id,
@@ -308,6 +318,7 @@ async def _run_company_subprocess(
                 f"Specter company worker exited with code {return_code} "
                 f"for company {absolute_index}/{total_companies}."
             )
+            _log(f"{job_id}: company {absolute_index}/{total_companies} worker exited with code {return_code}")
             _persist_subprocess_failure(
                 job_id,
                 companies_csv=companies_csv,
@@ -340,6 +351,7 @@ async def _process_job(job: dict[str, Any], worker_id: str) -> None:
     job_id = str(job.get("job_id") or "")
     if not job_id:
         return
+    _log(f"{job_id}: claimed by {worker_id}")
 
     run_config = dict(job.get("run_config") or {})
     versions = {
@@ -354,6 +366,7 @@ async def _process_job(job: dict[str, Any], worker_id: str) -> None:
     work_dir: Path | None = None
     try:
         work_dir, companies_csv, people_csv = _download_worker_inputs(job_id, run_config)
+        _log(f"{job_id}: downloaded worker inputs")
         descriptors = list_specter_companies(companies_csv)
         max_startups = web_app._parse_max_startups_from_instructions(run_config.get("instructions"))
         if max_startups is not None:
@@ -363,9 +376,14 @@ async def _process_job(job: dict[str, Any], worker_id: str) -> None:
         total_companies = len(descriptors)
         if total_companies <= 0:
             raise RuntimeError("No companies found in Specter data.")
+        _log(
+            f"{job_id}: loaded {total_companies} company descriptors "
+            f"(already_completed={len(completed_keys)}, failed={failed_companies})"
+        )
 
         if completed_keys:
             message = f"Resuming worker batch — {len(completed_keys)}/{total_companies} companies already persisted."
+            _log(f"{job_id}: resuming with {len(completed_keys)} completed companies")
             db.insert_analysis_event(job_id, message=message, event_type="worker_resume", stage="resume")
             db.heartbeat_specter_worker_job(
                 job_id,
@@ -380,6 +398,7 @@ async def _process_job(job: dict[str, Any], worker_id: str) -> None:
         for absolute_index, descriptor in enumerate(descriptors, start=1):
             company_key = _normalize_company_key(descriptor.get("name"), descriptor.get("slug"))
             if company_key in completed_keys:
+                _log(f"{job_id}: skipping already persisted company {absolute_index}/{total_companies}")
                 continue
             completed_companies, failed_companies = await _run_company_subprocess(
                 job_id=job_id,
@@ -401,6 +420,7 @@ async def _process_job(job: dict[str, Any], worker_id: str) -> None:
             gc.collect()
 
         db.insert_analysis_event(job_id, message="Finalizing batch results...", event_type="worker_finalizing", stage="finalize")
+        _log(f"{job_id}: finalizing batch results")
         db.heartbeat_specter_worker_job(
             job_id,
             status="finalizing",
@@ -446,7 +466,9 @@ async def _process_job(job: dict[str, Any], worker_id: str) -> None:
             total_companies=total_companies,
         )
         db.insert_analysis_event(job_id, message="Finalizing complete.", event_type="worker_done", stage="finalize")
+        _log(f"{job_id}: finalization complete")
     except Exception as exc:
+        _log(f"{job_id}: worker error {type(exc).__name__}: {exc}")
         traceback.print_exc()
         message = str(exc)[:1000]
         db.insert_analysis_error(job_id, message=message, stage="specter_batch_worker", error_type=type(exc).__name__)
@@ -457,22 +479,36 @@ async def _process_job(job: dict[str, Any], worker_id: str) -> None:
             shutil.rmtree(work_dir, ignore_errors=True)
         web_app._results_cache.pop(job_id, None)
         gc.collect()
+        _log(f"{job_id}: cleanup complete")
 
 
 async def _worker_loop(run_once: bool = False) -> None:
     worker_id = _worker_id()
+    _log(f"worker loop starting (worker_id={worker_id}, poll_seconds={POLL_SECONDS}, run_once={run_once})")
+    idle_polls = 0
     while True:
         claimed = False
-        for candidate in db.list_claimable_specter_worker_jobs(limit=5):
+        candidates = db.list_claimable_specter_worker_jobs(limit=5)
+        if candidates:
+            idle_polls = 0
+            candidate_ids = ", ".join(str(candidate.get("job_id") or "?") for candidate in candidates)
+            _log(f"found {len(candidates)} claimable job(s): {candidate_ids}")
+        for candidate in candidates:
             job = db.claim_specter_worker_job(str(candidate.get("job_id") or ""), worker_id=worker_id)
             if not job:
+                _log(f"claim skipped for job {candidate.get('job_id')}")
                 continue
             claimed = True
+            _log(f"claim succeeded for job {job.get('job_id')}")
             await _process_job(job, worker_id)
             break
         if run_once:
+            _log("run-once worker loop finished")
             return
         if not claimed:
+            idle_polls += 1
+            if idle_polls == 1 or idle_polls % 12 == 0:
+                _log("no claimable jobs found; sleeping")
             await asyncio.sleep(POLL_SECONDS)
 
 
@@ -481,7 +517,7 @@ def main() -> int:
     parser.add_argument("--run-once", action="store_true")
     args = parser.parse_args()
     if not db.is_configured():
-        print("Supabase is not configured; Specter worker cannot start.", file=sys.stderr)
+        _log("Supabase is not configured; worker cannot start")
         return 1
     asyncio.run(_worker_loop(run_once=args.run_once))
     return 0

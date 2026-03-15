@@ -138,10 +138,25 @@ try:
     RESTART_ON_IDLE_DELAY_SECONDS = max(5, int(os.getenv("RESTART_ON_IDLE_DELAY_SECONDS", "15")))
 except Exception:
     RESTART_ON_IDLE_DELAY_SECONDS = 15
+try:
+    JOBS_OVERVIEW_CACHE_SECONDS = max(1, int(os.getenv("JOBS_OVERVIEW_CACHE_SECONDS", "5")))
+except Exception:
+    JOBS_OVERVIEW_CACHE_SECONDS = 5
+try:
+    COMPANY_RUNS_CACHE_SECONDS = max(5, int(os.getenv("COMPANY_RUNS_CACHE_SECONDS", "30")))
+except Exception:
+    COMPANY_RUNS_CACHE_SECONDS = 30
+try:
+    COMPANY_RUNS_OVERVIEW_LIMIT = max(50, int(os.getenv("COMPANY_RUNS_OVERVIEW_LIMIT", "250")))
+except Exception:
+    COMPANY_RUNS_OVERVIEW_LIMIT = 250
 _sessions: dict[str, float] = {}
 _results_cache: dict[str, dict[str, Any]] = {}
 _restart_timer: threading.Timer | None = None
 _restart_lock = threading.Lock()
+_overview_cache_lock = threading.Lock()
+_jobs_overview_cache: dict[str, Any] = {"expires_at": 0.0, "payload": None}
+_company_runs_cache: dict[str, Any] = {"expires_at": 0.0, "payload": None}
 SPECTER_CHUNK_EVENT_PREFIX = "__SPECTER_CHUNK_EVENT__"
 SPECTER_COMPANY_EVENT_PREFIX = "__SPECTER_COMPANY_EVENT__"
 
@@ -814,6 +829,8 @@ class PersonProfileJobStatus(BaseModel):
     error: str | None = None
 
 
+PersonProfileJobStatus.model_rebuild()
+
 _person_jobs: dict[str, PersonProfileJobStatus] = {}
 _person_service = PersonIntelService()
 
@@ -1275,6 +1292,21 @@ def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
     }
 
 
+def _get_cached_overview_payload(cache: dict[str, Any]) -> Any:
+    now = time.monotonic()
+    with _overview_cache_lock:
+        if float(cache.get("expires_at") or 0.0) > now:
+            return cache.get("payload")
+    return None
+
+
+def _set_cached_overview_payload(cache: dict[str, Any], payload: Any, ttl_seconds: int) -> Any:
+    with _overview_cache_lock:
+        cache["payload"] = payload
+        cache["expires_at"] = time.monotonic() + max(ttl_seconds, 1)
+    return payload
+
+
 def _list_jobs_for_ui() -> list[dict[str, Any]]:
     jobs_by_id: dict[str, dict[str, Any]] = {}
 
@@ -1322,6 +1354,15 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
         return (created_at, item.get("job_id") or "")
 
     return sorted(jobs_by_id.values(), key=_sort_key, reverse=True)
+
+
+def _list_company_runs_for_ui() -> list[dict[str, Any]]:
+    if not db or not db.is_configured():
+        return []
+    return db.list_company_histories(
+        limit_runs=COMPANY_RUNS_OVERVIEW_LIMIT,
+        perform_maintenance=False,
+    )
 
 
 def _check_session(session_id: str | None) -> bool:
@@ -1969,6 +2010,10 @@ def _normalize_worker_status(status: str | None) -> str:
     if normalized == "interrupted":
         return "stopped"
     return normalized or "pending"
+
+
+def _is_terminal_job_status(status: str | None) -> bool:
+    return _normalize_worker_status(status) in {"done", "error", "stopped"}
 
 
 def _load_worker_progress_log(job_id: str) -> list[str]:
@@ -3392,31 +3437,6 @@ async def get_status(
             "llm": _resolve_job_llm_label(job_id, results=results),
         }
 
-    loaded = _load_persisted_job_results(job_id)
-    if loaded:
-        results = loaded.get("results")
-        loaded_status = (results or {}).get("job_status") or "done"
-        loaded_progress = (results or {}).get("job_message") or "Analysis complete"
-        _jobs[job_id] = AnalysisStatus(
-            job_id=job_id,
-            status=loaded_status,
-            progress=loaded_progress,
-            progress_log=[],
-            results=None,
-            persistence_complete=True,
-        )
-        _results_cache[job_id] = {}
-        _promote_results_metadata(job_id, results)
-        _mark_terminal_results_served(job_id)
-        return {
-            "job_id": job_id,
-            "status": loaded_status,
-            "progress": loaded_progress,
-            "progress_log": [],
-            "results": results,
-            "llm": _resolve_job_llm_label(job_id, results=results),
-        }
-
     if db and db.is_configured():
         persisted_status = db.load_job_status(job_id)
         if persisted_status:
@@ -3442,6 +3462,28 @@ async def get_status(
                     "results": None,
                     "llm": _resolve_job_llm_label(job_id, results=None),
                 }
+            loaded = _load_persisted_job_results(job_id)
+            if loaded and _is_terminal_job_status(loaded_status):
+                results = loaded.get("results")
+                _jobs[job_id] = AnalysisStatus(
+                    job_id=job_id,
+                    status=loaded_status,
+                    progress=loaded_progress,
+                    progress_log=[],
+                    results=None,
+                    persistence_complete=True,
+                )
+                _results_cache[job_id] = {}
+                _promote_results_metadata(job_id, results)
+                _mark_terminal_results_served(job_id)
+                return {
+                    "job_id": job_id,
+                    "status": loaded_status,
+                    "progress": loaded_progress,
+                    "progress_log": [],
+                    "results": results,
+                    "llm": _resolve_job_llm_label(job_id, results=results),
+                }
             return {
                 "job_id": job_id,
                 "status": loaded_status,
@@ -3460,6 +3502,31 @@ async def get_status(
                 "results": None,
                 "llm": saved_job.get("llm") or _resolve_job_llm_label(job_id, results=None),
             }
+
+    loaded = _load_persisted_job_results(job_id)
+    if loaded:
+        results = loaded.get("results")
+        loaded_status = (results or {}).get("job_status") or "done"
+        loaded_progress = (results or {}).get("job_message") or "Analysis complete"
+        _jobs[job_id] = AnalysisStatus(
+            job_id=job_id,
+            status=loaded_status,
+            progress=loaded_progress,
+            progress_log=[],
+            results=None,
+            persistence_complete=True,
+        )
+        _results_cache[job_id] = {}
+        _promote_results_metadata(job_id, results)
+        _mark_terminal_results_served(job_id)
+        return {
+            "job_id": job_id,
+            "status": loaded_status,
+            "progress": loaded_progress,
+            "progress_log": [],
+            "results": results,
+            "llm": _resolve_job_llm_label(job_id, results=results),
+        }
 
     raise HTTPException(status_code=404, detail="Job not found")
 
@@ -3525,6 +3592,14 @@ async def get_analysis(
         raise HTTPException(status_code=401, detail="Not authenticated")
     _set_no_store_headers(response)
 
+    if job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
+        raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+
+    if db and db.is_configured():
+        persisted_status = db.load_job_status(job_id)
+        if persisted_status and not _is_terminal_job_status(persisted_status.get("status")):
+            raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+
     cache = _results_cache.get(job_id, {})
     results = cache.get("results")
     if results and not _is_compact_results_payload(results):
@@ -3546,7 +3621,16 @@ async def list_jobs(session_id: str | None = Cookie(default=None)):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    return {"jobs": _list_jobs_for_ui()}
+    cached = _get_cached_overview_payload(_jobs_overview_cache)
+    if isinstance(cached, dict):
+        return cached
+
+    payload = {"jobs": _list_jobs_for_ui()}
+    return _set_cached_overview_payload(
+        _jobs_overview_cache,
+        payload,
+        JOBS_OVERVIEW_CACHE_SECONDS,
+    )
 
 
 @app.get("/api/company-runs")
@@ -3554,10 +3638,16 @@ async def list_company_runs(session_id: str | None = Cookie(default=None)):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    if not db or not db.is_configured():
-        return {"companies": []}
+    cached = _get_cached_overview_payload(_company_runs_cache)
+    if isinstance(cached, dict):
+        return cached
 
-    return {"companies": db.list_company_histories(perform_maintenance=False)}
+    payload = {"companies": _list_company_runs_for_ui()}
+    return _set_cached_overview_payload(
+        _company_runs_cache,
+        payload,
+        COMPANY_RUNS_CACHE_SECONDS,
+    )
 
 
 @app.get("/api/companies/{company_name}/analyses")

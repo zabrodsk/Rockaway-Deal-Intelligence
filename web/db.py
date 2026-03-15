@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 SOURCE_FILES_BUCKET = os.getenv("SUPABASE_SOURCE_FILES_BUCKET", "analysis-inputs")
 WORKER_ACTIVE_STATUSES = {"queued", "claimed", "running", "finalizing"}
 WORKER_TERMINAL_STATUSES = {"done", "error", "interrupted", "stopped"}
+WORKER_EXECUTION_STALE_SECONDS = int(os.getenv("SPECTER_WORKER_STALE_SECONDS", "120"))
+WORKER_QUEUE_STALE_SECONDS = int(os.getenv("SPECTER_WORKER_QUEUE_STALE_SECONDS", "900"))
 
 
 def _log_supabase_error(
@@ -621,6 +623,56 @@ def _extract_worker_state(run_config: dict[str, Any] | None) -> dict[str, Any]:
     return _serialize(worker_state) if isinstance(worker_state, dict) else {}
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _worker_state_timeout_seconds(worker_state: dict[str, Any]) -> int | None:
+    status = str(worker_state.get("status") or "").strip().lower()
+    if status not in WORKER_ACTIVE_STATUSES:
+        return None
+    if status == "queued":
+        return max(WORKER_QUEUE_STALE_SECONDS, 1)
+    return max(WORKER_EXECUTION_STALE_SECONDS, 1)
+
+
+def _worker_state_is_stale(worker_state: dict[str, Any]) -> bool:
+    timeout_seconds = _worker_state_timeout_seconds(worker_state)
+    if timeout_seconds is None:
+        return False
+    heartbeat = _parse_timestamp(worker_state.get("last_heartbeat_at"))
+    if heartbeat is None:
+        return False
+    return _utcnow() - heartbeat > timedelta(seconds=timeout_seconds)
+
+
+def _resolved_worker_state(worker_state: dict[str, Any]) -> tuple[str, str | None, bool]:
+    status = str(worker_state.get("status") or "").strip().lower()
+    progress = _worker_progress_from_state(worker_state)
+    if status not in WORKER_ACTIVE_STATUSES:
+        return status, progress, False
+    if _worker_state_is_stale(worker_state):
+        if status == "queued":
+            return "interrupted", "Worker queue stalled before processing started.", False
+        return "interrupted", "Worker interrupted before completion.", False
+    return status, progress, True
+
+
 def _merge_worker_state(
     run_config: dict[str, Any] | None,
     updates: dict[str, Any] | None,
@@ -884,7 +936,7 @@ def queue_specter_worker_job(
         "failed_companies": 0,
         "active_company_slug": None,
         "active_company_index": None,
-        "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+        "last_heartbeat_at": _utcnow().isoformat(),
         "run_started_at": None,
         "run_finished_at": None,
         "worker_service_enabled": True,
@@ -922,7 +974,7 @@ def list_claimable_specter_worker_jobs(limit: int = 10) -> list[dict[str, Any]]:
             client.table("jobs")
             .select("job_id_legacy, input_mode, use_web_search, created_at, run_config")
             .eq("input_mode", "specter")
-            .order("created_at")
+            .order("created_at", desc=True)
             .limit(max(limit * 10, 50))
             .execute()
         )
@@ -973,7 +1025,7 @@ def claim_specter_worker_job(
         status = str(worker_state.get("status") or "").strip().lower()
         if status not in {"queued", "claimed", "running"}:
             return None
-        now = datetime.now(timezone.utc).isoformat()
+        now = _utcnow().isoformat()
         updated_state = {
             "status": "running",
             "progress": worker_state.get("progress") or "Worker claimed job...",
@@ -1032,7 +1084,7 @@ def heartbeat_specter_worker_job(
             "failed_companies": failed_companies,
             "total_companies": total_companies,
             "worker_id": worker_id,
-            "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+            "last_heartbeat_at": _utcnow().isoformat(),
             "worker_service_enabled": True,
         }
         upsert_job(job_id_legacy, run_config=run_config, worker_state=updates)
@@ -1064,7 +1116,7 @@ def finish_specter_worker_job(
         ).data or []
         if not rows:
             return False
-        now = datetime.now(timezone.utc).isoformat()
+        now = _utcnow().isoformat()
         run_config = rows[0].get("run_config") or {}
         upsert_job(
             job_id_legacy,
@@ -1608,6 +1660,7 @@ def _load_latest_analysis_snapshot(
             client.table("analyses")
             .select("results_payload, status, created_at")
             .eq("job_id_legacy", job_id_legacy)
+            .is_("company_id", "null")
             .order("created_at", desc=True)
             .limit(1)
             .execute()
@@ -1841,20 +1894,23 @@ def load_job_status(job_id_legacy: str) -> dict[str, Any] | None:
         latest_status = {}
 
     latest_analysis = _load_latest_analysis_snapshot(client, job_id_legacy) or {}
-    worker_status = str(worker_state.get("status") or "").strip().lower()
+    worker_status, worker_progress, worker_active = _resolved_worker_state(worker_state)
     if not latest_status and not latest_analysis and not worker_status:
         return None
 
     analysis_status = str(latest_analysis.get("status") or "").strip().lower()
     status = str(latest_status.get("status") or analysis_status or worker_status or "pending").strip().lower()
-    progress = latest_status.get("progress") or _worker_progress_from_state(worker_state)
+    progress = latest_status.get("progress") or worker_progress
     snapshot_payload = latest_analysis.get("results_payload")
     if isinstance(snapshot_payload, dict) and not progress:
         progress = snapshot_payload.get("job_message")
 
-    if worker_status in WORKER_ACTIVE_STATUSES and analysis_status not in {"done", "error", "stopped"}:
+    if worker_active and analysis_status not in {"done", "error", "stopped"}:
         status = worker_status if worker_status != "claimed" else "running"
-        progress = _worker_progress_from_state(worker_state) or progress
+        progress = worker_progress or progress
+    elif worker_status == "interrupted" and analysis_status not in {"done", "error", "stopped"}:
+        status = "interrupted"
+        progress = worker_progress or progress
 
     if analysis_status in {"done", "error", "stopped"} and status not in {"done", "error", "stopped"}:
         status = analysis_status
@@ -1970,14 +2026,17 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
             latest_analysis = latest_analysis_by_job.get(jid, {})
             run_config = row.get("run_config") or {}
             worker_state = _extract_worker_state(run_config)
-            worker_status = str(worker_state.get("status") or "").strip().lower()
+            worker_status, worker_progress, worker_active = _resolved_worker_state(worker_state)
             analysis_status = str(latest_analysis.get("status") or "").strip().lower()
             status = latest_status.get("status") or analysis_status or worker_status or "pending"
-            progress = latest_status.get("progress") or _worker_progress_from_state(worker_state)
+            progress = latest_status.get("progress") or worker_progress
             snapshot_payload = latest_analysis.get("results_payload")
-            if worker_status in WORKER_ACTIVE_STATUSES and analysis_status not in {"done", "error", "stopped"}:
+            if worker_active and analysis_status not in {"done", "error", "stopped"}:
                 status = worker_status if worker_status != "claimed" else "running"
-                progress = _worker_progress_from_state(worker_state) or progress
+                progress = worker_progress or progress
+            elif worker_status == "interrupted" and analysis_status not in {"done", "error", "stopped"}:
+                status = "interrupted"
+                progress = worker_progress or progress
             if analysis_status in {"done", "error", "stopped"} and str(status).strip().lower() not in {"done", "error", "stopped"}:
                 status = analysis_status
                 if isinstance(snapshot_payload, dict):
@@ -1995,7 +2054,7 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
                     "run_config": run_config,
                     "results": None,
                     "has_results": bool(isinstance(snapshot_payload, dict) and snapshot_payload),
-                    "worker_active": worker_status in WORKER_ACTIVE_STATUSES,
+                    "worker_active": worker_active,
                 }
             )
 
