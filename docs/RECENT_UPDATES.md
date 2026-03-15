@@ -102,6 +102,23 @@ screen.
 - OpenRouter now uses dedicated `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL`
   configuration instead of sharing the OpenAI key path
 
+## Model Catalog Expansion (2026-03-15)
+
+The production model catalog now exposes additional Gemini and OpenAI options
+without changing the existing default routing behavior.
+
+- Added Gemini models: `gemini-2.5-flash`, `gemini-3.1-pro-preview`
+- Added OpenAI models: `o4-mini`, `gpt-5.2`, `gpt-5.4`
+- Preserved existing defaults for:
+  - budget tier -> `gemini-3.1-flash-lite-preview`
+  - balanced tier -> `claude-haiku-4-5-20251001`
+  - premium tier -> `gpt-5`
+- Tightened premium-family routing so "Claude" and "GPT-5" phase options still
+  resolve to the intended provider families even after adding new balanced and
+  premium entries
+- Updated README model lists and catalog validation tests to match the new
+  production options
+
 ---
 
 ## Files Changed (v0.0.6)
