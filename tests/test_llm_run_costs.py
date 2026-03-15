@@ -83,11 +83,16 @@ def test_available_models_payload_marks_availability(monkeypatch) -> None:
     gemini = next(item for item in models if item["model"] == "gemini-3.1-flash-lite-preview")
     assert {item["model"] for item in models} == {
         "gemini-3.1-flash-lite-preview",
+        "gemini-2.5-flash",
+        "gemini-3.1-pro-preview",
         "claude-haiku-4-5-20251001",
         "gpt-5-nano",
         "gpt-5-mini",
         "gpt-5",
         "gpt-4.1-mini",
+        "o4-mini",
+        "gpt-5.2",
+        "gpt-5.4",
         "openrouter/hunter-alpha",
     }
 
@@ -101,6 +106,17 @@ def test_available_models_payload_marks_availability(monkeypatch) -> None:
         if item["provider"] in {"openai", "openrouter"}
     )
     assert gemini["tier"] == "budget"
+
+
+def test_validate_requested_selection_accepts_new_catalog_models(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+
+    assert validate_requested_selection("gemini", "gemini-2.5-flash") is not None
+    assert validate_requested_selection("gemini", "gemini-3.1-pro-preview") is not None
+    assert validate_requested_selection("openai", "o4-mini") is not None
+    assert validate_requested_selection("openai", "gpt-5.2") is not None
+    assert validate_requested_selection("openai", "gpt-5.4") is not None
 
 
 def test_build_pipeline_policy_resolves_cheap_and_premium(monkeypatch) -> None:

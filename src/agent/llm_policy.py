@@ -180,13 +180,11 @@ def coerce_phase_models_payload(
 
 
 def _resolve_premium_choice(choice: PremiumPhaseChoice) -> ModelCatalogEntry | None:
-    preferred_tier = _PREMIUM_FAMILY_TO_TIER[choice]
-    preferred = get_tier_default(preferred_tier)
+    preferred = _default_claude_entry() if choice == "claude" else _default_gpt5_family_entry()
     if preferred:
         return preferred
     fallback_choice: PremiumPhaseChoice = "claude" if choice == "gpt5" else "gpt5"
-    fallback_tier = _PREMIUM_FAMILY_TO_TIER[fallback_choice]
-    return get_tier_default(fallback_tier)
+    return _default_claude_entry() if fallback_choice == "claude" else _default_gpt5_family_entry()
 
 
 def _required_model_entry(provider: str, model: str) -> ModelCatalogEntry:
@@ -194,6 +192,23 @@ def _required_model_entry(provider: str, model: str) -> ModelCatalogEntry:
     if entry is None:
         raise ValueError("A provider and model are required for each phase selection.")
     return entry
+
+
+def _default_claude_entry() -> ModelCatalogEntry | None:
+    return _first_available_entry(
+        ("anthropic", "claude-haiku-4-5-20251001"),
+        include_tier_fallback=False,
+    )
+
+
+def _default_gpt5_family_entry() -> ModelCatalogEntry | None:
+    return _first_available_entry(
+        ("openai", "gpt-5"),
+        ("openai", "gpt-5.2"),
+        ("openai", "gpt-5-mini"),
+        ("openai", "gpt-4.1-mini"),
+        include_tier_fallback=False,
+    )
 
 
 def _first_available_explicit(
@@ -426,8 +441,8 @@ def get_alternate_premium_selection(
 
 def quality_tiers_payload() -> list[dict[str, Any]]:
     cheap_available = get_tier_default("budget") is not None
-    claude_available = get_tier_default("balanced") is not None
-    gpt5_available = get_tier_default("premium") is not None
+    claude_available = _default_claude_entry() is not None
+    gpt5_available = _default_gpt5_family_entry() is not None
     return [
         {
             "id": "cheap",
@@ -449,8 +464,8 @@ def quality_tiers_payload() -> list[dict[str, Any]]:
 
 
 def premium_phase_options_payload() -> dict[str, dict[str, Any]]:
-    claude = get_tier_default("balanced")
-    gpt5 = get_tier_default("premium")
+    claude = _default_claude_entry()
+    gpt5 = _default_gpt5_family_entry()
     return {
         "claude": {
             "id": "claude",

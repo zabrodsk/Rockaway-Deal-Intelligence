@@ -267,6 +267,8 @@ MODEL_NAME=gemini-3.1-flash-lite-preview
 GOOGLE_API_KEY=your_google_api_key_here
 ```
 
+Available Gemini models in the UI: `gemini-3.1-flash-lite-preview`, `gemini-2.5-flash`, `gemini-3.1-pro-preview`
+
 **Example for Anthropic:**
 
 ```
@@ -283,7 +285,7 @@ MODEL_NAME=gpt-5-mini
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
-Available OpenAI models in the UI: `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-4.1-mini`
+Available OpenAI models in the UI: `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-4.1-mini`, `o4-mini`, `gpt-5.2`, `gpt-5.4`
 
 **Example for OpenRouter:**
 
