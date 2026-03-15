@@ -3712,7 +3712,7 @@ function stopSavedJobsRefresh() {
 }
 
 function hasActiveSavedJobs() {
-  return mergeSavedAndRecentRuns().some((job) => {
+  return getServerAuthoritativeRuns().some((job) => {
     if (job?.canViewLog === true) return true;
     const status = String(job?.status || '').toLowerCase();
     return status === 'pending' || status === 'running' || status === 'paused' || isRecentlyUnsettledTerminalRun(job);
@@ -4442,6 +4442,22 @@ function mergeSavedAndRecentRuns() {
   });
 }
 
+function getServerAuthoritativeRuns() {
+  const savedRuns = savedJobsCache
+    .filter((run) => run?.jobId)
+    .map((run) => ({ ...run }));
+  const savedJobIds = new Set(savedRuns.map((run) => run.jobId));
+  const optimisticRecentRuns = loadRecentRuns()
+    .filter((run) => run?.jobId && !savedJobIds.has(run.jobId))
+    .map((run) => ({ ...run }));
+
+  return [...savedRuns, ...optimisticRecentRuns].sort((a, b) => {
+    const aTs = new Date(a.createdAt || a.updatedAt || 0).getTime();
+    const bTs = new Date(b.createdAt || b.updatedAt || 0).getTime();
+    return bTs - aTs;
+  });
+}
+
 function renderSavedJobCards(
   runs,
   { limit = null, emptyText = 'No saved jobs found yet.', showStopAction = false } = {}
@@ -4533,7 +4549,7 @@ function renderRecentRuns() {
   const section = $('#recent-runs-section');
   const list = $('#recent-runs-list');
   if (!section || !list) return;
-  const runs = mergeSavedAndRecentRuns();
+  const runs = getServerAuthoritativeRuns();
 
   const gettingStarted = $('#getting-started-section');
 
@@ -4680,11 +4696,7 @@ function getAnalysisContentEl() {
 function renderAnalysisHistoryScreen() {
   const content = getAnalysisContentEl();
   if (!content) return;
-  const runs = mergeSavedAndRecentRuns().sort((a, b) => {
-    const aTs = new Date(a.createdAt || a.updatedAt || 0).getTime();
-    const bTs = new Date(b.createdAt || b.updatedAt || 0).getTime();
-    return bTs - aTs;
-  });
+  const runs = getServerAuthoritativeRuns();
 
   if (!savedJobsLoaded && !runs.length) {
     content.innerHTML = `
@@ -7058,7 +7070,7 @@ function initOnboardingWelcome() {
   const banner = $('#onboarding-welcome');
   if (!banner) return;
   const dismissed = localStorage.getItem(ONBOARDING_DISMISSED_KEY);
-  const runs = mergeSavedAndRecentRuns();
+  const runs = getServerAuthoritativeRuns();
   // Show only for first-time users (no runs and not dismissed)
   if (!dismissed && runs.length === 0) {
     banner.classList.add('is-visible');
@@ -7082,7 +7094,7 @@ function initInputModeCallout() {
   const callout = $('#input-mode-callout');
   if (!callout) return;
   if (localStorage.getItem(MODE_CALLOUT_KEY)) return;
-  const runs = mergeSavedAndRecentRuns();
+  const runs = getServerAuthoritativeRuns();
   if (runs.length === 0) {
     callout.classList.add('is-visible');
   }
