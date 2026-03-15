@@ -1831,6 +1831,7 @@ def test_list_jobs_for_ui_prefers_persisted_terminal_state_over_live_running(mon
             "created_at": "2026-03-13T10:05:00Z",
             "input_mode": "specter",
             "use_web_search": True,
+            "run_name": None,
             "results": None,
             "has_results": True,
             "can_open_results": True,
@@ -1872,6 +1873,7 @@ def test_list_jobs_for_ui_marks_persisted_running_without_live_job_as_interrupte
         "created_at": "2026-03-13T10:05:00Z",
         "input_mode": "specter",
         "use_web_search": True,
+        "run_name": None,
         "results": None,
         "has_results": False,
         "can_open_results": False,
@@ -1912,12 +1914,42 @@ def test_list_jobs_for_ui_keeps_partial_worker_backed_results_non_terminal(monke
         "created_at": "2026-03-13T10:05:00Z",
         "input_mode": "specter",
         "use_web_search": True,
+        "run_name": None,
         "results": None,
         "has_results": True,
         "can_open_results": False,
         "can_view_log": True,
         "llm": web_app._get_llm_display(),
     }
+
+
+def test_list_jobs_for_ui_carries_optional_run_name(monkeypatch) -> None:
+    job_id = "job-overview-named"
+    monkeypatch.setattr(
+        web_app,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            list_saved_jobs=lambda: [
+                {
+                    "job_id": job_id,
+                    "status": "running",
+                    "progress": "Queued for worker...",
+                    "created_at": "2026-03-14T10:05:00Z",
+                    "input_mode": "specter",
+                    "use_web_search": True,
+                    "run_name": "Germany shortlist",
+                    "results": None,
+                    "has_results": False,
+                    "worker_active": True,
+                }
+            ],
+        ),
+    )
+
+    rows = web_app._list_jobs_for_ui()
+    row = next(item for item in rows if item["job_id"] == job_id)
+    assert row["run_name"] == "Germany shortlist"
 
 
 def test_batch_chunking_config_enables_for_large_anthropic_batch() -> None:

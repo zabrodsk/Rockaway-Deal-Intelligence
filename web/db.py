@@ -2053,6 +2053,7 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
                     "created_at": created_at,
                     "input_mode": row.get("input_mode"),
                     "use_web_search": row.get("use_web_search"),
+                    "run_name": run_config.get("run_name") if isinstance(run_config, dict) else None,
                     "run_config": run_config,
                     "results": None,
                     "has_results": bool(isinstance(snapshot_payload, dict) and snapshot_payload),

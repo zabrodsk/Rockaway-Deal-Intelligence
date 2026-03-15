@@ -3217,6 +3217,11 @@
       </div>
     </div>
 
+    <div class="instructions-section" id="run-name-section" style="width:640px;margin-top:20px;display:none;">
+      <label class="instructions-label" for="run-name-input">Run name <span style="color:var(--text-dim);font-weight:400">(optional)</span></label>
+      <input id="run-name-input" class="instructions-input" type="text" maxlength="120" placeholder="e.g. Germany SaaS batch, Seed fintech shortlist, Q2 pipeline">
+    </div>
+
     <div class="instructions-section" style="width:640px;margin-top:20px;">
       <label class="instructions-label" for="instructions-input">Additional instructions <span style="color:var(--text-dim);font-weight:400">(optional)</span></label>
       <textarea id="instructions-input" class="instructions-input" rows="2" placeholder="e.g. Only rank the first 3 companies, focus on B2B SaaS, ignore companies outside Europe..."></textarea>
@@ -4214,6 +4219,15 @@ function formatRunTimestamp(ts) {
 }
 
 function getRunTitle(run) {
+  const runName = String(run.runName || run.run_name || '').trim();
+  const runCode = run.jobId ? `Run ${run.jobId}` : 'Run';
+  const mode = String(run.input_mode || run.results?.mode || run.results_meta?.mode || '').trim().toLowerCase();
+  if (mode === 'specter') {
+    return runName ? `${runCode} — ${runName}` : runCode;
+  }
+  if (runName) {
+    return `${runCode} — ${runName}`;
+  }
   const resultMode = run.results?.mode || run.results_meta?.mode;
   if (resultMode === 'batch') {
     const count = run.results?.summary_rows?.length || run.results_meta?.summary_rows_count || 0;
@@ -4261,6 +4275,7 @@ function mergeSavedAndRecentRuns() {
       results: run.results || existing.results || null,
       hasResults: savedHasResults || recentHasResults,
       llm: run.llm || existing.llm || null,
+      runName: run.runName || existing.runName || null,
     };
 
     if (savedActive) {
@@ -4965,6 +4980,7 @@ async function fetchSavedJobs({ silent = true } = {}) {
       progress: job.progress || '',
       createdAt: job.created_at || null,
       input_mode: job.input_mode || null,
+      runName: job.run_name || null,
       useWebSearch: job.use_web_search === true,
       results: job.results || null,
       hasResults: job.has_results === true || !!job.results,
@@ -5925,6 +5941,12 @@ function isSpecterMode() {
   return names.some(n => hasCompany(n) && isTabular(n)) && names.some(n => hasPeople(n) && isTabular(n));
 }
 
+function updateRunNameVisibility() {
+  const section = $('#run-name-section');
+  if (!section) return;
+  section.style.display = inputMode === 'specter' ? 'block' : 'none';
+}
+
 function addFiles(fileList) {
   for (const f of fileList) {
     if (!uploadedFiles.some(uf => uf.name === f.name)) {
@@ -5978,6 +6000,7 @@ function setInputMode(mode) {
   });
   const hint = $('#input-mode-hint');
   if (hint) hint.textContent = MODE_HINTS[mode] || '';
+  updateRunNameVisibility();
 }
 $$('.input-mode-option').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -5985,6 +6008,7 @@ $$('.input-mode-option').forEach((btn) => {
     setInputMode(btn.dataset.mode);
   });
 });
+updateRunNameVisibility();
 $('#llm-model-select')?.addEventListener('change', (event) => {
   selectedLlmKey = event.target.value || null;
   $('#advanced-llm-section')?.setAttribute('open', 'open');
@@ -6029,11 +6053,16 @@ $('#analyze-btn').addEventListener('click', async () => {
     persistActiveJob(uploadRes.job_id);
     const autoDetectedSpecter = uploadRes.mode === 'specter' && !inputModeTouched;
     const effectiveInputMode = autoDetectedSpecter ? 'specter' : inputMode;
+    const requestedRunName = effectiveInputMode === 'specter'
+      ? (($('#run-name-input')?.value || '').trim() || null)
+      : null;
     upsertRecentRun({
       jobId: uploadRes.job_id,
       status: 'running',
       progress: 'Uploading files...',
-      title: effectiveInputMode === 'specter' ? 'Batch analysis' : uploadedFiles.map((f) => f.name).join(', '),
+      input_mode: effectiveInputMode,
+      runName: requestedRunName,
+      title: effectiveInputMode === 'specter' ? undefined : uploadedFiles.map((f) => f.name).join(', '),
     });
 
     const useWebSearch = !!$('#web-search-checkbox')?.checked;
@@ -6048,6 +6077,7 @@ $('#analyze-btn').addEventListener('click', async () => {
           use_web_search: useWebSearch,
           instructions: instructions || undefined,
           input_mode: effectiveInputMode,
+          run_name: requestedRunName || undefined,
           vc_investment_strategy: vcInvestmentStrategy || undefined,
           phase_models: analysisSelection.phase_models,
           quality_tier: analysisSelection.quality_tier,

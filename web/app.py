@@ -735,6 +735,7 @@ class AnalyzeRequest(BaseModel):
     use_web_search: bool = False
     instructions: str | None = None
     input_mode: str = "pitchdeck"  # pitchdeck | specter | original
+    run_name: str | None = None
     vc_investment_strategy: str | None = None
     phase_models: dict[str, dict[str, str]] | None = None
     quality_tier: Literal["cheap", "premium"] | None = None
@@ -744,6 +745,7 @@ class AnalyzeRequest(BaseModel):
 
     @field_validator(
         "instructions",
+        "run_name",
         "vc_investment_strategy",
         "llm_provider",
         "llm_model",
@@ -1272,6 +1274,7 @@ def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
     cache = _results_cache.get(job_id, {})
     results = cache.get("results")
     has_results = bool(results) and not _is_compact_results_payload(results)
+    run_config = cache.get("run_config") or {}
     is_active = job.status in {"pending", "running", "paused"}
     return {
         "job_id": job_id,
@@ -1284,6 +1287,7 @@ def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
             else cache.get("input_mode")
         ),
         "use_web_search": None,
+        "run_name": cache.get("run_name") or run_config.get("run_name"),
         "results": None,
         "has_results": has_results,
         "can_open_results": job.status == "done" and has_results,
@@ -1327,6 +1331,7 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
                     "created_at": entry.get("created_at") or (existing or {}).get("created_at"),
                     "input_mode": entry.get("input_mode") or (existing or {}).get("input_mode"),
                     "use_web_search": entry.get("use_web_search"),
+                    "run_name": entry.get("run_name") or (existing or {}).get("run_name"),
                     "results": None,
                     "has_results": entry.get("has_results") or (existing or {}).get("has_results") or False,
                     "can_open_results": False,
@@ -1650,19 +1655,22 @@ async def start_analysis(
 
     _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
     _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
-    _results_cache[job_id]["input_mode"] = req.input_mode
-    _results_cache[job_id]["vc_investment_strategy"] = req.vc_investment_strategy
-    _results_cache[job_id]["use_web_search"] = req.use_web_search
-    _results_cache[job_id]["instructions"] = req.instructions
-    _results_cache[job_id]["llm_selection"] = llm_selection
-    _results_cache[job_id]["phase_models"] = phase_models if req.phase_models else None
-    _results_cache[job_id]["quality_tier"] = quality_tier
-    _results_cache[job_id]["premium_phase_models"] = (
+    cache = _results_cache[job_id]
+    cache["input_mode"] = req.input_mode
+    cache["run_name"] = req.run_name
+    cache["vc_investment_strategy"] = req.vc_investment_strategy
+    cache["use_web_search"] = req.use_web_search
+    cache["instructions"] = req.instructions
+    cache["llm_selection"] = llm_selection
+    cache["phase_models"] = phase_models if req.phase_models else None
+    cache["quality_tier"] = quality_tier
+    cache["premium_phase_models"] = (
         premium_phase_models if quality_tier == "premium" else None
     )
-    _results_cache[job_id]["effective_phase_models"] = effective_phase_models
-    _results_cache[job_id]["run_config"] = {
+    cache["effective_phase_models"] = effective_phase_models
+    cache["run_config"] = {
         "input_mode": req.input_mode,
+        "run_name": req.run_name,
         "vc_investment_strategy": req.vc_investment_strategy,
         "instructions": req.instructions,
         "use_web_search": req.use_web_search,
@@ -1674,12 +1682,12 @@ async def start_analysis(
         "llm_model": llm_selection["model"],
         "llm": llm_display,
     }
-    _results_cache[job_id]["model_executions"] = []
-    _results_cache[job_id]["run_costs_aggregate"] = _empty_run_costs_summary()
-    _results_cache[job_id]["versions"] = _runtime_versions()
+    cache["model_executions"] = []
+    cache["run_costs_aggregate"] = _empty_run_costs_summary()
+    cache["versions"] = _runtime_versions()
 
     if db and db.is_configured():
-        run_config = dict(_results_cache[job_id]["run_config"])
+        run_config = dict(cache["run_config"])
         db.upsert_job(job_id, run_config=run_config, versions=_runtime_versions())
         db.upsert_job_control(
             job_id,
@@ -1986,6 +1994,7 @@ def _run_config_from_cache(job_id: str) -> dict[str, Any]:
     llm_selection = _resolve_job_llm_selection(job_id, results=cache.get("results"))
     return {
         "input_mode": cache.get("input_mode", "pitchdeck"),
+        "run_name": cache.get("run_name"),
         "vc_investment_strategy": cache.get("vc_investment_strategy"),
         "instructions": cache.get("instructions"),
         "use_web_search": cache.get("use_web_search", False),

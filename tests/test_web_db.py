@@ -668,6 +668,7 @@ def test_list_saved_jobs_prefers_terminal_analysis_status_over_stale_running_sta
             "created_at": "2026-03-13T10:05:00Z",
             "input_mode": "specter",
             "use_web_search": True,
+            "run_name": None,
             "run_config": {},
             "results": None,
             "has_results": True,
@@ -746,6 +747,7 @@ def test_list_saved_jobs_ignores_company_level_analysis_rows(monkeypatch) -> Non
             "created_at": "2026-03-13T10:00:00Z",
             "input_mode": "specter",
             "use_web_search": True,
+            "run_name": None,
             "run_config": {
                 "worker_state": {
                     "status": "running",
@@ -825,6 +827,7 @@ def test_list_saved_jobs_marks_worker_backed_runs_active(monkeypatch) -> None:
             "created_at": "2026-03-13T10:00:00Z",
             "input_mode": "specter",
             "use_web_search": True,
+            "run_name": None,
             "run_config": {
                 "worker_state": {
                     "status": "running",
@@ -910,6 +913,7 @@ def test_list_saved_jobs_marks_stale_worker_execution_interrupted(monkeypatch) -
             "created_at": "2026-03-14T18:27:34Z",
             "input_mode": "specter",
             "use_web_search": True,
+            "run_name": None,
             "run_config": {
                 "worker_state": {
                     "status": "running",
@@ -996,6 +1000,7 @@ def test_list_saved_jobs_keeps_recent_queued_worker_job_active(monkeypatch) -> N
             "created_at": "2026-03-14T18:27:34Z",
             "input_mode": "specter",
             "use_web_search": True,
+            "run_name": None,
             "run_config": {
                 "worker_state": {
                     "status": "queued",
@@ -1074,6 +1079,62 @@ def test_list_claimable_specter_worker_jobs_prefers_newest_rows(monkeypatch) -> 
             "worker_state": {"status": "queued", "progress": "Queued for worker..."},
         }
     ]
+
+
+def test_list_saved_jobs_exposes_optional_run_name(monkeypatch) -> None:
+    import web.db as web_db
+
+    class FakeResponse:
+        def __init__(self, data):
+            self.data = data
+
+    class FakeQuery:
+        def __init__(self, table_name: str):
+            self.table_name = table_name
+
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def order(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def in_(self, *_args, **_kwargs):
+            return self
+
+        def is_(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            if self.table_name == "jobs":
+                return FakeResponse(
+                    [
+                        {
+                            "job_id_legacy": "job-named",
+                            "input_mode": "specter",
+                            "use_web_search": False,
+                            "created_at": "2026-03-14T20:00:00Z",
+                            "run_config": {"run_name": "Germany shortlist"},
+                        }
+                    ]
+                )
+            if self.table_name == "job_status_history":
+                return FakeResponse([])
+            if self.table_name == "analyses":
+                return FakeResponse([])
+            raise AssertionError(f"Unexpected table lookup: {self.table_name}")
+
+    class FakeClient:
+        def table(self, table_name: str):
+            return FakeQuery(table_name)
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: FakeClient())
+
+    rows = web_db.list_saved_jobs(limit=10)
+
+    assert rows[0]["run_name"] == "Germany shortlist"
 
 
 def test_ensure_source_files_bucket_accepts_dict_bucket_rows(monkeypatch) -> None:
