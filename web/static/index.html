@@ -4452,11 +4452,11 @@ function renderSavedJobCards(
   }
 
   return rows.map((run) => {
-    const status = run.status || 'pending';
-    const canOpenResults = run.canOpenResults === true;
+    const status = String(run.status || 'pending');
+    const normalizedStatus = status.toLowerCase();
+    const canOpenResults = normalizedStatus === 'done';
     const canViewLog = run.canViewLog === true;
-    const isLive = canViewLog && isLiveRunStatus(String(status).toLowerCase());
-    const actionLabel = canOpenResults ? 'Open results' : 'Unavailable';
+    const isLive = canViewLog && isLiveRunStatus(normalizedStatus);
     const createdLine = formatRunTimestamp(run.createdAt || run.updatedAt);
     const modeLabel = getRunModeLabel(run);
     const metaBits = [
@@ -4470,14 +4470,15 @@ function renderSavedJobCards(
     const metaLine = metaBits.length
       ? `<div class="saved-jobs-meta">${metaBits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('')}</div>`
       : '';
-    const openDisabled = canOpenResults ? '' : ' disabled';
     const logDisabled = canViewLog ? '' : ' disabled';
     const stopButton = showStopAction && isLive
       ? `<button class="recent-run-stop" data-job-stop="${escapeHtml(run.jobId)}">Stop analysis</button>`
       : '';
     const openButton = isLive
       ? ''
-      : `<button class="recent-run-open" data-job-open="${escapeHtml(run.jobId)}"${openDisabled}>${escapeHtml(actionLabel)}</button>`;
+      : (normalizedStatus === 'done'
+        ? `<button class="recent-run-open" data-job-open="${escapeHtml(run.jobId)}">Open results</button>`
+        : '');
     return `<div class="recent-run-card" data-job-card="${escapeHtml(run.jobId)}">
       <div class="recent-run-meta">
         <div class="recent-run-title">${escapeHtml(getRunTitle(run))}</div>
@@ -5886,8 +5887,11 @@ async function openSavedRun(jobId) {
   if (!jobId || jobId === 'null' || jobId === 'undefined') return;
   const run = savedJobsCache.find((r) => r.jobId === jobId)
     || mergeSavedAndRecentRuns().find((r) => r.jobId === jobId);
-  const canOpenResults = run?.canOpenResults === true;
-  if (!canOpenResults) {
+  const normalizedStatus = String(run?.status || '').toLowerCase();
+  const canAttemptOpen = normalizedStatus === 'done'
+    || run?.canOpenResults === true
+    || run?.hasResults === true;
+  if (!canAttemptOpen) {
     return;
   }
 
