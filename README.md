@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Work in Progress](https://img.shields.io/badge/status-WIP-orange.svg)](./docs/RECENT_UPDATES.md)
 
-> Built on [startup-ranker-pipeline](https://github.com/zabrodsk/startup-ranker-pipeline). Evaluates pitch decks, metrics, and optional web data to produce ranked deal lists with pro/contra arguments and invest recommendations.
+> Built on [DIALECTIC](https://github.com/pantageepapa/DIALECTIC). Evaluates pitch decks, metrics, and optional web data to produce ranked deal lists with pro/contra arguments and invest recommendations.
 
 ---
 
@@ -177,7 +177,7 @@ manual **Refresh** action for an immediate server sync.
 ./deploy.sh
 ```
 
-Runs the FastAPI server and exposes it via `cloudflared` tunnel. Use the printed URL and `APP_PASSWORD` from your `.env`.
+Runs the FastAPI server and exposes it via `slim share`. Use the printed URL and the app's `APP_PASSWORD` from your `.env`.
 
 ---
 

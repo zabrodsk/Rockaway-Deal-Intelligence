@@ -32,15 +32,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-load_dotenv()
-
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from agent.llm_catalog import (
     available_models_payload,
-    current_default_selection,
     model_label,
+    current_default_selection,
     pricing_catalog_payload,
     serialize_selection,
     validate_requested_selection,
@@ -60,6 +61,7 @@ from agent.llm_policy import (
     resolve_effective_phase_choices,
     resolve_effective_phase_models,
 )
+from agent.company_chat import answer_company_question, build_company_chat_store
 from agent.run_context import (
     RunTelemetryCollector,
     build_run_costs_from_model_executions,
@@ -159,6 +161,7 @@ _jobs_overview_cache: dict[str, Any] = {"expires_at": 0.0, "payload": None}
 _company_runs_cache: dict[str, Any] = {"expires_at": 0.0, "payload": None}
 SPECTER_CHUNK_EVENT_PREFIX = "__SPECTER_CHUNK_EVENT__"
 SPECTER_COMPANY_EVENT_PREFIX = "__SPECTER_COMPANY_EVENT__"
+_company_chat_sessions: dict[tuple[str, str], dict[str, Any]] = {}
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -851,6 +854,73 @@ PersonProfileJobStatus.model_rebuild()
 
 _person_jobs: dict[str, PersonProfileJobStatus] = {}
 _person_service = PersonIntelService()
+
+
+class CompanyChatRequest(BaseModel):
+    message: str
+    active_job_id: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def _validate_message(cls, v: str) -> str:
+        text = (v or "").strip()
+        if not text:
+            raise ValueError("message is required")
+        return text[:4000]
+
+
+class CompanyChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    citations: list[dict[str, Any]] = []
+    created_at: str
+
+
+class CompanyChatResponse(BaseModel):
+    company_lookup_key: str
+    transcript: list[CompanyChatMessage]
+    run_count: int = 0
+    source_counts: dict[str, int] = {}
+    web_search_enabled: bool = True
+    model_label: str = "Gemini 3.1 Flash Lite"
+    used_run_ids: list[str] = []
+    used_web_search: bool = False
+    web_search_query: str | None = None
+
+
+def _chat_session_key(session_id: str, company_lookup_key: str) -> tuple[str, str]:
+    return (session_id, company_lookup_key.strip().lower())
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _truncate_summary(text: str, limit: int = 4000) -> str:
+    normalized = " ".join((text or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
+
+def _compress_company_chat_session(session: dict[str, Any], max_messages: int = 24) -> None:
+    transcript = session.setdefault("transcript", [])
+    while len(transcript) > max_messages:
+        oldest = transcript.pop(0)
+        summary = session.get("summary") or ""
+        summary_line = f"{oldest.get('role', 'unknown')}: {oldest.get('content', '')}"
+        session["summary"] = _truncate_summary(f"{summary}\n{summary_line}".strip())
+
+
+def _get_or_create_company_chat_session(session_id: str, company_lookup_key: str) -> dict[str, Any]:
+    return _company_chat_sessions.setdefault(
+        _chat_session_key(session_id, company_lookup_key),
+        {"summary": "", "transcript": []},
+    )
+
+
+def _company_chat_model_label() -> str:
+    return model_label("gemini", "gemini-3.1-flash-lite-preview")
 
 
 def _runtime_versions() -> dict[str, str]:
@@ -3698,6 +3768,106 @@ async def list_company_runs(session_id: str | None = Cookie(default=None)):
         payload,
         COMPANY_RUNS_CACHE_SECONDS,
     )
+
+
+@app.get("/api/companies/{company_lookup_key}/chat")
+async def get_company_chat(
+    company_lookup_key: str,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=501, detail="Supabase not configured")
+
+    context = db.load_company_chat_context(company_lookup_key)
+    if not context:
+        raise HTTPException(status_code=404, detail="Company chat context not found")
+
+    chat_session = _get_or_create_company_chat_session(session_id, company_lookup_key)
+    _company, _store, _citation_map, meta = build_company_chat_store(context)
+    return CompanyChatResponse(
+        company_lookup_key=company_lookup_key,
+        transcript=[CompanyChatMessage(**item) for item in chat_session.get("transcript") or []],
+        run_count=meta["run_count"],
+        source_counts=meta["source_counts"],
+        web_search_enabled=True,
+        model_label=_company_chat_model_label(),
+    )
+
+
+@app.post("/api/companies/{company_lookup_key}/chat")
+async def post_company_chat(
+    company_lookup_key: str,
+    req: CompanyChatRequest,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=501, detail="Supabase not configured")
+
+    context = db.load_company_chat_context(company_lookup_key)
+    if not context:
+        raise HTTPException(status_code=404, detail="Company chat context not found")
+
+    chat_session = _get_or_create_company_chat_session(session_id, company_lookup_key)
+    transcript = list(chat_session.get("transcript") or [])
+    transcript.append(
+        CompanyChatMessage(
+            role="user",
+            content=req.message,
+            citations=[],
+            created_at=_now_iso(),
+        ).model_dump()
+    )
+    transient_session = {"transcript": transcript, "summary": chat_session.get("summary") or ""}
+    _compress_company_chat_session(transient_session)
+
+    result = await answer_company_question(
+        context=context,
+        transcript=transient_session["transcript"],
+        conversation_summary=transient_session["summary"],
+        question=req.message,
+        use_web_search=True,
+        active_job_id=req.active_job_id,
+    )
+
+    chat_session["summary"] = transient_session["summary"]
+    chat_session["transcript"] = transcript + [
+        CompanyChatMessage(
+            role="assistant",
+            content=result["answer"],
+            citations=result["citations"],
+            created_at=_now_iso(),
+        ).model_dump()
+    ]
+    _compress_company_chat_session(chat_session)
+
+    return {
+        "company_lookup_key": company_lookup_key,
+        "answer": result["answer"],
+        "citations": result["citations"],
+        "transcript": chat_session["transcript"],
+        "run_count": result["run_count"],
+        "source_counts": result["source_counts"],
+        "web_search_enabled": True,
+        "model_label": result["model_label"],
+        "used_run_ids": result["used_run_ids"],
+        "used_web_search": result["used_web_search"],
+        "web_search_query": result["web_search_query"],
+    }
+
+
+@app.delete("/api/companies/{company_lookup_key}/chat")
+async def delete_company_chat(
+    company_lookup_key: str,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _company_chat_sessions.pop(_chat_session_key(session_id, company_lookup_key), None)
+    return {"company_lookup_key": company_lookup_key, "cleared": True}
 
 
 @app.get("/api/companies/{company_name}/analyses")
