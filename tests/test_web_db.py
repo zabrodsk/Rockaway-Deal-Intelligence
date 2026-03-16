@@ -149,6 +149,73 @@ def test_list_company_histories_requeries_after_recent_reconcile(monkeypatch) ->
     assert fetch_calls["count"] == 2
 
 
+def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch) -> None:
+    import web.db as web_db
+
+    rows = [
+        {
+            "company_key": "slug:apaleo",
+            "company_name": "Apaleo",
+            "startup_slug": "apaleo",
+            "job_id_legacy": "job-28",
+            "decision": "invest",
+            "total_score": 60.1,
+            "composite_score": 60.1,
+            "bucket": "watchlist",
+            "mode": "specter",
+            "input_order": 1,
+            "run_created_at": "2026-03-15T22:58:47Z",
+            "created_at": "2026-03-15T22:58:47Z",
+            "result_payload": {
+                "mode": "single",
+                "startup_slug": "apaleo",
+                "company_name": "Apaleo",
+                "decision": "invest",
+                "total_score": 60.1,
+                "avg_pro": 81,
+                "avg_contra": 43,
+                "summary_rows": [{
+                    "startup_slug": "apaleo",
+                    "company_name": "Apaleo",
+                    "decision": "invest",
+                    "total_score": 60.1,
+                }],
+                "qa_provenance_rows": [{
+                    "startup_slug": "apaleo",
+                    "question": "Why now?",
+                    "answer": "Momentum and integrations.",
+                }],
+                "argument_rows": [{
+                    "startup_slug": "apaleo",
+                    "type": "pro",
+                    "score": 9,
+                    "argument_text": "Strong API-first product wedge.",
+                }],
+            },
+        }
+    ]
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: object())
+    monkeypatch.setattr(web_db, "_fetch_company_run_rows", lambda _client, limit_runs: rows)
+    monkeypatch.setattr(web_db, "backfill_company_runs_from_analyses", lambda limit_jobs=500: 0)
+    monkeypatch.setattr(web_db, "_reconcile_missing_company_runs", lambda client, existing_rows, limit_jobs: 0)
+
+    histories = web_db.list_company_histories(limit_runs=50)
+
+    run_results = histories[0]["runs"][0]["results"]
+    assert run_results["qa_provenance_rows"] == [{
+        "startup_slug": "apaleo",
+        "question": "Why now?",
+        "answer": "Momentum and integrations.",
+    }]
+    assert run_results["argument_rows"] == [{
+        "startup_slug": "apaleo",
+        "type": "pro",
+        "score": 9,
+        "argument_text": "Strong API-first product wedge.",
+    }]
+
+
 def test_compose_results_payload_from_company_runs_rebuilds_batch_ranking() -> None:
     import web.db as web_db
 

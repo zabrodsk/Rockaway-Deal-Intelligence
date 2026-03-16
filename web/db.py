@@ -2396,6 +2396,8 @@ def _compact_company_run_payload(payload: dict[str, Any] | None) -> dict[str, An
         "avg_pro": serialized.get("avg_pro"),
         "avg_contra": serialized.get("avg_contra"),
         "summary_rows": [summary_row] if summary_row else [],
+        "qa_provenance_rows": _serialize(serialized.get("qa_provenance_rows") or []),
+        "argument_rows": _serialize(serialized.get("argument_rows") or []),
         "founders": serialized.get("founders") or summary_row.get("founders") or [],
         "team_members": serialized.get("team_members") or summary_row.get("team_members") or [],
         "ranking_result": {
