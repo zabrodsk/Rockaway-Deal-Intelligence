@@ -4149,7 +4149,7 @@
 </div>
 
 <!-- ═══════════════════ UPLOAD SCREEN ═══════════════════ -->
-<div id="upload-screen" class="screen">
+<div id="upload-screen" class="screen active">
   <div class="header">
     <a class="logo" href="/">
       <div class="logo-icon">
@@ -4226,13 +4226,13 @@
       <span class="input-mode-label">Input mode</span>
       <div class="input-mode-toggle">
         <button type="button" class="input-mode-option" data-mode="original">Multi-file</button>
-        <button type="button" class="input-mode-option" data-mode="specter">Specter</button>
-        <button type="button" class="input-mode-option active" data-mode="pitchdeck">Pitch deck</button>
+        <button type="button" class="input-mode-option active" data-mode="specter">Specter</button>
+        <button type="button" class="input-mode-option" data-mode="pitchdeck">Pitch deck</button>
       </div>
-      <p class="input-mode-hint" id="input-mode-hint">Each file = one company. Best for multiple pitch decks.</p>
+      <p class="input-mode-hint" id="input-mode-hint">Upload a Specter companies export, optionally with a people export. CSV or Excel; filenames do not matter.</p>
       <div class="input-mode-callout" id="input-mode-callout">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-        <span><strong>Pitch deck</strong> is best for most files. Use <strong>Specter</strong> for structured CSV exports, or <strong>Multi-file</strong> to combine multiple docs into one company.</span>
+        <span><strong>Specter</strong> is the default for structured company and people exports. Use <strong>Pitch deck</strong> for one company per file, or <strong>Multi-file</strong> to combine multiple docs into one company.</span>
         <button type="button" class="input-mode-callout-dismiss" id="input-mode-callout-dismiss" title="Dismiss">&times;</button>
       </div>
     </div>
@@ -4373,7 +4373,7 @@
   <div id="analysis-screen-content" class="analysis-screen-content"></div>
 </div>
 
-<div id="companies-screen" class="screen active">
+<div id="companies-screen" class="screen">
   <div class="header companies-screen-toolbar">
     <a class="logo" href="/">
       <div class="logo-icon">
@@ -4551,7 +4551,7 @@ let sessionId = localStorage.getItem('session_id');
 let currentJobId = null;
 let currentResults = null;
 let uploadedFiles = [];
-let inputMode = 'pitchdeck';
+let inputMode = 'specter';
 let inputModeTouched = false;
 const APP_STATE_VERSION = '2026-03-15-analysis-state-v2';
 const APP_STATE_VERSION_KEY = 'app_state_version';
@@ -4979,7 +4979,7 @@ function getSelectedLlmFromConfig() {
 
 function getAdvancedLlmSelection() {
   if (!selectedLlmKey) return null;
-  const models = analysisConfig?.available_models || [];
+  const models = (analysisConfig?.available_models || []).filter((item) => item.provider !== 'openrouter');
   return models.find((item) => `${item.provider}:${item.model}` === selectedLlmKey && item.selectable) || null;
 }
 
@@ -5197,7 +5197,7 @@ function renderLlmSelector() {
     return;
   }
 
-  const models = analysisConfig.available_models || [];
+  const models = (analysisConfig.available_models || []).filter((item) => item.provider !== 'openrouter');
   const explicitSelection = getAdvancedLlmSelection();
   const previewSelection = explicitSelection || getSelectedLlmFromConfig();
   const selectedKeyForUi = explicitSelection
