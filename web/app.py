@@ -898,6 +898,10 @@ class CompanyChatResponse(BaseModel):
     web_search_query: str | None = None
 
 
+CompanyChatMessage.model_rebuild()
+CompanyChatResponse.model_rebuild()
+
+
 def _chat_session_key(session_id: str, company_lookup_key: str) -> tuple[str, str]:
     return (session_id, company_lookup_key.strip().lower())
 

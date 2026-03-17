@@ -31,6 +31,22 @@ def _login(client: TestClient) -> None:
     client.cookies.set("session_id", response.json()["session_id"])
 
 
+def test_company_chat_response_model_is_fully_defined() -> None:
+    payload = web_app.CompanyChatResponse(
+        company_lookup_key="name:apaleo",
+        transcript=[
+            web_app.CompanyChatMessage(
+                role="assistant",
+                content="Ready.",
+                citations=[],
+                created_at="2026-03-16T12:00:00Z",
+            )
+        ],
+    )
+    assert payload.company_lookup_key == "name:apaleo"
+    assert payload.transcript[0].content == "Ready."
+
+
 def test_company_chat_endpoints_roundtrip(monkeypatch) -> None:
     monkeypatch.setattr(web_app, "available_chat_models_payload", lambda: [
         {
