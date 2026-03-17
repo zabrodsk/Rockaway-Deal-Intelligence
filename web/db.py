@@ -1321,7 +1321,7 @@ def load_person_profile_job(person_job_id: str) -> dict[str, Any] | None:
     try:
         row = (
             client.table("person_profile_jobs")
-            .select("person_job_id, status, progress, result_payload, error")
+            .select("person_job_id, status, progress, request_payload, result_payload, error")
             .eq("person_job_id", person_job_id)
             .limit(1)
             .execute()

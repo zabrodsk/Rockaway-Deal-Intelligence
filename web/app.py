@@ -855,6 +855,7 @@ class PersonProfileJobStatus(BaseModel):
 PersonProfileJobStatus.model_rebuild()
 
 _person_jobs: dict[str, PersonProfileJobStatus] = {}
+_person_job_tasks: dict[str, asyncio.Task[Any]] = {}
 _person_service = PersonIntelService()
 
 
@@ -1376,6 +1377,63 @@ def _persist_person_job(job_id: str, request_payload: dict[str, Any] | None = No
             person_key,
             keep_person_job_id=job_id,
         )
+
+
+def _register_person_job_task(job_id: str, task: asyncio.Task[Any]) -> None:
+    _person_job_tasks[job_id] = task
+
+    def _cleanup(completed_task: asyncio.Task[Any]) -> None:
+        if _person_job_tasks.get(job_id) is completed_task:
+            _person_job_tasks.pop(job_id, None)
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            completed_task.result()
+
+    task.add_done_callback(_cleanup)
+
+
+def _schedule_person_profile_job(job_id: str, req: PersonProfileJobRequest) -> None:
+    task = _person_job_tasks.get(job_id)
+    if task and not task.done():
+        return
+    _register_person_job_task(job_id, asyncio.create_task(_run_person_profile_job(job_id, req)))
+
+
+def _resume_person_profile_job_if_needed(
+    job_id: str,
+    loaded: dict[str, Any] | None = None,
+) -> None:
+    task = _person_job_tasks.get(job_id)
+    if task and not task.done():
+        return
+
+    job = _person_jobs.get(job_id)
+    if not job or job.status not in {"pending", "running"}:
+        return
+
+    loaded = loaded or (db.load_person_profile_job(job_id) if db and db.is_configured() else None)
+    request_payload = (loaded or {}).get("request_payload") or {}
+    if not isinstance(request_payload, dict) or not request_payload:
+        job.status = "error"
+        job.progress = "Profile generation failed"
+        job.error = "Job payload missing; unable to resume person profile job."
+        _persist_person_job(job_id)
+        return
+
+    try:
+        req = PersonProfileJobRequest.model_validate(request_payload)
+    except Exception as exc:
+        job.status = "error"
+        job.progress = "Profile generation failed"
+        job.error = f"Invalid persisted person profile payload: {exc}"
+        _persist_person_job(job_id, request_payload)
+        return
+
+    job.status = "pending"
+    job.progress = "Resuming after restart..."
+    job.error = None
+    _persist_person_job(job_id, request_payload)
+    print(f"Resuming persisted person profile job {job_id}.")
+    _schedule_person_profile_job(job_id, req)
 
 
 def _is_stop_requested(job_id: str) -> bool:
@@ -3553,7 +3611,7 @@ async def create_person_profile_job(
         progress="Queued",
     )
     _persist_person_job(job_id, req.model_dump())
-    asyncio.create_task(_run_person_profile_job(job_id, req))
+    _schedule_person_profile_job(job_id, req)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -3576,10 +3634,13 @@ async def get_person_profile_status(
                     result=loaded.get("result_payload"),
                     error=loaded.get("error"),
                 )
+                _resume_person_profile_job_if_needed(job_id, loaded)
             else:
                 raise HTTPException(status_code=404, detail="Job not found")
         else:
             raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        _resume_person_profile_job_if_needed(job_id)
 
     job = _person_jobs[job_id]
     return {
@@ -3668,7 +3729,7 @@ async def create_bulk_founder_jobs(
             progress="Queued",
         )
         _persist_person_job(job_id, profile_req.model_dump())
-        asyncio.create_task(_run_person_profile_job(job_id, profile_req))
+        _schedule_person_profile_job(job_id, profile_req)
         created.append(
             {
                 "person_key": person_key,
