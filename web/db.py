@@ -1306,6 +1306,7 @@ def upsert_person_profile_job(
         "request_payload": _serialize(request_payload or {}),
         "result_payload": _serialize(result_payload) if result_payload is not None else None,
         "error": error,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
         client.table("person_profile_jobs").upsert(payload, on_conflict="person_job_id").execute()
@@ -1331,6 +1332,63 @@ def load_person_profile_job(person_job_id: str) -> dict[str, Any] | None:
     except Exception as exc:
         _log_supabase_error("load_person_profile_job", "person_profile_jobs", exc)
         return None
+
+
+def load_latest_person_profile_job(company_slug: str, person_key: str) -> dict[str, Any] | None:
+    client = _get_client()
+    if not client:
+        return None
+
+    normalized_slug = (company_slug or "").strip()
+    normalized_person_key = (person_key or "").strip()
+    if not normalized_slug or not normalized_person_key:
+        return None
+
+    try:
+        row = (
+            client.table("person_profile_jobs")
+            .select(
+                "person_job_id, company_slug, person_key, status, progress, request_payload, "
+                "result_payload, error, created_at, updated_at"
+            )
+            .eq("company_slug", normalized_slug)
+            .eq("person_key", normalized_person_key)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not row.data:
+            return None
+        return row.data[0]
+    except Exception as exc:
+        _log_supabase_error("load_latest_person_profile_job", "person_profile_jobs", exc)
+        return None
+
+
+def prune_person_profile_jobs(company_slug: str, person_key: str, keep_person_job_id: str) -> bool:
+    client = _get_client()
+    if not client:
+        return False
+
+    normalized_slug = (company_slug or "").strip()
+    normalized_person_key = (person_key or "").strip()
+    normalized_keep_id = (keep_person_job_id or "").strip()
+    if not normalized_slug or not normalized_person_key or not normalized_keep_id:
+        return False
+
+    try:
+        (
+            client.table("person_profile_jobs")
+            .delete()
+            .eq("company_slug", normalized_slug)
+            .eq("person_key", normalized_person_key)
+            .neq("person_job_id", normalized_keep_id)
+            .execute()
+        )
+        return True
+    except Exception as exc:
+        _log_supabase_error("prune_person_profile_jobs", "person_profile_jobs", exc)
+        return False
 
 
 def persist_analysis(

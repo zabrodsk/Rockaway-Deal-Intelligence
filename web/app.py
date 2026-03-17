@@ -1368,6 +1368,14 @@ def _persist_person_job(job_id: str, request_payload: dict[str, Any] | None = No
         company_slug=(request_payload or {}).get("company_slug"),
         person_key=(request_payload or {}).get("person_key"),
     )
+    company_slug = (request_payload or {}).get("company_slug")
+    person_key = (request_payload or {}).get("person_key")
+    if job.status in {"done", "error"} and company_slug and person_key:
+        db.prune_person_profile_jobs(
+            company_slug,
+            person_key,
+            keep_person_job_id=job_id,
+        )
 
 
 def _is_stop_requested(job_id: str) -> bool:
@@ -3580,6 +3588,37 @@ async def get_person_profile_status(
         "progress": job.progress,
         "result": job.result,
         "error": job.error,
+    }
+
+
+@app.get("/api/person-profile/latest")
+async def get_latest_person_profile(
+    company_slug: str,
+    person_key: str,
+    session_id: str | None = Cookie(default=None),
+):
+    """Fetch the latest shared person intelligence result for a team member."""
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not (db and db.is_configured()):
+        raise HTTPException(status_code=503, detail="Database not configured")
+
+    loaded = db.load_latest_person_profile_job(company_slug, person_key)
+    if not loaded:
+        raise HTTPException(status_code=404, detail="Person profile not found")
+
+    job_id = loaded.get("person_job_id") or ""
+    return {
+        "job_id": job_id,
+        "company_slug": loaded.get("company_slug") or company_slug,
+        "person_key": loaded.get("person_key") or person_key,
+        "status": loaded.get("status") or "pending",
+        "progress": loaded.get("progress") or "",
+        "result": loaded.get("result_payload"),
+        "error": loaded.get("error"),
+        "request_payload": loaded.get("request_payload") or {},
+        "created_at": loaded.get("created_at"),
+        "updated_at": loaded.get("updated_at"),
     }
 
 

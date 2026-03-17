@@ -3394,9 +3394,34 @@
       margin-bottom: 6px;
       align-items: center;
     }
+    .person-intel-card-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
     .person-intel-name { font-size: 13px; color: var(--text-light); }
     .person-intel-name.is-toggle { cursor: pointer; }
     .person-intel-name.is-toggle:hover { color: var(--green); }
+    .person-intel-refresh {
+      border: 1px solid var(--border-subtle);
+      background: rgba(16, 25, 39, 0.9);
+      color: var(--text-dim);
+      border-radius: var(--radius-full);
+      padding: 5px 10px;
+      font-size: 11px;
+      letter-spacing: 0.7px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .person-intel-refresh:hover,
+    .person-intel-refresh:focus-visible {
+      border-color: var(--green-border);
+      color: var(--green);
+      outline: none;
+    }
     .person-intel-status {
       font-size: 11px;
       text-transform: uppercase;
@@ -7180,6 +7205,7 @@ function renderPersonIntelCards(slug) {
     const error = entry.error ? `<div class="person-intel-md" style="color:var(--red)">${escapeHtml(entry.error)}</div>` : '';
     const canToggle = statusClass === 'done' && !!(reportUi || error);
     const isCollapsed = !!entry.collapsed;
+    const canRefresh = statusClass !== 'running' && !!(entry.member?.primary_profile_url || entry.primary_profile_url);
     const statusLabel = escapeHtml(entry.status || 'queued');
     const statusUi = statusClass === 'running'
       ? `<span class="person-intel-status-spinner" aria-hidden="true"></span><span class="person-intel-status-label">Fetching</span>`
@@ -7188,13 +7214,51 @@ function renderPersonIntelCards(slug) {
       <div class="person-intel-card">
         <div class="person-intel-card-header">
           <div class="person-intel-name ${canToggle ? 'is-toggle' : ''}" ${canToggle ? `data-person-toggle="${slug}" data-person-entry-index="${idx}"` : ''}>${escapeHtml(entry.full_name || 'Team Member')}</div>
-          <div class="person-intel-status ${statusClass} ${canToggle ? 'is-toggle' : ''}" ${canToggle ? `data-person-toggle="${slug}" data-person-entry-index="${idx}"` : ''} aria-label="${statusLabel}">${statusUi}</div>
+          <div class="person-intel-card-actions">
+            ${canRefresh ? `<button type="button" class="person-intel-refresh" data-person-refresh="${slug}" data-person-entry-index="${idx}">Refresh</button>` : ''}
+            <div class="person-intel-status ${statusClass} ${canToggle ? 'is-toggle' : ''}" ${canToggle ? `data-person-toggle="${slug}" data-person-entry-index="${idx}"` : ''} aria-label="${statusLabel}">${statusUi}</div>
+          </div>
         </div>
         ${isCollapsed ? '' : reportUi}
         ${isCollapsed ? '' : error}
       </div>
     `;
   }).join('');
+}
+
+function buildPersonIntelEntry(member, overrides = {}) {
+  return {
+    full_name: member?.full_name || 'Team Member',
+    role: member?.role || '',
+    person_key: member?.person_key || '',
+    primary_profile_url: member?.primary_profile_url || '',
+    member: member ? { ...member } : null,
+    ...overrides,
+  };
+}
+
+function storePersonIntelCache(entry, result) {
+  if (!result?.profile_json) return;
+  const cache = loadPersonIntelCache();
+  const key = personIntelCacheKey({
+    primary_profile_url: result.profile_json?.subject?.normalized_profile_url || entry.primary_profile_url || '',
+    full_name: entry.full_name || result.profile_json?.subject?.full_name || '',
+    current_company: result.profile_json?.subject?.current_company || entry.member?.current_company || '',
+  });
+  cache[key] = result;
+  savePersonIntelCache(cache);
+}
+
+async function loadSharedPersonIntelForMember(slug, member) {
+  if (!slug || !(member?.person_key || '').trim()) return null;
+  try {
+    return await api(`/api/person-profile/latest?company_slug=${encodeURIComponent(slug)}&person_key=${encodeURIComponent(member.person_key)}`, {
+      timeoutMs: 8000,
+      retries: 0,
+    });
+  } catch (err) {
+    return null;
+  }
 }
 
 async function pollPersonIntelJob(slug, index) {
@@ -7209,14 +7273,7 @@ async function pollPersonIntelJob(slug, index) {
     renderPersonIntelCards(slug);
 
     if (status.status === 'done' && status.result?.profile_json) {
-      const cache = loadPersonIntelCache();
-      const key = personIntelCacheKey({
-        primary_profile_url: status.result.profile_json?.subject?.normalized_profile_url || '',
-        full_name: entry.full_name || status.result.profile_json?.subject?.full_name || '',
-        current_company: status.result.profile_json?.subject?.current_company || '',
-      });
-      cache[key] = status.result;
-      savePersonIntelCache(cache);
+      storePersonIntelCache(entry, status.result);
       return;
     }
     if (status.status === 'error') return;
@@ -7226,8 +7283,9 @@ async function pollPersonIntelJob(slug, index) {
   }
 }
 
-async function startPersonIntelForMember(slug, member) {
+async function startPersonIntelForMember(slug, member, options = {}) {
   if (!member) return;
+  const forceRefresh = options?.forceRefresh === true;
   const manualEl = document.querySelector(`[data-person-intel-manual="${slug}"]`);
   const emptyEl = document.querySelector(`[data-person-intel-section="${slug}"] .person-intel-empty`);
 
@@ -7249,29 +7307,50 @@ async function startPersonIntelForMember(slug, member) {
     (e) => (e.person_key || '') === (member.person_key || '')
   );
 
-  if (cache[key]) {
-    const cachedEntry = {
-      full_name: member.full_name || 'Team Member',
-      role: member.role || '',
-      person_key: member.person_key || '',
+  if (!forceRefresh) {
+    const shared = await loadSharedPersonIntelForMember(slug, member);
+    if (shared) {
+      const sharedEntry = buildPersonIntelEntry(member, {
+        job_id: shared.job_id || undefined,
+        status: shared.status || 'done',
+        result: shared.result || null,
+        error: shared.error || null,
+      });
+      if (existingIndex >= 0) personIntelState[slug].entries[existingIndex] = sharedEntry;
+      else personIntelState[slug].entries.unshift(sharedEntry);
+      renderPersonIntelCards(slug);
+      if (shared.status === 'done' && shared.result?.profile_json) {
+        storePersonIntelCache(sharedEntry, shared.result);
+        return;
+      }
+      if (shared.status === 'running' && shared.job_id) {
+        const activeIndex = (personIntelState[slug].entries || []).findIndex(
+          (e) => (e.person_key || '') === (member.person_key || '')
+        );
+        if (activeIndex >= 0) pollPersonIntelJob(slug, activeIndex);
+        return;
+      }
+      if (shared.status === 'error') return;
+    }
+  }
+
+  if (!forceRefresh && cache[key]) {
+    const cachedEntry = buildPersonIntelEntry(member, {
       status: 'done',
       result: cache[key],
       error: null,
-    };
+    });
     if (existingIndex >= 0) personIntelState[slug].entries[existingIndex] = cachedEntry;
     else personIntelState[slug].entries.unshift(cachedEntry);
     renderPersonIntelCards(slug);
     return;
   }
 
-  const runningEntry = {
-    full_name: member.full_name || 'Team Member',
-    role: member.role || '',
-    person_key: member.person_key || '',
+  const runningEntry = buildPersonIntelEntry(member, {
     status: 'running',
     result: null,
     error: null,
-  };
+  });
   if (existingIndex >= 0) personIntelState[slug].entries[existingIndex] = runningEntry;
   else personIntelState[slug].entries.unshift(runningEntry);
   renderPersonIntelCards(slug);
@@ -8710,6 +8789,22 @@ document.addEventListener('click', (e) => {
       startPersonIntelForMember(slug, member).catch((err) => {
         const section = document.querySelector(`[data-person-intel-section="${slug}"] .person-intel-empty`);
         if (section) section.textContent = err?.message || 'Failed to start person profile job.';
+      });
+    }
+    return;
+  }
+
+  const refreshBtn = e.target.closest('[data-person-refresh][data-person-entry-index]');
+  if (refreshBtn) {
+    const slug = refreshBtn.getAttribute('data-person-refresh');
+    const idx = Number(refreshBtn.getAttribute('data-person-entry-index') || '-1');
+    const entry = personIntelState?.[slug]?.entries?.[idx];
+    const members = getTeamMembersForSlug(slug);
+    const member = entry?.member || members.find((candidate) => (candidate.person_key || '') === (entry?.person_key || ''));
+    if (slug && member) {
+      startPersonIntelForMember(slug, member, { forceRefresh: true }).catch((err) => {
+        const section = document.querySelector(`[data-person-intel-section="${slug}"] .person-intel-empty`);
+        if (section) section.textContent = err?.message || 'Failed to refresh person profile job.';
       });
     }
     return;
