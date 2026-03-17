@@ -2693,6 +2693,58 @@ def delete_company_chat_session(company_lookup_key: str) -> bool:
         return False
 
 
+def load_app_setting(key: str) -> str | None:
+    """Load a shared app setting value by key."""
+    client = _get_client()
+    if not client:
+        return None
+
+    normalized_key = (key or "").strip()
+    if not normalized_key:
+        return None
+
+    try:
+        rows = (
+            client.table("app_settings")
+            .select("setting_key, value_text")
+            .eq("setting_key", normalized_key)
+            .limit(1)
+            .execute()
+        )
+        if not rows.data:
+            return ""
+        row = rows.data[0] or {}
+        return str(row.get("value_text") or "")
+    except Exception as exc:
+        _log_supabase_error("load_app_setting", "app_settings", exc)
+        return None
+
+
+def save_app_setting(key: str, value: str | None) -> bool:
+    """Persist a shared app setting value by key."""
+    client = _get_client()
+    if not client:
+        return False
+
+    normalized_key = (key or "").strip()
+    if not normalized_key:
+        return False
+
+    try:
+        client.table("app_settings").upsert(
+            {
+                "setting_key": normalized_key,
+                "value_text": str(value or ""),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="setting_key",
+        ).execute()
+        return True
+    except Exception as exc:
+        _log_supabase_error("save_app_setting", "app_settings", exc)
+        return False
+
+
 def _extract_company_runs_from_payload(
     job_id_legacy: str,
     payload: dict[str, Any],

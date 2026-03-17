@@ -873,6 +873,15 @@ class CompanyChatRequest(BaseModel):
         return text[:4000]
 
 
+class VcStrategyRequest(BaseModel):
+    vc_investment_strategy: str = ""
+
+    @field_validator("vc_investment_strategy")
+    @classmethod
+    def _validate_strategy(cls, v: str) -> str:
+        return (v or "").strip()[:8000]
+
+
 class CompanyChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -1067,6 +1076,24 @@ def _company_chat_session_costs(session: dict[str, Any] | None) -> dict[str, Any
         return aggregate
     rows = list((session or {}).get("model_executions") or [])
     return build_run_costs_from_model_executions(rows)
+
+
+async def _load_shared_vc_strategy() -> str | None:
+    if db and db.is_configured():
+        load_setting = getattr(db, "load_app_setting", None)
+        value = await _call_company_chat_db(load_setting, "vc_investment_strategy")
+        if value is None:
+            return None
+        return str(value or "")
+    return None
+
+
+async def _save_shared_vc_strategy(value: str) -> bool:
+    if db and db.is_configured():
+        save_setting = getattr(db, "save_app_setting", None)
+        result = await _call_company_chat_db(save_setting, "vc_investment_strategy", value)
+        return bool(result)
+    return False
 
 
 def _runtime_versions() -> dict[str, str]:
@@ -3625,6 +3652,13 @@ async def get_config(session_id: str | None = Cookie(default=None)):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
     default_llm = current_default_selection()
+    shared_vc_strategy = ""
+    vc_strategy_source = "local"
+    if db and db.is_configured():
+        vc_strategy_source = "supabase"
+        loaded_strategy = await _load_shared_vc_strategy()
+        if isinstance(loaded_strategy, str):
+            shared_vc_strategy = loaded_strategy
     return {
         "llm": default_llm["label"],
         "default_llm": default_llm,
@@ -3633,6 +3667,27 @@ async def get_config(session_id: str | None = Cookie(default=None)):
         "phase_model_defaults": phase_model_defaults_payload(),
         "quality_tiers": quality_tiers_payload(),
         "premium_phase_options": premium_phase_options_payload(),
+        "vc_investment_strategy": shared_vc_strategy,
+        "vc_strategy_source": vc_strategy_source,
+    }
+
+
+@app.post("/api/settings/vc-strategy")
+async def save_vc_strategy(
+    req: VcStrategyRequest,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=503, detail="Shared settings storage is not configured.")
+    strategy = (req.vc_investment_strategy or "").strip()
+    ok = await _save_shared_vc_strategy(strategy)
+    if not ok:
+        raise HTTPException(status_code=503, detail="Could not save VC investment strategy.")
+    return {
+        "vc_investment_strategy": strategy,
+        "vc_strategy_source": "supabase",
     }
 
 

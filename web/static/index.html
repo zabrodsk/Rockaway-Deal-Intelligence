@@ -5284,6 +5284,10 @@ async function loadAnalysisConfig() {
   renderLlmSelector();
   try {
     analysisConfig = await api('/api/config', { timeoutMs: 5000, retries: 0 });
+    if (analysisConfig?.vc_strategy_source === 'supabase') {
+      vcInvestmentStrategy = (analysisConfig.vc_investment_strategy || '').trim();
+      localStorage.setItem(VC_STRATEGY_KEY, vcInvestmentStrategy);
+    }
     analysisConfigLoadState = 'ready';
     renderPhaseModelSelector();
     renderLlmSelector();
@@ -8848,14 +8852,29 @@ function showSettingsModal() {
 function hideSettingsModal() {
   $('#settings-modal-overlay').classList.remove('audit-modal-open');
 }
-function saveVcStrategy() {
+async function saveVcStrategy() {
   vcInvestmentStrategy = ($('#vc-strategy-input').value || '').trim();
   localStorage.setItem(VC_STRATEGY_KEY, vcInvestmentStrategy);
+  if (analysisConfig?.vc_strategy_source === 'supabase') {
+    const response = await api('/api/settings/vc-strategy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vc_investment_strategy: vcInvestmentStrategy }),
+      timeoutMs: 5000,
+      retries: 0,
+    });
+    vcInvestmentStrategy = (response?.vc_investment_strategy || '').trim();
+    localStorage.setItem(VC_STRATEGY_KEY, vcInvestmentStrategy);
+  }
 }
 $('#settings-open').addEventListener('click', showSettingsModal);
-$('#settings-save-vc-btn').addEventListener('click', () => {
-  saveVcStrategy();
-  hideSettingsModal();
+$('#settings-save-vc-btn').addEventListener('click', async () => {
+  try {
+    await saveVcStrategy();
+    hideSettingsModal();
+  } catch (err) {
+    window.alert(err?.message || 'Failed to save VC investment strategy.');
+  }
 });
 $('#settings-close-btn').addEventListener('click', hideSettingsModal);
 $('#settings-modal-overlay').addEventListener('click', (e) => {

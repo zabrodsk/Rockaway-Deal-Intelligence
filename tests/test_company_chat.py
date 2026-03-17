@@ -47,6 +47,42 @@ def test_company_chat_response_model_is_fully_defined() -> None:
     assert payload.transcript[0].content == "Ready."
 
 
+def test_config_returns_shared_vc_strategy_from_db(monkeypatch) -> None:
+    monkeypatch.setattr(web_app, "db", type("FakeDb", (), {
+        "is_configured": staticmethod(lambda: True),
+        "load_app_setting": staticmethod(lambda key: "B2B SaaS in Europe"),
+    })())
+
+    with TestClient(web_app.app) as client:
+        _login(client)
+        response = client.get("/api/config")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["vc_investment_strategy"] == "B2B SaaS in Europe"
+    assert payload["vc_strategy_source"] == "supabase"
+
+
+def test_save_vc_strategy_persists_shared_setting(monkeypatch) -> None:
+    saved = {}
+
+    monkeypatch.setattr(web_app, "db", type("FakeDb", (), {
+        "is_configured": staticmethod(lambda: True),
+        "save_app_setting": staticmethod(lambda key, value: saved.update({"key": key, "value": value}) or True),
+    })())
+
+    with TestClient(web_app.app) as client:
+        _login(client)
+        response = client.post("/api/settings/vc-strategy", json={"vc_investment_strategy": "Series A climate software"})
+
+    assert response.status_code == 200
+    assert response.json()["vc_investment_strategy"] == "Series A climate software"
+    assert saved == {
+        "key": "vc_investment_strategy",
+        "value": "Series A climate software",
+    }
+
+
 def test_company_chat_endpoints_roundtrip(monkeypatch) -> None:
     monkeypatch.setattr(web_app, "available_chat_models_payload", lambda: [
         {
