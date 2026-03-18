@@ -4267,6 +4267,22 @@
       <input id="run-name-input" class="instructions-input" type="text" maxlength="120" placeholder="e.g. Germany SaaS batch, Seed fintech shortlist, Q2 pipeline">
     </div>
 
+    <div class="instructions-section" id="analysis-identity-section" style="width:640px;margin-top:20px;display:none;">
+      <div class="instructions-label">Analysis identity</div>
+      <div id="analysis-identity-status" style="font-size:13px;color:var(--text-dim);margin-bottom:12px;">Loading identity…</div>
+      <div id="analysis-identity-signed-out" style="display:none;">
+        <input id="analysis-identity-email" class="instructions-input" type="email" maxlength="200" placeholder="name@rockaway.vc" autocomplete="email">
+        <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap;">
+          <button type="button" class="btn-ghost" id="analysis-identity-send">Send magic link</button>
+          <div id="analysis-identity-pending" style="font-size:13px;color:var(--text-dim);display:none;"></div>
+        </div>
+      </div>
+      <div id="analysis-identity-signed-in" style="display:none;">
+        <div id="analysis-identity-user" style="font-size:14px;color:var(--text-light);margin-bottom:12px;"></div>
+        <button type="button" class="btn-ghost" id="analysis-identity-signout">Sign out</button>
+      </div>
+    </div>
+
     <div class="instructions-section" style="width:640px;margin-top:20px;">
       <label class="instructions-label" for="instructions-input">Additional instructions <span style="color:var(--text-dim);font-weight:400">(optional)</span></label>
       <textarea id="instructions-input" class="instructions-input" rows="2" placeholder="e.g. Only rank the first 3 companies, focus on B2B SaaS, ignore companies outside Europe..."></textarea>
@@ -4634,6 +4650,13 @@ let selectedPhaseModelKeys = {};
 let analysisConfigLoadState = 'idle';
 let analysisFocusJobId = null;
 let analysisFocusClearTimer = null;
+let supabaseClient = null;
+let supabaseClientPromise = null;
+let supabaseIdentity = null;
+let supabaseAuthState = 'idle';
+let supabaseMagicLinkEmail = '';
+let supabaseAuthListenerBound = false;
+let supabaseAuthError = '';
 
 function migrateClientState() {
   try {
@@ -5342,14 +5365,180 @@ async function loadAnalysisConfig() {
     analysisConfigLoadState = 'ready';
     renderPhaseModelSelector();
     renderLlmSelector();
+    await initializeSupabaseAuth();
+    renderAnalysisIdentity();
+    updateAnalyzeButtonState();
     return analysisConfig;
   } catch (_) {
     analysisConfig = null;
     analysisConfigLoadState = 'error';
     renderPhaseModelSelector();
     renderLlmSelector();
+    renderAnalysisIdentity();
+    updateAnalyzeButtonState();
     return null;
   }
+}
+
+function clearSupabaseAuthCallbackParams() {
+  const url = new URL(window.location.href);
+  let changed = false;
+  ['code', 'type', 'access_token', 'refresh_token', 'token_type', 'expires_in', 'expires_at'].forEach((key) => {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  });
+  if (url.hash) {
+    url.hash = '';
+    changed = true;
+  }
+  if (changed) {
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
+  }
+}
+
+function getSupabaseAuthConfig() {
+  return analysisConfig?.supabase_auth || null;
+}
+
+function isSupabaseAuthRequired() {
+  return getSupabaseAuthConfig()?.required === true;
+}
+
+function getSupabaseAccessToken() {
+  return supabaseIdentity?.access_token || null;
+}
+
+async function ensureSupabaseClient() {
+  const config = getSupabaseAuthConfig();
+  if (!config?.configured) return null;
+  if (supabaseClient) return supabaseClient;
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import('/vendor/@supabase/supabase-js/dist/index.mjs')
+      .then((mod) => {
+        supabaseClient = mod.createClient(config.url, config.anon_key, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true,
+          },
+        });
+        return supabaseClient;
+      })
+      .catch((err) => {
+        supabaseClientPromise = null;
+        throw err;
+      });
+  }
+  return supabaseClientPromise;
+}
+
+function setSupabaseIdentityFromSession(session) {
+  const user = session?.user || null;
+  const metadata = user?.user_metadata || {};
+  const displayName = String(
+    metadata?.full_name || metadata?.name || metadata?.display_name || metadata?.user_name || ''
+  ).trim();
+  const email = String(user?.email || '').trim();
+  supabaseIdentity = session && user ? {
+    user_id: user.id || null,
+    email: email || null,
+    display_name: displayName || null,
+    label: displayName || email || null,
+    access_token: session.access_token || null,
+  } : null;
+}
+
+async function initializeSupabaseAuth() {
+  const config = getSupabaseAuthConfig();
+  if (!config?.configured) {
+    supabaseIdentity = null;
+    supabaseAuthState = 'idle';
+    supabaseAuthError = '';
+    return null;
+  }
+  const client = await ensureSupabaseClient();
+  if (!client) return null;
+  if (!supabaseAuthListenerBound) {
+    client.auth.onAuthStateChange((_event, session) => {
+      setSupabaseIdentityFromSession(session);
+      if (session?.access_token) {
+        supabaseAuthState = 'signed_in';
+        supabaseAuthError = '';
+        clearSupabaseAuthCallbackParams();
+      } else if (supabaseAuthState !== 'pending') {
+        supabaseAuthState = 'signed_out';
+      }
+      renderAnalysisIdentity();
+      updateAnalyzeButtonState();
+    });
+    supabaseAuthListenerBound = true;
+  }
+  try {
+    const { data } = await client.auth.getSession();
+    setSupabaseIdentityFromSession(data?.session || null);
+    supabaseAuthState = supabaseIdentity ? 'signed_in' : (supabaseMagicLinkEmail ? 'pending' : 'signed_out');
+    if (supabaseIdentity) supabaseAuthError = '';
+    if (supabaseIdentity?.access_token) clearSupabaseAuthCallbackParams();
+  } catch (_) {
+    supabaseAuthState = 'signed_out';
+    supabaseIdentity = null;
+  }
+  return supabaseIdentity;
+}
+
+function renderAnalysisIdentity() {
+  const section = $('#analysis-identity-section');
+  const status = $('#analysis-identity-status');
+  const signedOut = $('#analysis-identity-signed-out');
+  const signedIn = $('#analysis-identity-signed-in');
+  const userEl = $('#analysis-identity-user');
+  const pendingEl = $('#analysis-identity-pending');
+  const sendBtn = $('#analysis-identity-send');
+  const emailInput = $('#analysis-identity-email');
+  if (!section || !status || !signedOut || !signedIn || !userEl || !pendingEl || !sendBtn || !emailInput) return;
+
+  const config = getSupabaseAuthConfig();
+  if (!config?.configured) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = 'block';
+  const label = supabaseIdentity?.label || 'Unknown';
+  const email = supabaseIdentity?.email || '';
+  const authReady = !!getSupabaseAccessToken();
+  signedOut.style.display = authReady ? 'none' : 'block';
+  signedIn.style.display = authReady ? 'block' : 'none';
+  pendingEl.style.display = supabaseAuthState === 'pending' && supabaseMagicLinkEmail ? 'block' : 'none';
+  pendingEl.textContent = supabaseMagicLinkEmail ? `Magic link sent to ${supabaseMagicLinkEmail}.` : '';
+  sendBtn.disabled = supabaseAuthState === 'sending';
+
+  if (authReady) {
+    status.textContent = config.required
+      ? 'Signed in. New runs will be stamped with this identity.'
+      : 'Signed in. This identity will be attached to any new run you start.';
+    userEl.textContent = email && label !== email ? `${label} · ${email}` : label;
+  } else if (supabaseAuthState === 'error' && supabaseAuthError) {
+    status.textContent = supabaseAuthError;
+  } else if (supabaseAuthState === 'sending') {
+    status.textContent = 'Sending magic link…';
+  } else if (supabaseAuthState === 'pending') {
+    status.textContent = 'Check your inbox to finish signing in.';
+  } else {
+    status.textContent = config.required
+      ? 'Sign in with Supabase before starting a new analysis.'
+      : 'Optional: sign in with Supabase so new runs show who started them.';
+  }
+}
+
+function updateAnalyzeButtonState() {
+  const button = $('#analyze-btn');
+  if (!button) return;
+  const identityReady = !isSupabaseAuthRequired() || !!getSupabaseAccessToken();
+  button.disabled = uploadedFiles.length === 0 || !identityReady;
+  button.title = identityReady ? '' : 'Sign in with Supabase before starting an analysis.';
 }
 
 async function backfillRecentRunsWithLlm() {
@@ -5536,6 +5725,10 @@ function buildCompaniesFromJobs(runs) {
           mode: sourceMode,
           input_order: null,
           created_at: createdAt,
+          started_by_user_id: run.started_by_user_id || null,
+          started_by_email: run.started_by_email || null,
+          started_by_display_name: run.started_by_display_name || null,
+          started_by_label: run.started_by_label || null,
           results,
         },
       });
@@ -5556,6 +5749,10 @@ function buildCompaniesFromJobs(runs) {
             mode: sourceMode,
             input_order: summaryRow.specter_input_order ?? null,
             created_at: createdAt,
+            started_by_user_id: run.started_by_user_id || null,
+            started_by_email: run.started_by_email || null,
+            started_by_display_name: run.started_by_display_name || null,
+            started_by_label: run.started_by_label || null,
             results: {
               mode: 'single',
               source_mode: payloadMode || 'batch',
@@ -5662,6 +5859,7 @@ function renderSavedJobCards(
     const metaBits = [
       createdLine ? `Saved ${createdLine}` : '',
       modeLabel,
+      run.started_by_label ? `Started by ${run.started_by_label}` : 'Legacy run',
       run.useWebSearch === true ? 'Web search on' : '',
       run.jobId ? `Job ${run.jobId}` : '',
     ].filter(Boolean);
@@ -6638,6 +6836,7 @@ function renderSavedCompaniesWindow() {
           const runBits = [
             formatRunTimestamp(run.created_at),
             run.mode ? getRunModeLabel({ input_mode: run.mode }) : '',
+            run.started_by_label ? `Started by ${run.started_by_label}` : 'Legacy run',
             run.job_id ? `Job ${run.job_id}` : '',
             getLlmLabel(run?.results, run?.llm),
           ].filter(Boolean);
@@ -6913,6 +7112,10 @@ async function fetchSavedJobs({ silent = true } = {}) {
       createdAt: job.created_at || null,
       input_mode: job.input_mode || null,
       runName: job.run_name || null,
+      started_by_user_id: job.started_by_user_id || null,
+      started_by_email: job.started_by_email || null,
+      started_by_display_name: job.started_by_display_name || null,
+      started_by_label: job.started_by_label || null,
       useWebSearch: job.use_web_search === true,
       results: job.results || null,
       hasResults: job.has_results === true || !!job.results,
@@ -6965,6 +7168,10 @@ async function fetchSavedCompanies({ silent = true } = {}) {
         progress: job.progress || '',
         createdAt: job.created_at || null,
         input_mode: job.input_mode || null,
+        started_by_user_id: job.started_by_user_id || null,
+        started_by_email: job.started_by_email || null,
+        started_by_display_name: job.started_by_display_name || null,
+        started_by_label: job.started_by_label || null,
         useWebSearch: job.use_web_search === true,
         results: job.results || null,
         llm: job.llm || null,
@@ -7683,6 +7890,53 @@ async function checkWebSearchAvailable() {
   } catch {}
 }
 
+$('#analysis-identity-send')?.addEventListener('click', async () => {
+  const email = ($('#analysis-identity-email')?.value || '').trim();
+  if (!email) {
+    $('#analysis-identity-status').textContent = 'Enter your email address to receive a magic link.';
+    return;
+  }
+  try {
+    supabaseAuthState = 'sending';
+    supabaseMagicLinkEmail = email;
+    supabaseAuthError = '';
+    renderAnalysisIdentity();
+    const client = await ensureSupabaseClient();
+    if (!client) {
+      throw new Error('Supabase auth is not configured.');
+    }
+    const redirectTo = getSupabaseAuthConfig()?.redirect_url || window.location.href;
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: redirectTo },
+    });
+    if (error) throw error;
+    supabaseAuthState = 'pending';
+    renderAnalysisIdentity();
+  } catch (err) {
+    supabaseAuthState = 'error';
+    supabaseAuthError = err?.message || 'Failed to send magic link.';
+    renderAnalysisIdentity();
+  } finally {
+    updateAnalyzeButtonState();
+  }
+});
+
+$('#analysis-identity-signout')?.addEventListener('click', async () => {
+  try {
+    const client = await ensureSupabaseClient();
+    await client?.auth.signOut();
+  } catch (_) {
+    // Ignore sign-out failures and clear local UI state regardless.
+  }
+  supabaseIdentity = null;
+  supabaseAuthState = 'signed_out';
+  supabaseMagicLinkEmail = '';
+  supabaseAuthError = '';
+  renderAnalysisIdentity();
+  updateAnalyzeButtonState();
+});
+
 async function resumeActiveJob() {
   const savedJobId = getPersistedActiveJob();
   if (!savedJobId) return false;
@@ -7856,6 +8110,7 @@ function renderFiles() {
   const list = $('#files-list');
   if (uploadedFiles.length === 0) {
     section.style.display = 'none';
+    updateAnalyzeButtonState();
     return;
   }
   section.style.display = 'block';
@@ -7875,6 +8130,7 @@ function renderFiles() {
       </div>
     </div>`;
   }).join('');
+  updateAnalyzeButtonState();
 }
 
 function isSpecterMode() {
@@ -7908,6 +8164,7 @@ $('#clear-files').addEventListener('click', () => {
   uploadedFiles = [];
   renderFiles();
   $('#specter-badge').style.display = 'none';
+  updateAnalyzeButtonState();
 });
 
 const uploadZone = $('#upload-zone');
@@ -7963,6 +8220,10 @@ $('#llm-model-select')?.addEventListener('change', (event) => {
 // ── Analyze ──
 $('#analyze-btn').addEventListener('click', async () => {
   if (uploadedFiles.length === 0) return;
+  if (isSupabaseAuthRequired() && !getSupabaseAccessToken()) {
+    window.alert('Sign in with Supabase before starting an analysis.');
+    return;
+  }
 
   // Dismiss onboarding once user starts their first analysis
   localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
@@ -7998,6 +8259,10 @@ $('#analyze-btn').addEventListener('click', async () => {
       progress: 'Queued for worker',
       input_mode: effectiveInputMode,
       runName: requestedRunName,
+      started_by_user_id: supabaseIdentity?.user_id || null,
+      started_by_email: supabaseIdentity?.email || null,
+      started_by_display_name: supabaseIdentity?.display_name || null,
+      started_by_label: supabaseIdentity?.label || null,
       llm: analysisSelection.llmLabel || null,
       title: effectiveInputMode === 'specter' ? undefined : uploadedFiles.map((f) => f.name).join(', '),
     });
@@ -8009,7 +8274,10 @@ $('#analyze-btn').addEventListener('click', async () => {
     try {
       await api(`/api/analyze/${currentJobId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getSupabaseAccessToken() ? { Authorization: `Bearer ${getSupabaseAccessToken()}` } : {}),
+        },
         body: JSON.stringify({
           use_web_search: useWebSearch,
           instructions: instructions || undefined,
@@ -8034,6 +8302,10 @@ $('#analyze-btn').addEventListener('click', async () => {
         progress: 'Connection unstable while starting analysis. Tracking from Analysis overview...',
         input_mode: effectiveInputMode,
         runName: requestedRunName,
+        started_by_user_id: supabaseIdentity?.user_id || null,
+        started_by_email: supabaseIdentity?.email || null,
+        started_by_display_name: supabaseIdentity?.display_name || null,
+        started_by_label: supabaseIdentity?.label || null,
         llm: analysisSelection.llmLabel || null,
       });
     }

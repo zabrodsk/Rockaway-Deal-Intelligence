@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import Cookie, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import Cookie, FastAPI, File, Header, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -168,6 +168,9 @@ _company_chat_sessions: dict[tuple[str, str], dict[str, Any]] = {}
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+VENDOR_DIR = PROJECT_ROOT / "node_modules"
+if VENDOR_DIR.exists():
+    app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
 
 
 def _lazy_import_pandas():
@@ -436,6 +439,18 @@ def _promote_results_metadata(job_id: str, results: dict[str, Any] | None) -> No
         run_config["quality_tier"] = pipeline_meta.get("quality_tier")
         run_config["premium_phase_models"] = pipeline_meta.get("premium_phase_models")
         run_config["effective_phase_models"] = pipeline_meta.get("effective_phase_models")
+        cache["run_config"] = run_config
+
+    started_by = _started_by_from_payload(results)
+    if started_by:
+        job = _jobs.get(job_id)
+        if job:
+            job.started_by_user_id = started_by.get("started_by_user_id")
+            job.started_by_email = started_by.get("started_by_email")
+            job.started_by_display_name = started_by.get("started_by_display_name")
+            job.started_by_label = started_by.get("started_by_label")
+        run_config = dict(cache.get("run_config") or {})
+        run_config.update(started_by)
         cache["run_config"] = run_config
 
 
@@ -817,6 +832,10 @@ class AnalysisStatus(BaseModel):
     progress: str = ""
     progress_log: list[str] = Field(default_factory=list)
     results: object | None = None
+    started_by_user_id: str | None = None
+    started_by_email: str | None = None
+    started_by_display_name: str | None = None
+    started_by_label: str | None = None
     terminal_results_served: bool = False
     restart_pending: bool = False
     persistence_complete: bool = False
@@ -1556,6 +1575,10 @@ def _persist_jobs() -> None:
                     "progress": job.progress,
                     "progress_log": (getattr(job, "progress_log", []) or [])[-MAX_PROGRESS_LOG_ENTRIES:],
                     "results": job.results,
+                    "started_by_user_id": job.started_by_user_id,
+                    "started_by_email": job.started_by_email,
+                    "started_by_display_name": job.started_by_display_name,
+                    "started_by_label": job.started_by_label,
                 }
         if not to_save:
             return
@@ -1585,6 +1608,10 @@ def _load_jobs() -> None:
                         progress=data.get("progress", "Analysis complete"),
                         progress_log=(data.get("progress_log") or [])[-MAX_PROGRESS_LOG_ENTRIES:],
                         results=None,
+                        started_by_user_id=data.get("started_by_user_id"),
+                        started_by_email=data.get("started_by_email"),
+                        started_by_display_name=data.get("started_by_display_name"),
+                        started_by_label=data.get("started_by_label"),
                         persistence_complete=True,
                     )
                     _results_cache[job_id] = {}
@@ -1614,6 +1641,10 @@ def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
         ),
         "use_web_search": None,
         "run_name": cache.get("run_name") or run_config.get("run_name"),
+        "started_by_user_id": job.started_by_user_id or run_config.get("started_by_user_id"),
+        "started_by_email": job.started_by_email or run_config.get("started_by_email"),
+        "started_by_display_name": job.started_by_display_name or run_config.get("started_by_display_name"),
+        "started_by_label": job.started_by_label or run_config.get("started_by_label"),
         "results": None,
         "has_results": has_results,
         "can_open_results": job.status == "done" and has_results,
@@ -1658,6 +1689,10 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
                     "input_mode": entry.get("input_mode") or (existing or {}).get("input_mode"),
                     "use_web_search": entry.get("use_web_search"),
                     "run_name": entry.get("run_name") or (existing or {}).get("run_name"),
+                    "started_by_user_id": entry.get("started_by_user_id") or (existing or {}).get("started_by_user_id"),
+                    "started_by_email": entry.get("started_by_email") or (existing or {}).get("started_by_email"),
+                    "started_by_display_name": entry.get("started_by_display_name") or (existing or {}).get("started_by_display_name"),
+                    "started_by_label": entry.get("started_by_label") or (existing or {}).get("started_by_label"),
                     "results": None,
                     "has_results": entry.get("has_results") or (existing or {}).get("has_results") or False,
                     "can_open_results": False,
@@ -1723,6 +1758,89 @@ def _check_session(session_id: str | None) -> bool:
         _persist_sessions()
         return False
     return True
+
+
+def _supabase_public_auth_config() -> dict[str, Any]:
+    url = (os.getenv("SUPABASE_URL") or "").strip()
+    anon_key = (os.getenv("SUPABASE_ANON_KEY") or "").strip()
+    db_ready = bool(callable(getattr(db, "is_configured", None)) and db.is_configured())
+    redirect_url = (
+        os.getenv("SUPABASE_AUTH_REDIRECT_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or ""
+    ).strip()
+    return {
+        "configured": bool(url and anon_key),
+        "required": bool(url and anon_key and db_ready),
+        "url": url,
+        "anon_key": anon_key,
+        "redirect_url": redirect_url,
+    }
+
+
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    header = (authorization or "").strip()
+    if not header:
+        return None
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    token = token.strip()
+    return token or None
+
+
+def _display_name_from_supabase_user(user: dict[str, Any] | None) -> str | None:
+    metadata = user.get("user_metadata") if isinstance(user, dict) else None
+    if not isinstance(metadata, dict):
+        metadata = {}
+    for key in ("full_name", "name", "display_name", "user_name"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _build_started_by_identity(user: dict[str, Any] | None) -> dict[str, str | None]:
+    payload = user if isinstance(user, dict) else {}
+    email = str(payload.get("email") or "").strip() or None
+    display_name = _display_name_from_supabase_user(payload)
+    return {
+        "started_by_user_id": str(payload.get("id") or "").strip() or None,
+        "started_by_email": email,
+        "started_by_display_name": display_name,
+        "started_by_label": display_name or email,
+    }
+
+
+def _started_by_from_payload(payload: dict[str, Any] | None) -> dict[str, str | None]:
+    if not isinstance(payload, dict):
+        return {}
+    values = {
+        "started_by_user_id": payload.get("started_by_user_id"),
+        "started_by_email": payload.get("started_by_email"),
+        "started_by_display_name": payload.get("started_by_display_name"),
+        "started_by_label": payload.get("started_by_label"),
+    }
+    return {key: value for key, value in values.items() if value}
+
+
+async def _require_supabase_identity(authorization: str | None) -> dict[str, str | None]:
+    config = _supabase_public_auth_config()
+    if not config["required"]:
+        return {}
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Supabase sign-in required before starting an analysis.")
+    if not callable(getattr(db, "is_configured", None)) or not db.is_configured():
+        raise HTTPException(status_code=503, detail="Supabase storage is not configured.")
+    get_user = getattr(db, "get_authenticated_supabase_user", None)
+    if not callable(get_user):
+        raise HTTPException(status_code=503, detail="Supabase auth validation is unavailable.")
+    user = await asyncio.to_thread(get_user, token)
+    identity = _build_started_by_identity(user)
+    if not identity.get("started_by_user_id") or not identity.get("started_by_label"):
+        raise HTTPException(status_code=401, detail="Supabase session is invalid or expired.")
+    return identity
 
 
 def _parse_max_startups_from_instructions(instructions: str | None) -> int | None:
@@ -1932,6 +2050,7 @@ async def start_analysis(
     job_id: str,
     req: AnalyzeRequest = AnalyzeRequest(),
     session_id: str | None = Cookie(default=None),
+    authorization: str | None = Header(default=None),
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1940,6 +2059,7 @@ async def start_analysis(
         raise HTTPException(status_code=404, detail="Job not found")
 
     _cancel_scheduled_restart()
+    started_by = await _require_supabase_identity(authorization)
 
     quality_tier = normalize_quality_tier(req.quality_tier)
     pipeline_policy = None
@@ -1993,6 +2113,14 @@ async def start_analysis(
     _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
     _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
     cache = _results_cache[job_id]
+    _jobs[job_id].started_by_user_id = started_by.get("started_by_user_id")
+    _jobs[job_id].started_by_email = started_by.get("started_by_email")
+    _jobs[job_id].started_by_display_name = started_by.get("started_by_display_name")
+    _jobs[job_id].started_by_label = started_by.get("started_by_label")
+    cache["started_by_user_id"] = started_by.get("started_by_user_id")
+    cache["started_by_email"] = started_by.get("started_by_email")
+    cache["started_by_display_name"] = started_by.get("started_by_display_name")
+    cache["started_by_label"] = started_by.get("started_by_label")
     cache["input_mode"] = req.input_mode
     cache["run_name"] = req.run_name
     cache["vc_investment_strategy"] = req.vc_investment_strategy
@@ -2018,6 +2146,7 @@ async def start_analysis(
         "llm_provider": llm_selection["provider"],
         "llm_model": llm_selection["model"],
         "llm": llm_display,
+        **started_by,
     }
     cache["model_executions"] = []
     cache["run_costs_aggregate"] = _empty_run_costs_summary()
@@ -2312,6 +2441,7 @@ def _compose_results_payload(
     payload["llm"] = llm_selection["label"]
     payload["llm_selection"] = llm_selection
     payload["run_costs"] = _run_costs_from_cache(job_id)
+    payload.update(_started_by_from_payload(_run_config_from_cache(job_id)))
     chunking = _results_cache.get(job_id, {}).get("batch_chunking")
     if isinstance(chunking, dict):
         payload["batch_chunking"] = chunking
@@ -2326,6 +2456,9 @@ def _run_config_from_cache(job_id: str) -> dict[str, Any]:
     cache = _results_cache.get(job_id, {})
     run_config = dict(cache.get("run_config") or {})
     if run_config:
+        for key in ("started_by_user_id", "started_by_email", "started_by_display_name", "started_by_label"):
+            if cache.get(key) and not run_config.get(key):
+                run_config[key] = cache.get(key)
         return run_config
 
     llm_selection = _resolve_job_llm_selection(job_id, results=cache.get("results"))
@@ -2342,6 +2475,10 @@ def _run_config_from_cache(job_id: str) -> dict[str, Any]:
         "llm_provider": llm_selection["provider"],
         "llm_model": llm_selection["model"],
         "llm": _resolve_job_llm_label(job_id, results=cache.get("results")),
+        "started_by_user_id": cache.get("started_by_user_id"),
+        "started_by_email": cache.get("started_by_email"),
+        "started_by_display_name": cache.get("started_by_display_name"),
+        "started_by_label": cache.get("started_by_label"),
     }
 
 
@@ -3779,6 +3916,7 @@ async def get_config(session_id: str | None = Cookie(default=None)):
         "premium_phase_options": premium_phase_options_payload(),
         "vc_investment_strategy": shared_vc_strategy,
         "vc_strategy_source": vc_strategy_source,
+        "supabase_auth": _supabase_public_auth_config(),
     }
 
 

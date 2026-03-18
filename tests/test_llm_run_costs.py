@@ -1,8 +1,9 @@
 import asyncio
 import io
 import sys
-from uuid import uuid4
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
@@ -805,6 +806,114 @@ def test_api_config_exposes_default_and_available_models(monkeypatch) -> None:
     assert payload["phase_model_defaults"] == phase_model_defaults_payload()
     assert payload["quality_tiers"] == quality_tiers_payload()
     assert payload["premium_phase_options"] == premium_phase_options_payload()
+
+
+def test_start_analysis_requires_supabase_identity_when_auth_is_configured(monkeypatch) -> None:
+    from web import app as web_app_module
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+    monkeypatch.setattr(
+        web_app_module,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            get_authenticated_supabase_user=lambda _token: None,
+            insert_analysis_event=lambda *args, **kwargs: True,
+            insert_job_status_history=lambda *args, **kwargs: True,
+        ),
+    )
+
+    with TestClient(app) as client:
+        _login(client)
+        upload = client.post(
+            "/api/upload",
+            files={"files": ("deck.txt", io.BytesIO(b"sample content"), "text/plain")},
+        )
+        assert upload.status_code == 200
+        job_id = upload.json()["job_id"]
+
+        analyze = client.post(
+            f"/api/analyze/{job_id}",
+            json={"input_mode": "pitchdeck"},
+        )
+
+    assert analyze.status_code == 401
+    assert "Supabase sign-in required" in analyze.json()["detail"]
+    web_app_module._jobs.pop(job_id, None)
+    web_app_module._results_cache.pop(job_id, None)
+
+
+def test_start_analysis_persists_supabase_starter_identity(monkeypatch) -> None:
+    from web import app as web_app_module
+
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    started = {"called": False}
+    upserted = {}
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            started["called"] = True
+
+    monkeypatch.setattr(web_app_module.threading, "Thread", FakeThread)
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(web_app_module.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(
+        web_app_module,
+        "db",
+        SimpleNamespace(
+            is_configured=lambda: True,
+            get_authenticated_supabase_user=lambda token: {
+                "id": "user-123",
+                "email": "jane@example.com",
+                "user_metadata": {"full_name": "Jane Doe"},
+            } if token == "good-token" else None,
+            upsert_job=lambda job_id, **kwargs: upserted.update({"job_id": job_id, **kwargs}) or "job-uuid",
+            upsert_job_control=lambda *args, **kwargs: True,
+            insert_analysis_event=lambda *args, **kwargs: True,
+            insert_job_status_history=lambda *args, **kwargs: True,
+        ),
+    )
+
+    with TestClient(app) as client:
+        _login(client)
+        upload = client.post(
+            "/api/upload",
+            files={"files": ("deck.txt", io.BytesIO(b"sample content"), "text/plain")},
+        )
+        assert upload.status_code == 200
+        job_id = upload.json()["job_id"]
+
+        analyze = client.post(
+            f"/api/analyze/{job_id}",
+            headers={"Authorization": "Bearer good-token"},
+            json={
+                "input_mode": "pitchdeck",
+                "llm_provider": "anthropic",
+                "llm_model": "claude-haiku-4-5-20251001",
+            },
+        )
+        assert analyze.status_code == 200
+        assert started["called"] is True
+
+        cache = web_app_module._results_cache[job_id]
+        assert cache["run_config"]["started_by_user_id"] == "user-123"
+        assert cache["run_config"]["started_by_email"] == "jane@example.com"
+        assert cache["run_config"]["started_by_display_name"] == "Jane Doe"
+        assert cache["run_config"]["started_by_label"] == "Jane Doe"
+        assert web_app_module._jobs[job_id].started_by_label == "Jane Doe"
+        assert upserted["run_config"]["started_by_label"] == "Jane Doe"
+    web_app_module._jobs.pop(job_id, None)
+    web_app_module._results_cache.pop(job_id, None)
 
 
 def test_start_analysis_persists_requested_llm_selection(monkeypatch) -> None:
