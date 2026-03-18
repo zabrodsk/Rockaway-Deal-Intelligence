@@ -45,14 +45,16 @@ def _group_qa_by_dimension(
         "team": [],
         "upside": [],
     }
-    for qa in all_qa_pairs:
+    for index, qa in enumerate(all_qa_pairs):
         aspect = qa.get("aspect") or ""
+        qa_with_index = dict(qa)
+        qa_with_index.setdefault("qa_index", index)
         if aspect in DIMENSION_ASPECTS["strategy_fit"]:
-            grouped["strategy_fit"].append(qa)
+            grouped["strategy_fit"].append(qa_with_index)
         elif aspect in DIMENSION_ASPECTS["team"]:
-            grouped["team"].append(qa)
+            grouped["team"].append(qa_with_index)
         elif aspect in DIMENSION_ASPECTS["upside"]:
-            grouped["upside"].append(qa)
+            grouped["upside"].append(qa_with_index)
     return grouped
 
 
@@ -64,8 +66,34 @@ def _format_qa_block(qa_pairs: list[dict[str, Any]]) -> str:
     for i, qa in enumerate(qa_pairs):
         q = qa.get("question", "")
         a = qa.get("answer", "")
-        lines.append(f"Q{i+1}: {q}\nA{i+1}: {a}")
+        qa_index = qa.get("qa_index", i)
+        lines.append(f"Q{qa_index}: {q}\nA{qa_index}: {a}")
     return "\n---\n".join(lines)
+
+
+def _sanitize_top_qa_indices(
+    candidate_indices: list[int] | None,
+    qa_pairs: list[dict[str, Any]],
+) -> list[int]:
+    """Keep only valid, unique global Q&A indices for the current dimension."""
+    if not candidate_indices:
+        return []
+
+    valid_indices = {
+        int(qa.get("qa_index"))
+        for qa in qa_pairs
+        if qa.get("qa_index") is not None
+    }
+    sanitized: list[int] = []
+    for index in candidate_indices:
+        try:
+            normalized = int(index)
+        except (TypeError, ValueError):
+            continue
+        if normalized not in valid_indices or normalized in sanitized:
+            continue
+        sanitized.append(normalized)
+    return sanitized[:3]
 
 
 def _score_dimension(
@@ -125,6 +153,7 @@ def _score_dimension(
             raw_score=0.0,
             confidence=0.0,
             evidence_count=len(qa_pairs),
+            top_qa_indices=[],
             evidence_snippets=[],
             critical_gaps=["Scoring failed due to LLM error"],
         )
@@ -134,6 +163,7 @@ def _score_dimension(
         raw_score=output.raw_score,
         confidence=output.confidence,
         evidence_count=output.evidence_count,
+        top_qa_indices=_sanitize_top_qa_indices(output.top_qa_indices, qa_pairs),
         evidence_snippets=output.evidence_snippets[:3],
         critical_gaps=output.critical_gaps,
     )

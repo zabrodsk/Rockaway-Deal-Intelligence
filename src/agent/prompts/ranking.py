@@ -31,6 +31,7 @@ Provide:
 - raw_score: 0-100
 - confidence: 0-1 (based on evidence quantity, recency, source quality, cross-source consistency)
 - evidence_count: number of Q&A pairs that contributed
+- top_qa_indices: 1-3 global Q&A indices from the labels above that most influenced the score, ordered by impact
 - evidence_snippets: 2-3 short quotes that support the score (max 100 chars each)
 - critical_gaps: list of high-impact facts that are missing (e.g. "no stage info", "geography unclear")
 """
@@ -59,6 +60,7 @@ Provide:
 - raw_score: 0-100
 - confidence: 0-1
 - evidence_count: number of Q&A pairs that contributed
+- top_qa_indices: 1-3 global Q&A indices from the labels above that most influenced the score, ordered by impact
 - evidence_snippets: 2-3 short quotes that support the score (max 100 chars each)
 - critical_gaps: list of high-impact facts that are missing
 """
@@ -87,6 +89,7 @@ Provide:
 - raw_score: 0-100
 - confidence: 0-1
 - evidence_count: number of Q&A pairs that contributed
+- top_qa_indices: 1-3 global Q&A indices from the labels above that most influenced the score, ordered by impact
 - evidence_snippets: 2-3 short quotes that support the score (max 100 chars each)
 - critical_gaps: list of high-impact facts that are missing (e.g. "no TAM data", "WTP unclear")
 """
