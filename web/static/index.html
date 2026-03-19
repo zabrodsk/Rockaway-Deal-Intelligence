@@ -422,6 +422,35 @@
       line-height: 1.6;
       color: var(--text-dim);
     }
+    .password-form-stage {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .password-form-stage[hidden] {
+      display: none !important;
+    }
+    .password-secondary-action {
+      margin-top: 0;
+    }
+    .login-status {
+      min-height: 20px;
+      font-size: 13px;
+      margin-top: 12px;
+      color: var(--text-dim);
+    }
+    .login-status.is-error {
+      color: var(--red);
+    }
+    .login-status.is-success {
+      color: var(--green);
+    }
+    .login-stage-note {
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.5;
+      margin-top: 10px;
+    }
 
     /* ── Upload Screen ── */
     .main-content {
@@ -4144,29 +4173,25 @@
       </div>
     </section>
     <div class="password-card">
-      <div class="logo">
-        <div class="logo-icon">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="12" width="4" height="8" rx="1.2"></rect>
-            <rect x="10" y="7" width="4" height="13" rx="1.2"></rect>
-            <rect x="17" y="3" width="4" height="17" rx="1.2"></rect>
-          </svg>
-        </div>
-        <div class="logo-lockup">
-          <div class="logo-name">Rockaway</div>
-          <div class="logo-subtitle">Deal Intelligence</div>
-        </div>
-      </div>
       <div class="password-meta">
         <span class="password-kicker">Secure access</span>
         <h2>Enter workspace</h2>
         <p>Protected internal interface for reviewing pipelines, company runs, and portfolio screening output.</p>
       </div>
       <form id="login-form">
-        <label class="password-field-label" for="password-input">Password</label>
-        <input type="password" class="password-input" id="password-input" placeholder="Enter password" maxlength="20" autofocus>
-        <div class="password-error" id="password-error"></div>
-        <button type="submit" class="btn-green">Unlock</button>
+        <div class="password-form-stage" id="login-email-stage">
+          <label class="password-field-label" for="login-email-input">Email</label>
+          <input type="email" class="password-input" id="login-email-input" placeholder="name@rockaway.vc" maxlength="200" autocomplete="email" autofocus>
+          <button type="button" class="btn-green password-secondary-action" id="login-request-code">Request verification link</button>
+        </div>
+        <div class="login-status" id="login-status"></div>
+        <div class="password-form-stage" id="login-unlock-stage" hidden>
+          <div class="login-stage-note" id="login-stage-note">Click the verification link in your email, then enter your workspace password.</div>
+          <label class="password-field-label" for="password-input">Password</label>
+          <input type="password" class="password-input" id="password-input" placeholder="Enter password" maxlength="40" autocomplete="current-password">
+          <div class="password-error" id="password-error"></div>
+          <button type="submit" class="btn-green" id="login-unlock-button">Unlock</button>
+        </div>
       </form>
       <div class="password-footnote">This session stays local to your browser and is validated against the server before any analysis routes are opened.</div>
     </div>
@@ -4265,22 +4290,6 @@
     <div class="instructions-section" id="run-name-section" style="width:640px;margin-top:20px;display:none;">
       <label class="instructions-label" for="run-name-input">Run name <span style="color:var(--text-dim);font-weight:400">(optional)</span></label>
       <input id="run-name-input" class="instructions-input" type="text" maxlength="120" placeholder="e.g. Germany SaaS batch, Seed fintech shortlist, Q2 pipeline">
-    </div>
-
-    <div class="instructions-section" id="analysis-identity-section" style="width:640px;margin-top:20px;display:none;">
-      <div class="instructions-label">Analysis identity</div>
-      <div id="analysis-identity-status" style="font-size:13px;color:var(--text-dim);margin-bottom:12px;">Loading identity…</div>
-      <div id="analysis-identity-signed-out" style="display:none;">
-        <input id="analysis-identity-email" class="instructions-input" type="email" maxlength="200" placeholder="name@rockaway.vc" autocomplete="email">
-        <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap;">
-          <button type="button" class="btn-ghost" id="analysis-identity-send">Send magic link</button>
-          <div id="analysis-identity-pending" style="font-size:13px;color:var(--text-dim);display:none;"></div>
-        </div>
-      </div>
-      <div id="analysis-identity-signed-in" style="display:none;">
-        <div id="analysis-identity-user" style="font-size:14px;color:var(--text-light);margin-bottom:12px;"></div>
-        <button type="button" class="btn-ghost" id="analysis-identity-signout">Sign out</button>
-      </div>
     </div>
 
     <div class="instructions-section" style="width:640px;margin-top:20px;">
@@ -4657,6 +4666,9 @@ let supabaseAuthState = 'idle';
 let supabaseMagicLinkEmail = '';
 let supabaseAuthListenerBound = false;
 let supabaseAuthError = '';
+let publicAuthConfig = null;
+let loginVerificationStage = 'email';
+let supabasePasswordReentryRequired = false;
 
 function migrateClientState() {
   try {
@@ -5366,6 +5378,7 @@ async function loadAnalysisConfig() {
     renderPhaseModelSelector();
     renderLlmSelector();
     await initializeSupabaseAuth();
+    renderLoginIdentity();
     renderAnalysisIdentity();
     updateAnalyzeButtonState();
     return analysisConfig;
@@ -5374,6 +5387,7 @@ async function loadAnalysisConfig() {
     analysisConfigLoadState = 'error';
     renderPhaseModelSelector();
     renderLlmSelector();
+    renderLoginIdentity();
     renderAnalysisIdentity();
     updateAnalyzeButtonState();
     return null;
@@ -5398,8 +5412,25 @@ function clearSupabaseAuthCallbackParams() {
   }
 }
 
+function hasSupabaseAuthCallbackParams() {
+  const url = new URL(window.location.href);
+  if (url.hash) return true;
+  return ['code', 'type', 'access_token', 'refresh_token', 'token_type', 'expires_in', 'expires_at']
+    .some((key) => url.searchParams.has(key));
+}
+
+function clearLocalWorkspaceSession() {
+  sessionId = null;
+  try {
+    localStorage.removeItem('session_id');
+  } catch (_) {
+    // Ignore local storage failures.
+  }
+  document.cookie = 'session_id=; Path=/; Max-Age=0; SameSite=Lax';
+}
+
 function getSupabaseAuthConfig() {
-  return analysisConfig?.supabase_auth || null;
+  return analysisConfig?.supabase_auth || publicAuthConfig || null;
 }
 
 function isSupabaseAuthRequired() {
@@ -5415,7 +5446,7 @@ async function ensureSupabaseClient() {
   if (!config?.configured) return null;
   if (supabaseClient) return supabaseClient;
   if (!supabaseClientPromise) {
-    supabaseClientPromise = import('/vendor/@supabase/supabase-js/dist/index.mjs')
+    supabaseClientPromise = import('https://esm.sh/@supabase/supabase-js@2')
       .then((mod) => {
         supabaseClient = mod.createClient(config.url, config.anon_key, {
           auth: {
@@ -5432,6 +5463,16 @@ async function ensureSupabaseClient() {
       });
   }
   return supabaseClientPromise;
+}
+
+async function loadPublicAuthConfig() {
+  try {
+    const data = await api('/api/public-auth-config', { timeoutMs: 5000, retries: 0 });
+    publicAuthConfig = data?.supabase_auth || null;
+  } catch (_) {
+    publicAuthConfig = null;
+  }
+  return publicAuthConfig;
 }
 
 function setSupabaseIdentityFromSession(session) {
@@ -5452,10 +5493,16 @@ function setSupabaseIdentityFromSession(session) {
 
 async function initializeSupabaseAuth() {
   const config = getSupabaseAuthConfig();
+  const authCallbackPresent = hasSupabaseAuthCallbackParams();
+  if (authCallbackPresent) {
+    supabasePasswordReentryRequired = true;
+    clearLocalWorkspaceSession();
+  }
   if (!config?.configured) {
     supabaseIdentity = null;
     supabaseAuthState = 'idle';
     supabaseAuthError = '';
+    renderLoginIdentity();
     return null;
   }
   const client = await ensureSupabaseClient();
@@ -5466,10 +5513,13 @@ async function initializeSupabaseAuth() {
       if (session?.access_token) {
         supabaseAuthState = 'signed_in';
         supabaseAuthError = '';
+        loginVerificationStage = 'unlock';
+        if (supabasePasswordReentryRequired) clearLocalWorkspaceSession();
         clearSupabaseAuthCallbackParams();
       } else if (supabaseAuthState !== 'pending') {
         supabaseAuthState = 'signed_out';
       }
+      renderLoginIdentity();
       renderAnalysisIdentity();
       updateAnalyzeButtonState();
     });
@@ -5479,13 +5529,69 @@ async function initializeSupabaseAuth() {
     const { data } = await client.auth.getSession();
     setSupabaseIdentityFromSession(data?.session || null);
     supabaseAuthState = supabaseIdentity ? 'signed_in' : (supabaseMagicLinkEmail ? 'pending' : 'signed_out');
+    if (supabaseIdentity || supabaseMagicLinkEmail) loginVerificationStage = 'unlock';
+    if (supabaseIdentity?.access_token && authCallbackPresent) {
+      supabasePasswordReentryRequired = true;
+      clearLocalWorkspaceSession();
+    }
     if (supabaseIdentity) supabaseAuthError = '';
     if (supabaseIdentity?.access_token) clearSupabaseAuthCallbackParams();
   } catch (_) {
     supabaseAuthState = 'signed_out';
     supabaseIdentity = null;
   }
+  renderLoginIdentity();
   return supabaseIdentity;
+}
+
+function renderLoginIdentity() {
+  const emailStage = $('#login-email-stage');
+  const unlockStage = $('#login-unlock-stage');
+  const emailInput = $('#login-email-input');
+  const requestBtn = $('#login-request-code');
+  const unlockBtn = $('#login-unlock-button');
+  const status = $('#login-status');
+  const note = $('#login-stage-note');
+  if (!emailStage || !unlockStage || !emailInput || !requestBtn || !unlockBtn || !status || !note) return;
+
+  const config = getSupabaseAuthConfig();
+  const authReady = !!getSupabaseAccessToken();
+  const showUnlockStage = authReady;
+
+  emailStage.hidden = authReady;
+  unlockStage.hidden = !showUnlockStage;
+  requestBtn.disabled = supabaseAuthState === 'sending';
+  unlockBtn.disabled = false;
+  emailInput.disabled = authReady;
+
+  if (authReady) {
+    const label = supabaseIdentity?.label || supabaseIdentity?.email || 'Verified user';
+    status.textContent = `Email verified as ${label}. Enter your workspace password to continue.`;
+    status.className = 'login-status is-success';
+    note.textContent = 'Verification complete. Your identity will be attached to any analysis you start.';
+  } else if (!config?.configured) {
+    status.textContent = 'Email verification is not configured yet in this local environment.';
+    status.className = 'login-status is-error';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  } else if (supabaseAuthState === 'sending') {
+    status.textContent = 'Requesting verification link…';
+    status.className = 'login-status';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  } else if (supabaseAuthState === 'pending') {
+    status.textContent = supabaseMagicLinkEmail
+      ? `Verification link sent to ${supabaseMagicLinkEmail}.`
+      : 'Check your inbox for the verification link.';
+    status.className = 'login-status is-success';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  } else if (supabaseAuthState === 'error' && supabaseAuthError) {
+    status.textContent = supabaseAuthError;
+    status.className = 'login-status is-error';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  } else {
+    status.textContent = '';
+    status.className = 'login-status';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  }
 }
 
 function renderAnalysisIdentity() {
@@ -7240,7 +7346,7 @@ function closeInfoPage() {
 }
 
 function syncRoute() {
-  if (!sessionId) {
+  if (!sessionId || supabasePasswordReentryRequired || (isSupabaseAuthRequired() && !getSupabaseAccessToken())) {
     showScreen('password-screen');
     return;
   }
@@ -7850,15 +7956,56 @@ async function controlJob(jobId, action) {
 }
 
 // ── Password ──
+$('#login-request-code').addEventListener('click', async () => {
+  const email = ($('#login-email-input')?.value || '').trim();
+  const status = $('#login-status');
+  if (!email) {
+    supabaseAuthState = 'error';
+    supabaseAuthError = 'Please enter your email address to verify your identity.';
+    renderLoginIdentity();
+    $('#login-email-input')?.focus();
+    return;
+  }
+  try {
+    supabaseAuthState = 'sending';
+    supabaseMagicLinkEmail = email;
+    supabaseAuthError = '';
+    renderLoginIdentity();
+    const client = await ensureSupabaseClient();
+    if (!client) {
+      throw new Error('Email verification is not configured yet in this local environment.');
+    }
+    const redirectTo = getSupabaseAuthConfig()?.redirect_url || window.location.href;
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: redirectTo },
+    });
+    if (error) throw error;
+    supabaseAuthState = 'pending';
+    renderLoginIdentity();
+    $('#login-email-input')?.focus();
+  } catch (err) {
+    supabaseAuthState = 'error';
+    supabaseAuthError = err?.message || 'Failed to request verification code.';
+    renderLoginIdentity();
+    status?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+});
+
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const pw = $('#password-input').value;
+  $('#password-error').textContent = '';
   try {
+    if (isSupabaseAuthRequired() && !getSupabaseAccessToken()) {
+      throw new Error('Verify your email from the link we sent before unlocking the workspace.');
+    }
     const data = await api('/api/login', {
       method: 'POST',
       body: JSON.stringify({ password: pw }),
     });
     sessionId = data.session_id;
+    supabasePasswordReentryRequired = false;
     localStorage.setItem('session_id', sessionId);
     setCookie('session_id', sessionId);
     syncRoute();
@@ -7871,9 +8018,16 @@ $('#login-form').addEventListener('submit', async (e) => {
   } catch (err) {
     const msg = err.message === 'Wrong password' ? 'Wrong password. Try again.'
       : err.message || 'Connection error. Is the server running?';
-    $('#password-error').textContent = msg;
-    $('#password-input').value = '';
-    $('#password-input').focus();
+    if (msg.toLowerCase().includes('verify') || msg.toLowerCase().includes('email')) {
+      supabaseAuthState = 'error';
+      supabaseAuthError = msg;
+      renderLoginIdentity();
+      $('#login-email-input')?.focus();
+    } else {
+      $('#password-error').textContent = msg;
+      $('#password-input').value = '';
+      $('#password-input').focus();
+    }
   }
 });
 
@@ -7890,38 +8044,6 @@ async function checkWebSearchAvailable() {
   } catch {}
 }
 
-$('#analysis-identity-send')?.addEventListener('click', async () => {
-  const email = ($('#analysis-identity-email')?.value || '').trim();
-  if (!email) {
-    $('#analysis-identity-status').textContent = 'Enter your email address to receive a magic link.';
-    return;
-  }
-  try {
-    supabaseAuthState = 'sending';
-    supabaseMagicLinkEmail = email;
-    supabaseAuthError = '';
-    renderAnalysisIdentity();
-    const client = await ensureSupabaseClient();
-    if (!client) {
-      throw new Error('Supabase auth is not configured.');
-    }
-    const redirectTo = getSupabaseAuthConfig()?.redirect_url || window.location.href;
-    const { error } = await client.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: redirectTo },
-    });
-    if (error) throw error;
-    supabaseAuthState = 'pending';
-    renderAnalysisIdentity();
-  } catch (err) {
-    supabaseAuthState = 'error';
-    supabaseAuthError = err?.message || 'Failed to send magic link.';
-    renderAnalysisIdentity();
-  } finally {
-    updateAnalyzeButtonState();
-  }
-});
-
 $('#analysis-identity-signout')?.addEventListener('click', async () => {
   try {
     const client = await ensureSupabaseClient();
@@ -7933,6 +8055,8 @@ $('#analysis-identity-signout')?.addEventListener('click', async () => {
   supabaseAuthState = 'signed_out';
   supabaseMagicLinkEmail = '';
   supabaseAuthError = '';
+  loginVerificationStage = 'email';
+  renderLoginIdentity();
   renderAnalysisIdentity();
   updateAnalyzeButtonState();
 });
@@ -8062,11 +8186,18 @@ async function loadConfirmedTerminalResults(jobId, fallbackResults = null) {
 
 // Check existing session on load
 (async () => {
+  await loadPublicAuthConfig();
+  try {
+    await initializeSupabaseAuth();
+  } catch (_) {
+    // Keep the login page usable even if the browser auth client fails to initialize.
+  }
+  renderLoginIdentity();
   if (sessionId) {
     setCookie('session_id', sessionId);
     try {
       const data = await api('/api/check-session');
-      if (data.authenticated) {
+      if (data.authenticated && (!isSupabaseAuthRequired() || !!getSupabaseAccessToken())) {
         checkWebSearchAvailable();
         await loadAnalysisConfig();
         renderRecentRuns();

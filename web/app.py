@@ -1894,6 +1894,11 @@ async def login(req: LoginRequest):
     return {"session_id": session_id}
 
 
+@app.get("/api/public-auth-config")
+async def public_auth_config():
+    return {"supabase_auth": _supabase_public_auth_config()}
+
+
 @app.get("/api/check-session")
 async def check_session(session_id: str | None = Cookie(default=None)):
     return {"authenticated": _check_session(session_id)}
