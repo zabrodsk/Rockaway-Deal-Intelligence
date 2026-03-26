@@ -43,6 +43,7 @@ from agent.llm_catalog import (
     available_chat_models_payload,
     model_label,
     current_default_selection,
+    normalize_provider,
     pricing_catalog_payload,
     serialize_selection,
     validate_chat_requested_selection,
@@ -1081,6 +1082,32 @@ def _company_chat_selection(session: dict[str, Any] | None = None) -> dict[str, 
 def _company_chat_model_label(session: dict[str, Any] | None = None) -> str:
     selection = _company_chat_selection(session)
     return model_label(selection.get("provider"), selection.get("model"))
+
+
+def _resolve_requested_company_chat_selection(provider: str | None, model: str | None) -> dict[str, str]:
+    validation_error: ValueError | None = None
+    try:
+        selected_entry = validate_chat_requested_selection(provider, model)
+    except ValueError as exc:
+        validation_error = exc
+        selected_entry = None
+    if selected_entry:
+        return serialize_selection(selected_entry.provider, selected_entry.model)
+
+    provider_norm = normalize_provider(provider)
+    model_norm = (model or "").strip()
+    for item in available_chat_models_payload():
+        if item.get("provider") != provider_norm or item.get("model") != model_norm:
+            continue
+        if not item.get("available"):
+            raise ValueError(f'{item.get("label") or model_norm} is not available in this environment.')
+        if item.get("selectable") is False:
+            raise ValueError(f'{item.get("label") or model_norm} is not selectable for company chat.')
+        return serialize_selection(provider_norm, model_norm)
+
+    if validation_error is not None:
+        raise validation_error
+    raise ValueError("Unknown chat LLM model selection.")
 
 
 def _company_chat_session_costs(session: dict[str, Any] | None) -> dict[str, Any]:
@@ -2360,6 +2387,18 @@ def _compose_results_payload(
         ranking = final_state.get("ranking_result")
         ranking_result = None
         if ranking:
+            dimension_scores_payload = []
+            for d in ranking.dimension_scores:
+                display_score = d.raw_score if d.dimension == "upside" else d.adjusted_score
+                dimension_scores_payload.append(
+                    {
+                        "dimension": d.dimension,
+                        "adjusted_score": display_score,
+                        "confidence": d.confidence,
+                        "evidence_snippets": d.evidence_snippets,
+                        "critical_gaps": d.critical_gaps,
+                    }
+                )
             ranking_result = {
                 "rank": ranking.rank,
                 "percentile": ranking.percentile,
@@ -2373,16 +2412,7 @@ def _compose_results_payload(
                 "potential_summary": getattr(ranking, "potential_summary", "") or "",
                 "key_points": getattr(ranking, "key_points", []) or [],
                 "red_flags": getattr(ranking, "red_flags", []) or [],
-                "dimension_scores": [
-                    {
-                        "dimension": d.dimension,
-                        "adjusted_score": d.adjusted_score,
-                        "confidence": d.confidence,
-                        "evidence_snippets": d.evidence_snippets,
-                        "critical_gaps": d.critical_gaps,
-                    }
-                    for d in ranking.dimension_scores
-                ],
+                "dimension_scores": dimension_scores_payload,
             }
 
         payload = {
@@ -4272,8 +4302,7 @@ async def post_company_chat(
 
     chat_session = await _load_company_chat_session(session_id, company_lookup_key)
     if req.llm_provider or req.llm_model:
-        selected_entry = validate_chat_requested_selection(req.llm_provider, req.llm_model)
-        selection = serialize_selection(selected_entry.provider, selected_entry.model)
+        selection = _resolve_requested_company_chat_selection(req.llm_provider, req.llm_model)
         chat_session["selection"] = selection
     else:
         selection = _company_chat_selection(chat_session)

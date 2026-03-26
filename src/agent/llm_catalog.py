@@ -398,7 +398,7 @@ def validate_chat_requested_selection(
 ) -> ModelCatalogEntry | None:
     if not provider and not model:
         return None
-    entry = find_model_entry(provider, model)
+    entry = find_compatible_model_entry(provider, model)
     if not entry:
         raise ValueError("Unknown chat LLM model selection.")
     if not _has_required_env(entry):

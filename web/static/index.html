@@ -6240,7 +6240,7 @@ function renderAnalysisHistoryScreen() {
 }
 
 function getSavedCompanySortLabel(mode) {
-  if (mode === 'alphabetical') return 'Alphabetical';
+  if (mode === 'latest') return 'Latest';
   if (mode === 'strategy_fit') return 'Strategy Fit';
   if (mode === 'team') return 'Team';
   if (mode === 'upside') return 'Potential';
@@ -6281,8 +6281,12 @@ function filterSavedCompanies(companies) {
 
 function sortSavedCompanies(companies) {
   const list = [...companies];
-  if (savedCompanySortMode === 'alphabetical') {
-    list.sort((a, b) => String(a.company_name || '').localeCompare(String(b.company_name || '')));
+  if (savedCompanySortMode === 'latest') {
+    list.sort((a, b) => {
+      const aTs = new Date(a.latest_run_at || 0).getTime();
+      const bTs = new Date(b.latest_run_at || 0).getTime();
+      return bTs - aTs;
+    });
     return list;
   }
   if (savedCompanySortMode === 'strategy_fit' || savedCompanySortMode === 'team' || savedCompanySortMode === 'upside') {
@@ -7006,7 +7010,7 @@ function renderSavedCompaniesWindow() {
               <span class="companies-sidebar-sort-icon">⇅</span>
               <select id="companies-sort-select" class="companies-sidebar-sort-select">
                 <option value="top_scored">TOP SCORED</option>
-                <option value="alphabetical">ALPHABETICAL</option>
+                <option value="latest">LATEST</option>
                 <option value="strategy_fit">STRATEGY FIT</option>
                 <option value="team">TEAM</option>
                 <option value="upside">POTENTIAL</option>

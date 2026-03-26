@@ -134,8 +134,11 @@ def _score_dimension(
 
     try:
         def _invoke() -> DimensionScoreOutput:
-            with use_stage_context("ranking_dimension_score"):
-                llm = get_llm(temperature=0.0)
+            stage_name = "ranking_upside_score" if dimension == "upside" else "ranking_dimension_score"
+            temperature = 0.7 if dimension == "upside" else 0.0
+            reasoning_effort = "none" if dimension == "upside" else None
+            with use_stage_context(stage_name):
+                llm = get_llm(temperature=temperature, reasoning_effort=reasoning_effort)
                 llm_structured = llm.with_structured_output(DimensionScoreOutput)
                 return llm_structured.invoke(
                     [
@@ -169,13 +172,21 @@ def _score_dimension(
     )
 
 
+def _dimension_display_score(score: DimensionScore) -> float:
+    """Return the user-facing score for a dimension."""
+    if score.dimension == "upside":
+        return round(score.raw_score, 2)
+    return score.adjusted_score
+
+
 def score_company_dimensions(
     state: IterativeInvestmentStoryState,
 ) -> dict[str, Any]:
     """Score the company on Strategy Fit, Team Quality, and Upside.
 
     Groups Q&A pairs by dimension, calls LLM for each, and builds
-    DimensionScore objects with confidence-adjusted scores.
+    DimensionScore objects. Potential intentionally uses raw best-case upside
+    for user-facing scoring while Strategy Fit and Team stay adjusted.
     """
     company_summary = state.company.get_company_summary()
     grouped = _group_qa_by_dimension(state.all_qa_pairs)
@@ -193,9 +204,9 @@ def score_company_dimensions(
         )
         dimension_scores.append(score)
 
-    strategy_adj = next((s.adjusted_score for s in dimension_scores if s.dimension == "strategy_fit"), 0.0)
-    team_adj = next((s.adjusted_score for s in dimension_scores if s.dimension == "team"), 0.0)
-    upside_adj = next((s.adjusted_score for s in dimension_scores if s.dimension == "upside"), 0.0)
+    strategy_adj = next((_dimension_display_score(s) for s in dimension_scores if s.dimension == "strategy_fit"), 0.0)
+    team_adj = next((_dimension_display_score(s) for s in dimension_scores if s.dimension == "team"), 0.0)
+    upside_adj = next((_dimension_display_score(s) for s in dimension_scores if s.dimension == "upside"), 0.0)
 
     result = CompanyRankingResult(
         company_name=state.company.name,
@@ -256,7 +267,7 @@ def _format_dimension_block(dimension_scores: list[DimensionScore]) -> str:
     labels = {"strategy_fit": "Strategy Fit", "team": "Team", "upside": "Potential"}
     for d in dimension_scores:
         label = labels.get(d.dimension, d.dimension)
-        lines.append(f"{label} (score {d.adjusted_score}):")
+        lines.append(f"{label} (score {_dimension_display_score(d)}):")
         if d.evidence_snippets:
             lines.append("  Evidence: " + " | ".join(d.evidence_snippets[:3]))
         if d.critical_gaps:

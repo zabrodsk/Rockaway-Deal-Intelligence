@@ -40,6 +40,7 @@ OpenAIReasoningPhase = Literal[
     "evaluation",
     "refinement",
     "ranking_dimension_score",
+    "ranking_upside_score",
     "ranking_executive_summary",
 ]
 
@@ -546,6 +547,7 @@ def resolve_openai_phase_sampling(
             "evaluation": {"temperature": None, "reasoning_effort": "medium"},
             "refinement": {"temperature": 0.7, "reasoning_effort": "none"},
             "ranking_dimension_score": {"temperature": None, "reasoning_effort": "high"},
+            "ranking_upside_score": {"temperature": 0.7, "reasoning_effort": "none"},
             "ranking_executive_summary": {"temperature": None, "reasoning_effort": "high"},
         }
         return stage_map.get(
@@ -567,6 +569,7 @@ def resolve_openai_phase_sampling(
             "evaluation": {"temperature": None, "reasoning_effort": "high"},
             "refinement": {"temperature": None, "reasoning_effort": "medium"},
             "ranking_dimension_score": {"temperature": None, "reasoning_effort": ranking_effort},
+            "ranking_upside_score": {"temperature": 0.7, "reasoning_effort": "none"},
             "ranking_executive_summary": {"temperature": None, "reasoning_effort": ranking_effort},
         }
         if stage in stage_map:
@@ -596,6 +599,7 @@ def resolve_openai_reasoning_fallback_temperature(
         "refinement": 0.7,
         "evaluation": 0.0,
         "ranking_dimension_score": 0.0,
+        "ranking_upside_score": 0.7,
         "ranking_executive_summary": 0.3,
     }
     return fallback_map.get(stage)

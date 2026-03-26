@@ -14,7 +14,11 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from agent.llm_catalog import available_models_payload, validate_requested_selection
+from agent.llm_catalog import (
+    available_models_payload,
+    validate_chat_requested_selection,
+    validate_requested_selection,
+)
 from agent.llm_policy import (
     build_default_phase_model_policy,
     build_phase_model_policy,
@@ -75,6 +79,16 @@ def test_model_catalog_validation_accepts_only_available_entries(monkeypatch) ->
         assert "not available" in str(exc).lower()
     else:
         raise AssertionError("Expected unavailable model selection to raise ValueError")
+
+
+def test_chat_model_validation_accepts_legacy_openai_alias(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    entry = validate_chat_requested_selection("openai", "gpt-5-mini")
+
+    assert entry is not None
+    assert entry.provider == "openai"
+    assert entry.model == "gpt-5-mini"
 
 
 def test_available_models_payload_marks_availability(monkeypatch) -> None:
@@ -492,6 +506,48 @@ def test_create_llm_maps_gpt54_nano_answering_to_temperature_plus_reasoning(monk
             llm_module.create_llm(temperature=0.2)
 
     assert called == {"model": "gpt-5.4-nano", "temperature": 0.0, "reasoning_effort": "none"}
+
+
+def test_create_llm_maps_gpt54_mini_ranking_upside_to_temperature_plus_reasoning(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+
+    called = {}
+
+    def fake_openai(model, temperature, timeout_s, max_retries, reasoning_effort=None):
+        called["model"] = model
+        called["temperature"] = temperature
+        called["reasoning_effort"] = reasoning_effort
+        return object()
+
+    monkeypatch.setattr(llm_module, "_create_openai", fake_openai)
+    monkeypatch.setattr(llm_module, "wrap_llm", lambda runnable, **kwargs: runnable)
+
+    with use_run_context(llm_selection={"provider": "openai", "model": "gpt-5.4-mini"}):
+        with use_stage_context("ranking_upside_score"):
+            llm_module.create_llm(temperature=0.0)
+
+    assert called == {"model": "gpt-5.4-mini", "temperature": 0.7, "reasoning_effort": "none"}
+
+
+def test_create_llm_maps_gpt52_ranking_upside_to_temperature_plus_reasoning(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+
+    called = {}
+
+    def fake_openai(model, temperature, timeout_s, max_retries, reasoning_effort=None):
+        called["model"] = model
+        called["temperature"] = temperature
+        called["reasoning_effort"] = reasoning_effort
+        return object()
+
+    monkeypatch.setattr(llm_module, "_create_openai", fake_openai)
+    monkeypatch.setattr(llm_module, "wrap_llm", lambda runnable, **kwargs: runnable)
+
+    with use_run_context(llm_selection={"provider": "openai", "model": "gpt-5.2"}):
+        with use_stage_context("ranking_upside_score"):
+            llm_module.create_llm(temperature=0.0)
+
+    assert called == {"model": "gpt-5.2", "temperature": 0.7, "reasoning_effort": "none"}
 
 
 def test_create_llm_maps_gpt54_mini_evaluation_to_reasoning_only(monkeypatch) -> None:
