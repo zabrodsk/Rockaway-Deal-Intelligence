@@ -42,7 +42,7 @@ async def _refine_individual_pro_argument(
     policy = get_current_pipeline_policy()
     with use_phase_llm(policy.refinement if policy else None):
         with use_stage_context("refinement"):
-            llm = get_llm(temperature=0.5)
+            llm = get_llm(temperature=0.7)
             llm_with_structured_output = llm.with_structured_output(
                 IndividualRefinedArgumentOutput
             )
@@ -60,8 +60,7 @@ async def _refine_individual_pro_argument(
                     ]
                 )
             )
-
-            return refined_argument
+    return refined_argument
 
 
 @backoff.on_exception(
@@ -82,7 +81,7 @@ async def _refine_individual_contra_argument(
     policy = get_current_pipeline_policy()
     with use_phase_llm(policy.refinement if policy else None):
         with use_stage_context("refinement"):
-            llm = get_llm(temperature=0.5)
+            llm = get_llm(temperature=0.7)
             llm_with_structured_output = llm.with_structured_output(
                 IndividualRefinedArgumentOutput
             )
@@ -100,8 +99,7 @@ async def _refine_individual_contra_argument(
                     ]
                 )
             )
-
-            return refined_argument
+    return refined_argument
 
 
 async def refine_pro_arguments(

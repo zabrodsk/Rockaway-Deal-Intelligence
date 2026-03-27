@@ -89,6 +89,7 @@ def test_list_company_histories_reconciles_missing_company_runs(monkeypatch) -> 
 
     assert len(histories) == 1
     assert histories[0]["company_name"] == "Apify"
+    assert histories[0]["company_lookup_key"] == "name:apify"
     assert histories[0]["runs"][0]["job_id"] == "job-123"
     assert fetch_calls["count"] == 2
 
@@ -146,8 +147,8 @@ def test_list_company_histories_requeries_after_recent_reconcile(monkeypatch) ->
 
     assert len(histories) == 2
     assert {item["company_name"] for item in histories} == {"Apify", "Apaleo"}
+    assert {item["company_lookup_key"] for item in histories} == {"name:apify", "name:apaleo"}
     assert fetch_calls["count"] == 2
-
 
 def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch) -> None:
     import web.db as web_db
@@ -275,6 +276,68 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
             "critical_gaps": [],
         }
     ]
+
+
+def test_load_company_chat_context_collects_runs_and_chunks(monkeypatch) -> None:
+    import web.db as web_db
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: object())
+    monkeypatch.setattr(
+        web_db,
+        "_fetch_chat_company_run_rows",
+        lambda client, limit_runs=2000: [
+            {
+                "company_id": "comp-1",
+                "company_key": "slug:apify",
+                "company_name": "Apify",
+                "startup_slug": "apify",
+                "job_id_legacy": "job-new",
+                "decision": "invest",
+                "run_created_at": "2026-03-10T10:00:00Z",
+                "created_at": "2026-03-10T10:00:00Z",
+                "result_payload": {
+                    "company_name": "Apify",
+                    "qa_provenance_rows": [{"question": "Why now?", "answer": "Growth inflected"}],
+                    "argument_rows": [{"type": "pro", "argument_text": "Strong wedge"}],
+                },
+            },
+            {
+                "company_id": "comp-legacy",
+                "company_key": "name:apify--legacy-2",
+                "company_name": "Apify",
+                "startup_slug": None,
+                "job_id_legacy": "job-old",
+                "decision": "watch",
+                "run_created_at": "2026-03-01T10:00:00Z",
+                "created_at": "2026-03-01T10:00:00Z",
+                "result_payload": {"company_name": "Apify"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        web_db,
+        "_fetch_analyses_for_company_ids",
+        lambda client, company_ids: [
+            {"company_id": "comp-1", "pitch_deck_id": "deck-1", "job_id_legacy": "job-new", "created_at": "2026-03-10T10:00:00Z"},
+            {"company_id": "comp-legacy", "pitch_deck_id": "deck-2", "job_id_legacy": "job-old", "created_at": "2026-03-01T10:00:00Z"},
+        ],
+    )
+    monkeypatch.setattr(
+        web_db,
+        "_fetch_chunks_for_pitch_deck_ids",
+        lambda client, pitch_deck_ids: [
+            {"pitch_deck_id": "deck-1", "chunk_id": "chunk_1", "text": "New deck evidence", "source_file": "deck.pdf", "page_or_slide": "3"},
+            {"pitch_deck_id": "deck-2", "chunk_id": "chunk_1", "text": "Old deck evidence", "source_file": "deck-old.pdf", "page_or_slide": "4"},
+        ],
+    )
+
+    context = web_db.load_company_chat_context("name:apify")
+
+    assert context is not None
+    assert context["company_lookup_key"] == "name:apify"
+    assert [run["job_id"] for run in context["runs"]] == ["job-new", "job-old"]
+    assert context["runs"][0]["chunks"][0]["text"] == "New deck evidence"
+    assert context["runs"][1]["chunks"][0]["source_file"] == "deck-old.pdf"
 
 
 def test_compose_results_payload_from_company_runs_rebuilds_batch_ranking() -> None:
@@ -932,6 +995,10 @@ def test_list_saved_jobs_prefers_terminal_analysis_status_over_stale_running_sta
             "input_mode": "specter",
             "use_web_search": True,
             "run_name": None,
+            "started_by_user_id": None,
+            "started_by_email": None,
+            "started_by_display_name": None,
+            "started_by_label": None,
             "run_config": {},
             "results": None,
             "has_results": True,
@@ -1011,6 +1078,10 @@ def test_list_saved_jobs_ignores_company_level_analysis_rows(monkeypatch) -> Non
             "input_mode": "specter",
             "use_web_search": True,
             "run_name": None,
+            "started_by_user_id": None,
+            "started_by_email": None,
+            "started_by_display_name": None,
+            "started_by_label": None,
             "run_config": {
                 "worker_state": {
                     "status": "running",
@@ -1091,6 +1162,10 @@ def test_list_saved_jobs_marks_worker_backed_runs_active(monkeypatch) -> None:
             "input_mode": "specter",
             "use_web_search": True,
             "run_name": None,
+            "started_by_user_id": None,
+            "started_by_email": None,
+            "started_by_display_name": None,
+            "started_by_label": None,
             "run_config": {
                 "worker_state": {
                     "status": "running",
@@ -1177,6 +1252,10 @@ def test_list_saved_jobs_marks_stale_worker_execution_interrupted(monkeypatch) -
             "input_mode": "specter",
             "use_web_search": True,
             "run_name": None,
+            "started_by_user_id": None,
+            "started_by_email": None,
+            "started_by_display_name": None,
+            "started_by_label": None,
             "run_config": {
                 "worker_state": {
                     "status": "running",
@@ -1267,6 +1346,10 @@ def test_list_saved_jobs_promotes_terminal_worker_state_over_stale_running_statu
             "input_mode": "specter",
             "use_web_search": True,
             "run_name": None,
+            "started_by_user_id": None,
+            "started_by_email": None,
+            "started_by_display_name": None,
+            "started_by_label": None,
             "run_config": {
                 "worker_state": {
                     "status": "done",
@@ -1366,6 +1449,10 @@ def test_list_saved_jobs_prefers_newer_done_analysis_over_stale_stopped_status(m
             "input_mode": "specter",
             "use_web_search": True,
             "run_name": None,
+            "started_by_user_id": None,
+            "started_by_email": None,
+            "started_by_display_name": None,
+            "started_by_label": None,
             "run_config": {
                 "worker_state": {
                     "status": "done",
@@ -1453,6 +1540,10 @@ def test_list_saved_jobs_keeps_recent_queued_worker_job_active(monkeypatch) -> N
             "input_mode": "specter",
             "use_web_search": True,
             "run_name": None,
+            "started_by_user_id": None,
+            "started_by_email": None,
+            "started_by_display_name": None,
+            "started_by_label": None,
             "run_config": {
                 "worker_state": {
                     "status": "queued",
@@ -1568,6 +1659,7 @@ def test_list_saved_jobs_exposes_optional_run_name(monkeypatch) -> None:
                             "input_mode": "specter",
                             "use_web_search": False,
                             "created_at": "2026-03-14T20:00:00Z",
+                            "started_by_label": "Jane Doe",
                             "run_config": {"run_name": "Germany shortlist"},
                         }
                     ]
@@ -1587,6 +1679,7 @@ def test_list_saved_jobs_exposes_optional_run_name(monkeypatch) -> None:
     rows = web_db.list_saved_jobs(limit=10)
 
     assert rows[0]["run_name"] == "Germany shortlist"
+    assert rows[0]["started_by_label"] == "Jane Doe"
 
 
 def test_list_saved_jobs_allows_reconstructable_specter_results_without_snapshot(monkeypatch) -> None:
@@ -1681,6 +1774,10 @@ def test_list_saved_jobs_allows_reconstructable_specter_results_without_snapshot
             "input_mode": "specter",
             "use_web_search": True,
             "run_name": None,
+            "started_by_user_id": None,
+            "started_by_email": None,
+            "started_by_display_name": None,
+            "started_by_label": None,
             "run_config": {},
             "results": None,
             "has_results": True,

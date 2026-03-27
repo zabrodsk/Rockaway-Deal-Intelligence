@@ -16,7 +16,7 @@ def get_llm(
 
     Args:
         temperature: Controls randomness in responses (0.0 = deterministic).
-        reasoning_effort: Optional OpenAI reasoning setting.
+        reasoning_effort: Optional OpenAI reasoning effort override.
 
     Returns:
         Configured chat model instance for the active provider.

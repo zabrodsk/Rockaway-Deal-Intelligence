@@ -26,26 +26,32 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import Cookie, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import Cookie, FastAPI, File, Header, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-load_dotenv()
-
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from agent.llm_catalog import (
     available_models_payload,
-    current_default_selection,
+    available_chat_models_payload,
     model_label,
+    current_default_selection,
+    normalize_creativity,
+    normalize_provider,
     pricing_catalog_payload,
     serialize_selection,
+    validate_chat_requested_selection,
     validate_requested_selection,
 )
 from agent.llm_policy import (
+    build_default_phase_model_policy,
     build_phase_model_policy,
     build_phase_policy_display_label,
     build_pipeline_policy,
@@ -60,7 +66,7 @@ from agent.llm_policy import (
     resolve_effective_phase_choices,
     resolve_effective_phase_models,
 )
-from agent.runtime_env import validate_runtime_environment
+from agent.company_chat import answer_company_question, build_company_chat_store
 from agent.run_context import (
     RunTelemetryCollector,
     build_run_costs_from_model_executions,
@@ -76,7 +82,6 @@ from agent.person_intel.models import (
     PersonProfileJobRequest,
 )
 from agent.person_intel.service import PersonIntelService
-from web.agent_api import create_agent_router
 
 app = FastAPI(title="Rockaway Deal Intelligence", docs_url=None, redoc_url=None)
 
@@ -161,14 +166,13 @@ _jobs_overview_cache: dict[str, Any] = {"expires_at": 0.0, "payload": None}
 _company_runs_cache: dict[str, Any] = {"expires_at": 0.0, "payload": None}
 SPECTER_CHUNK_EVENT_PREFIX = "__SPECTER_CHUNK_EVENT__"
 SPECTER_COMPANY_EVENT_PREFIX = "__SPECTER_COMPANY_EVENT__"
+_company_chat_sessions: dict[tuple[str, str], dict[str, Any]] = {}
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-@app.on_event("startup")
-async def _validate_runtime_environment_on_startup() -> None:
-    validate_runtime_environment(service_role=os.getenv("SERVICE_ROLE", "web"))
+VENDOR_DIR = PROJECT_ROOT / "node_modules"
+if VENDOR_DIR.exists():
+    app.mount("/vendor", StaticFiles(directory=str(VENDOR_DIR)), name="vendor")
 
 
 def _lazy_import_pandas():
@@ -309,16 +313,20 @@ def _pipeline_meta_from_payload(payload: dict[str, Any] | None) -> dict[str, Any
     }
 
 
-def _selection_from_payload(payload: dict[str, Any] | None) -> dict[str, str] | None:
+def _selection_from_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     selection = payload.get("llm_selection")
     if isinstance(selection, dict) and selection.get("provider") and selection.get("model"):
-        return serialize_selection(selection.get("provider"), selection.get("model"))
+        return serialize_selection(
+            selection.get("provider"),
+            selection.get("model"),
+            creativity=selection.get("creativity"),
+        )
     provider = payload.get("llm_provider") or payload.get("provider")
     model = payload.get("llm_model") or payload.get("model")
     if provider and model:
-        return serialize_selection(provider, model)
+        return serialize_selection(provider, model, creativity=payload.get("creativity"))
     return None
 
 
@@ -343,7 +351,7 @@ def _llm_label_from_payload(payload: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _resolve_job_llm_selection(job_id: str, *, results: dict[str, Any] | None = None) -> dict[str, str]:
+def _resolve_job_llm_selection(job_id: str, *, results: dict[str, Any] | None = None) -> dict[str, Any]:
     cache = _results_cache.get(job_id, {})
     for candidate in (
         _selection_from_payload(results),
@@ -381,7 +389,7 @@ def _resolve_job_llm_label(job_id: str, *, results: dict[str, Any] | None = None
     return _resolve_job_llm_selection(job_id, results=results)["label"]
 
 
-def _resolve_batch_chunking_selection(job_id: str) -> dict[str, str]:
+def _resolve_batch_chunking_selection(job_id: str) -> dict[str, Any]:
     pipeline_meta = _resolve_job_pipeline_meta(job_id)
     if pipeline_meta:
         effective = pipeline_meta.get("effective_phase_models")
@@ -437,6 +445,18 @@ def _promote_results_metadata(job_id: str, results: dict[str, Any] | None) -> No
         run_config["quality_tier"] = pipeline_meta.get("quality_tier")
         run_config["premium_phase_models"] = pipeline_meta.get("premium_phase_models")
         run_config["effective_phase_models"] = pipeline_meta.get("effective_phase_models")
+        cache["run_config"] = run_config
+
+    started_by = _started_by_from_payload(results)
+    if started_by:
+        job = _jobs.get(job_id)
+        if job:
+            job.started_by_user_id = started_by.get("started_by_user_id")
+            job.started_by_email = started_by.get("started_by_email")
+            job.started_by_display_name = started_by.get("started_by_display_name")
+            job.started_by_label = started_by.get("started_by_label")
+        run_config = dict(cache.get("run_config") or {})
+        run_config.update(started_by)
         cache["run_config"] = run_config
 
 
@@ -760,7 +780,7 @@ class AnalyzeRequest(BaseModel):
     input_mode: str = "pitchdeck"  # pitchdeck | specter | original
     run_name: str | None = None
     vc_investment_strategy: str | None = None
-    phase_models: dict[str, dict[str, str]] | None = None
+    phase_models: dict[str, dict[str, Any]] | None = None
     quality_tier: Literal["cheap", "premium"] | None = None
     premium_phase_models: dict[str, Literal["claude", "gpt5"]] | None = None
     llm_provider: str | None = None
@@ -785,17 +805,19 @@ class AnalyzeRequest(BaseModel):
 
     @field_validator("phase_models", mode="before")
     @classmethod
-    def _coerce_phase_models(cls, v: Any) -> dict[str, dict[str, str]] | None:
+    def _coerce_phase_models(cls, v: Any) -> dict[str, dict[str, Any]] | None:
         if v is None:
             return None
         normalized = coerce_phase_models_payload(v, require_all=True)
-        return {
-            phase: {
+        phase_models: dict[str, dict[str, Any]] = {}
+        for phase, selection in normalized.items():
+            creativity = normalize_creativity(selection.get("creativity"))
+            phase_models[phase] = {
                 "provider": selection["provider"],
                 "model": selection["model"],
+                **({"creativity": creativity} if creativity is not None else {}),
             }
-            for phase, selection in normalized.items()
-        }
+        return phase_models
 
     @field_validator("premium_phase_models", mode="before")
     @classmethod
@@ -818,6 +840,10 @@ class AnalysisStatus(BaseModel):
     progress: str = ""
     progress_log: list[str] = Field(default_factory=list)
     results: object | None = None
+    started_by_user_id: str | None = None
+    started_by_email: str | None = None
+    started_by_display_name: str | None = None
+    started_by_label: str | None = None
     terminal_results_served: bool = False
     restart_pending: bool = False
     persistence_complete: bool = False
@@ -859,6 +885,270 @@ PersonProfileJobStatus.model_rebuild()
 _person_jobs: dict[str, PersonProfileJobStatus] = {}
 _person_job_tasks: dict[str, asyncio.Task[Any]] = {}
 _person_service = PersonIntelService()
+
+
+class CompanyChatRequest(BaseModel):
+    message: str
+    active_job_id: str | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def _validate_message(cls, v: str) -> str:
+        text = (v or "").strip()
+        if not text:
+            raise ValueError("message is required")
+        return text[:4000]
+
+
+class VcStrategyRequest(BaseModel):
+    vc_investment_strategy: str = ""
+
+    @field_validator("vc_investment_strategy")
+    @classmethod
+    def _validate_strategy(cls, v: str) -> str:
+        return (v or "").strip()[:8000]
+
+
+class CompanyChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str
+    llm_label: str | None = None
+    run_costs: dict[str, Any] | None = None
+
+
+class CompanyChatResponse(BaseModel):
+    company_lookup_key: str
+    transcript: list[CompanyChatMessage]
+    run_count: int = 0
+    source_counts: dict[str, int] = Field(default_factory=dict)
+    web_search_enabled: bool = True
+    model_label: str = "Gemini 3.1 Flash Lite"
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3.1-flash-lite-preview"
+    session_run_costs: dict[str, Any] = Field(default_factory=dict)
+    available_models: list[dict[str, Any]] = Field(default_factory=list)
+    used_run_ids: list[str] = Field(default_factory=list)
+    used_web_search: bool = False
+    web_search_query: str | None = None
+
+
+CompanyChatMessage.model_rebuild()
+CompanyChatResponse.model_rebuild()
+
+
+def _chat_session_key(session_id: str, company_lookup_key: str) -> tuple[str, str]:
+    return (session_id, company_lookup_key.strip().lower())
+
+
+COMPANY_CHAT_DB_TIMEOUT_SEC = 3.0
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _truncate_summary(text: str, limit: int = 4000) -> str:
+    normalized = " ".join((text or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
+
+def _compress_company_chat_session(session: dict[str, Any], max_messages: int = 24) -> None:
+    transcript = session.setdefault("transcript", [])
+    while len(transcript) > max_messages:
+        oldest = transcript.pop(0)
+        summary = session.get("summary") or ""
+        summary_line = f"{oldest.get('role', 'unknown')}: {oldest.get('content', '')}"
+        session["summary"] = _truncate_summary(f"{summary}\n{summary_line}".strip())
+
+
+def _default_company_chat_session() -> dict[str, Any]:
+    return {
+        "company_name": None,
+        "summary": "",
+        "transcript": [],
+        "selection": serialize_selection("gemini", "gemini-3.1-flash-lite-preview"),
+        "model_executions": [],
+    }
+
+
+def _normalize_company_chat_transcript(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            normalized.append(CompanyChatMessage(**item).model_dump())
+        except Exception:
+            continue
+    return normalized
+
+
+def _normalize_company_chat_session_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    session = _default_company_chat_session()
+    source = payload or {}
+    session["company_name"] = source.get("company_name")
+    session["summary"] = str(source.get("summary") or "")
+    session["transcript"] = _normalize_company_chat_transcript(source.get("transcript") or [])
+    session["model_executions"] = list(source.get("model_executions") or [])
+    session["selection"] = _company_chat_selection(source)
+    _compress_company_chat_session(session)
+    return session
+
+
+def _get_or_create_company_chat_session(session_id: str, company_lookup_key: str) -> dict[str, Any]:
+    return _company_chat_sessions.setdefault(_chat_session_key(session_id, company_lookup_key), _default_company_chat_session())
+
+
+async def _load_company_chat_session(session_id: str, company_lookup_key: str) -> dict[str, Any]:
+    if db and db.is_configured():
+        load_persisted = getattr(db, "load_company_chat_session", None)
+        persisted = await _call_company_chat_db(load_persisted, company_lookup_key)
+        if isinstance(persisted, dict):
+            session = _normalize_company_chat_session_payload(persisted)
+            _company_chat_sessions[_chat_session_key(session_id, company_lookup_key)] = session
+            return session
+    return _normalize_company_chat_session_payload(_get_or_create_company_chat_session(session_id, company_lookup_key))
+
+
+async def _persist_company_chat_session(
+    session_id: str,
+    company_lookup_key: str,
+    company_name: str,
+    chat_session: dict[str, Any],
+) -> None:
+    normalized = _normalize_company_chat_session_payload(chat_session)
+    normalized["company_name"] = company_name
+    _company_chat_sessions[_chat_session_key(session_id, company_lookup_key)] = normalized
+    if db and db.is_configured():
+        persist_persisted = getattr(db, "persist_company_chat_session", None)
+        await _call_company_chat_db(
+            persist_persisted,
+            company_lookup_key=company_lookup_key,
+            company_name=company_name,
+            selection=normalized.get("selection"),
+            summary=normalized.get("summary") or "",
+            transcript=normalized.get("transcript") or [],
+            model_executions=normalized.get("model_executions") or [],
+        )
+
+
+async def _clear_company_chat_session(session_id: str, company_lookup_key: str) -> dict[str, Any]:
+    current = await _load_company_chat_session(session_id, company_lookup_key)
+    selection = _company_chat_selection(current)
+    company_name = current.get("company_name") or company_lookup_key
+    normalized_key = (company_lookup_key or "").strip().lower()
+    for key in list(_company_chat_sessions.keys()):
+        if key[1] == normalized_key:
+            _company_chat_sessions.pop(key, None)
+    cleared = _default_company_chat_session()
+    cleared["selection"] = selection
+    cleared["company_name"] = company_name
+    _company_chat_sessions[_chat_session_key(session_id, company_lookup_key)] = cleared
+    if db and db.is_configured():
+        persist_persisted = getattr(db, "persist_company_chat_session", None)
+        await _call_company_chat_db(
+            persist_persisted,
+            company_lookup_key=company_lookup_key,
+            company_name=company_name,
+            selection=selection,
+            summary="",
+            transcript=[],
+            model_executions=[],
+        )
+    return cleared
+
+
+async def _call_company_chat_db(func: Any, *args: Any, timeout: float = COMPANY_CHAT_DB_TIMEOUT_SEC, **kwargs: Any) -> Any:
+    if not callable(func):
+        return None
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(func, *args, **kwargs), timeout=timeout)
+    except Exception:
+        return None
+
+
+def _company_chat_selection(session: dict[str, Any] | None = None) -> dict[str, str]:
+    selection = (session or {}).get("selection") if isinstance(session, dict) else None
+    if isinstance(selection, dict) and selection.get("provider") and selection.get("model"):
+        return serialize_selection(selection.get("provider"), selection.get("model"))
+    default = serialize_selection("gemini", "gemini-3.1-flash-lite-preview")
+    try:
+        validate_chat_requested_selection(default.get("provider"), default.get("model"))
+        return default
+    except Exception:
+        fallback = current_default_selection()
+        return serialize_selection(fallback.get("provider"), fallback.get("model"))
+
+
+def _company_chat_model_label(session: dict[str, Any] | None = None) -> str:
+    selection = _company_chat_selection(session)
+    return model_label(selection.get("provider"), selection.get("model"))
+
+
+def _resolve_requested_company_chat_selection(provider: str | None, model: str | None) -> dict[str, str]:
+    validation_error: ValueError | None = None
+    try:
+        selected_entry = validate_chat_requested_selection(provider, model)
+    except ValueError as exc:
+        validation_error = exc
+        selected_entry = None
+    if selected_entry:
+        return serialize_selection(selected_entry.provider, selected_entry.model)
+
+    provider_norm = normalize_provider(provider)
+    model_norm = (model or "").strip()
+    for item in available_chat_models_payload():
+        if item.get("provider") != provider_norm or item.get("model") != model_norm:
+            continue
+        if not item.get("available"):
+            raise ValueError(f'{item.get("label") or model_norm} is not available in this environment.')
+        if item.get("selectable") is False:
+            raise ValueError(f'{item.get("label") or model_norm} is not selectable for company chat.')
+        return serialize_selection(provider_norm, model_norm)
+
+    if validation_error is not None:
+        raise validation_error
+    raise ValueError("Unknown chat LLM model selection.")
+
+
+def _company_chat_session_costs(session: dict[str, Any] | None) -> dict[str, Any]:
+    transcript = list((session or {}).get("transcript") or [])
+    aggregate: dict[str, Any] | None = None
+    for item in transcript:
+        if item.get("role") != "assistant":
+            continue
+        run_costs = item.get("run_costs")
+        if not isinstance(run_costs, dict):
+            continue
+        aggregate = _merge_run_cost_summaries(aggregate, run_costs)
+    if isinstance(aggregate, dict):
+        return aggregate
+    rows = list((session or {}).get("model_executions") or [])
+    return build_run_costs_from_model_executions(rows)
+
+
+async def _load_shared_vc_strategy() -> str | None:
+    if db and db.is_configured():
+        load_setting = getattr(db, "load_app_setting", None)
+        value = await _call_company_chat_db(load_setting, "vc_investment_strategy")
+        if value is None:
+            return None
+        return str(value or "")
+    return None
+
+
+async def _save_shared_vc_strategy(value: str) -> bool:
+    if db and db.is_configured():
+        save_setting = getattr(db, "save_app_setting", None)
+        result = await _call_company_chat_db(save_setting, "vc_investment_strategy", value)
+        return bool(result)
+    return False
 
 
 def _runtime_versions() -> dict[str, str]:
@@ -1133,6 +1423,14 @@ def _persist_person_job(job_id: str, request_payload: dict[str, Any] | None = No
         company_slug=(request_payload or {}).get("company_slug"),
         person_key=(request_payload or {}).get("person_key"),
     )
+    company_slug = (request_payload or {}).get("company_slug")
+    person_key = (request_payload or {}).get("person_key")
+    if job.status in {"done", "error"} and company_slug and person_key:
+        db.prune_person_profile_jobs(
+            company_slug,
+            person_key,
+            keep_person_job_id=job_id,
+        )
 
 
 def _register_person_job_task(job_id: str, task: asyncio.Task[Any]) -> None:
@@ -1311,6 +1609,10 @@ def _persist_jobs() -> None:
                     "progress": job.progress,
                     "progress_log": (getattr(job, "progress_log", []) or [])[-MAX_PROGRESS_LOG_ENTRIES:],
                     "results": job.results,
+                    "started_by_user_id": job.started_by_user_id,
+                    "started_by_email": job.started_by_email,
+                    "started_by_display_name": job.started_by_display_name,
+                    "started_by_label": job.started_by_label,
                 }
         if not to_save:
             return
@@ -1340,6 +1642,10 @@ def _load_jobs() -> None:
                         progress=data.get("progress", "Analysis complete"),
                         progress_log=(data.get("progress_log") or [])[-MAX_PROGRESS_LOG_ENTRIES:],
                         results=None,
+                        started_by_user_id=data.get("started_by_user_id"),
+                        started_by_email=data.get("started_by_email"),
+                        started_by_display_name=data.get("started_by_display_name"),
+                        started_by_label=data.get("started_by_label"),
                         persistence_complete=True,
                     )
                     _results_cache[job_id] = {}
@@ -1369,6 +1675,10 @@ def _get_job_summary(job_id: str, job: AnalysisStatus) -> dict[str, Any]:
         ),
         "use_web_search": None,
         "run_name": cache.get("run_name") or run_config.get("run_name"),
+        "started_by_user_id": job.started_by_user_id or run_config.get("started_by_user_id"),
+        "started_by_email": job.started_by_email or run_config.get("started_by_email"),
+        "started_by_display_name": job.started_by_display_name or run_config.get("started_by_display_name"),
+        "started_by_label": job.started_by_label or run_config.get("started_by_label"),
         "results": None,
         "has_results": has_results,
         "can_open_results": job.status == "done" and has_results,
@@ -1413,6 +1723,10 @@ def _list_jobs_for_ui() -> list[dict[str, Any]]:
                     "input_mode": entry.get("input_mode") or (existing or {}).get("input_mode"),
                     "use_web_search": entry.get("use_web_search"),
                     "run_name": entry.get("run_name") or (existing or {}).get("run_name"),
+                    "started_by_user_id": entry.get("started_by_user_id") or (existing or {}).get("started_by_user_id"),
+                    "started_by_email": entry.get("started_by_email") or (existing or {}).get("started_by_email"),
+                    "started_by_display_name": entry.get("started_by_display_name") or (existing or {}).get("started_by_display_name"),
+                    "started_by_label": entry.get("started_by_label") or (existing or {}).get("started_by_label"),
                     "results": None,
                     "has_results": entry.get("has_results") or (existing or {}).get("has_results") or False,
                     "can_open_results": False,
@@ -1480,6 +1794,89 @@ def _check_session(session_id: str | None) -> bool:
     return True
 
 
+def _supabase_public_auth_config() -> dict[str, Any]:
+    url = (os.getenv("SUPABASE_URL") or "").strip()
+    anon_key = (os.getenv("SUPABASE_ANON_KEY") or "").strip()
+    db_ready = bool(callable(getattr(db, "is_configured", None)) and db.is_configured())
+    redirect_url = (
+        os.getenv("SUPABASE_AUTH_REDIRECT_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or ""
+    ).strip()
+    return {
+        "configured": bool(url and anon_key),
+        "required": bool(url and anon_key and db_ready),
+        "url": url,
+        "anon_key": anon_key,
+        "redirect_url": redirect_url,
+    }
+
+
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    header = (authorization or "").strip()
+    if not header:
+        return None
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    token = token.strip()
+    return token or None
+
+
+def _display_name_from_supabase_user(user: dict[str, Any] | None) -> str | None:
+    metadata = user.get("user_metadata") if isinstance(user, dict) else None
+    if not isinstance(metadata, dict):
+        metadata = {}
+    for key in ("full_name", "name", "display_name", "user_name"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _build_started_by_identity(user: dict[str, Any] | None) -> dict[str, str | None]:
+    payload = user if isinstance(user, dict) else {}
+    email = str(payload.get("email") or "").strip() or None
+    display_name = _display_name_from_supabase_user(payload)
+    return {
+        "started_by_user_id": str(payload.get("id") or "").strip() or None,
+        "started_by_email": email,
+        "started_by_display_name": display_name,
+        "started_by_label": display_name or email,
+    }
+
+
+def _started_by_from_payload(payload: dict[str, Any] | None) -> dict[str, str | None]:
+    if not isinstance(payload, dict):
+        return {}
+    values = {
+        "started_by_user_id": payload.get("started_by_user_id"),
+        "started_by_email": payload.get("started_by_email"),
+        "started_by_display_name": payload.get("started_by_display_name"),
+        "started_by_label": payload.get("started_by_label"),
+    }
+    return {key: value for key, value in values.items() if value}
+
+
+async def _require_supabase_identity(authorization: str | None) -> dict[str, str | None]:
+    config = _supabase_public_auth_config()
+    if not config["required"]:
+        return {}
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Supabase sign-in required before starting an analysis.")
+    if not callable(getattr(db, "is_configured", None)) or not db.is_configured():
+        raise HTTPException(status_code=503, detail="Supabase storage is not configured.")
+    get_user = getattr(db, "get_authenticated_supabase_user", None)
+    if not callable(get_user):
+        raise HTTPException(status_code=503, detail="Supabase auth validation is unavailable.")
+    user = await asyncio.to_thread(get_user, token)
+    identity = _build_started_by_identity(user)
+    if not identity.get("started_by_user_id") or not identity.get("started_by_label"):
+        raise HTTPException(status_code=401, detail="Supabase session is invalid or expired.")
+    return identity
+
+
 def _parse_max_startups_from_instructions(instructions: str | None) -> int | None:
     """Extract max_startups only from explicit limit instructions.
 
@@ -1506,593 +1903,6 @@ def _parse_max_startups_from_instructions(instructions: str | None) -> int | Non
     return None
 
 
-async def _upload_files_payload(files: list[UploadFile]) -> dict[str, Any]:
-    job_id = str(uuid.uuid4())[:8]
-    upload_dir = Path(tempfile.mkdtemp()) / job_id
-    upload_dir.mkdir(parents=True)
-
-    saved = []
-    for f in files:
-        dest = upload_dir / f.filename
-        with open(dest, "wb") as buf:
-            shutil.copyfileobj(f.file, buf)
-        saved.append(
-            {
-                "name": f.filename,
-                "size": dest.stat().st_size,
-                "mime_type": f.content_type or "",
-                "sha256": _sha256_file(dest),
-                "local_path": str(dest),
-            }
-        )
-
-    specter = _detect_specter_csvs(upload_dir, [f["name"] for f in saved])
-
-    _jobs[job_id] = AnalysisStatus(
-        job_id=job_id, status="pending", progress="Files uploaded"
-    )
-    _results_cache[job_id] = {
-        "upload_dir": str(upload_dir),
-        "files": saved,
-        "specter": specter,
-    }
-    if db and db.is_configured():
-        db.insert_analysis_event(
-            job_id,
-            message="Files uploaded",
-            event_type="upload",
-            payload={"num_files": len(saved)},
-        )
-        db.insert_job_status_history(
-            job_id,
-            status="pending",
-            progress="Files uploaded",
-            source="upload",
-        )
-
-    return {
-        "job_id": job_id,
-        "files": saved,
-        "mode": "specter" if specter else "documents",
-    }
-
-
-async def _start_analysis_payload(job_id: str, req: AnalyzeRequest) -> dict[str, Any]:
-    if job_id not in _jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    _cancel_scheduled_restart()
-
-    quality_tier = normalize_quality_tier(req.quality_tier)
-    pipeline_policy = None
-    phase_models = normalize_phase_models(req.phase_models) if req.phase_models is not None else None
-    premium_phase_models = normalize_premium_phase_models(req.premium_phase_models)
-    if req.phase_models:
-        try:
-            pipeline_policy = build_phase_model_policy(phase_models)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        llm_selection = dict(pipeline_policy.answering)
-        effective_phase_models = resolve_effective_phase_models(pipeline_policy)
-        llm_display = build_phase_policy_display_label(effective_phase_models)
-        quality_tier = None
-        premium_phase_models = None
-    elif quality_tier:
-        try:
-            pipeline_policy = build_pipeline_policy(
-                quality_tier,
-                premium_phase_models if quality_tier == "premium" else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        llm_selection = dict(pipeline_policy.answering)
-        effective_phase_models = resolve_effective_phase_choices(pipeline_policy)
-        llm_display = build_tier_display_label(
-            quality_tier,
-            effective_phase_models=effective_phase_models,
-        )
-    else:
-        try:
-            selected_entry = validate_requested_selection(req.llm_provider, req.llm_model)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        llm_selection = serialize_selection(
-            (selected_entry.provider if selected_entry else None),
-            (selected_entry.model if selected_entry else None),
-        )
-        effective_phase_models = None
-        llm_display = llm_selection["label"]
-
-    _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
-    _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
-    cache = _results_cache[job_id]
-    cache["input_mode"] = req.input_mode
-    cache["run_name"] = req.run_name
-    cache["vc_investment_strategy"] = req.vc_investment_strategy
-    cache["use_web_search"] = req.use_web_search
-    cache["instructions"] = req.instructions
-    cache["llm_selection"] = llm_selection
-    cache["phase_models"] = phase_models if req.phase_models else None
-    cache["quality_tier"] = quality_tier
-    cache["premium_phase_models"] = (
-        premium_phase_models if quality_tier == "premium" else None
-    )
-    cache["effective_phase_models"] = effective_phase_models
-    cache["run_config"] = {
-        "input_mode": req.input_mode,
-        "run_name": req.run_name,
-        "vc_investment_strategy": req.vc_investment_strategy,
-        "instructions": req.instructions,
-        "use_web_search": req.use_web_search,
-        "phase_models": phase_models if req.phase_models else None,
-        "quality_tier": quality_tier,
-        "premium_phase_models": premium_phase_models if quality_tier == "premium" else None,
-        "effective_phase_models": effective_phase_models,
-        "llm_provider": llm_selection["provider"],
-        "llm_model": llm_selection["model"],
-        "llm": llm_display,
-    }
-    cache["model_executions"] = []
-    cache["run_costs_aggregate"] = _empty_run_costs_summary()
-    cache["versions"] = _runtime_versions()
-
-    if db and db.is_configured():
-        run_config = dict(cache["run_config"])
-        db.upsert_job(job_id, run_config=run_config, versions=_runtime_versions())
-        db.upsert_job_control(
-            job_id,
-            pause_requested=False,
-            stop_requested=False,
-            last_action="start",
-        )
-
-    vc_str = _ensure_str(req.vc_investment_strategy).strip() or None
-    inst = _ensure_str(req.instructions).strip() or None
-    if req.input_mode == "specter" and ENABLE_SPECTER_WORKER_SERVICE:
-        queued, worker_message = _queue_worker_backed_specter_job(job_id)
-        if queued:
-            _set_job_status(job_id, "running", worker_message or "Queued for worker...", source="start_analysis")
-            _append_progress_and_log(job_id, worker_message or "Queued for worker...")
-            return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
-        queue_error = worker_message or "Unknown worker queue error."
-        _set_job_status(job_id, "error", f"Worker queue failed. {queue_error}", source="start_analysis")
-        _append_progress_and_log(job_id, f"Worker queue failed — {queue_error}")
-        raise HTTPException(status_code=503, detail=f"Specter worker queue failed: {queue_error}")
-
-    threading.Thread(
-        target=lambda: asyncio.run(
-            _run_analysis(
-                job_id,
-                use_web_search=req.use_web_search,
-                instructions=inst,
-                input_mode=req.input_mode,
-                vc_investment_strategy=vc_str,
-                llm_selection=llm_selection,
-                pipeline_policy=pipeline_policy,
-            )
-        ),
-        daemon=True,
-    ).start()
-    return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
-
-
-async def _control_analysis_job_payload(
-    job_id: str,
-    req: JobControlRequest,
-) -> dict[str, Any]:
-    if job_id not in _jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = _jobs[job_id]
-    if job.status in {"done", "error", "stopped"}:
-        return {"job_id": job_id, "status": job.status, "progress": job.progress}
-
-    control = _ensure_job_control(job_id)
-    action = req.action
-
-    if action == "pause":
-        control["pause_requested"] = True
-        if job.status in {"running", "pending"}:
-            _set_job_status(job_id, "paused", source="control")
-            _append_progress(job_id, "Paused by user.")
-    elif action == "resume":
-        control["pause_requested"] = False
-        if job.status in {"paused", "pending"}:
-            _set_job_status(job_id, "running", source="control")
-            _append_progress(job_id, "Resumed by user.")
-    else:
-        control["pause_requested"] = False
-        control["stop_requested"] = True
-        _append_progress(job_id, "Stopped by user.", allow_stopped=True)
-        _set_job_status(job_id, "stopped", "Stopped by user.", source="control")
-
-    if db and db.is_configured():
-        db.upsert_job_control(
-            job_id,
-            pause_requested=bool(control.get("pause_requested")),
-            stop_requested=bool(control.get("stop_requested")),
-            last_action=action,
-        )
-
-    return {"job_id": job_id, "status": job.status, "progress": job.progress}
-
-
-async def _create_person_profile_job_payload(
-    req: PersonProfileJobRequest,
-) -> dict[str, Any]:
-    _cancel_scheduled_restart()
-
-    job_id = str(uuid.uuid4())[:8]
-    _person_jobs[job_id] = PersonProfileJobStatus(
-        job_id=job_id,
-        status="pending",
-        progress="Queued",
-    )
-    _persist_person_job(job_id, req.model_dump())
-    _schedule_person_profile_job(job_id, req)
-    return {"job_id": job_id, "status": "running"}
-
-
-async def _get_person_profile_status_payload(job_id: str) -> dict[str, Any]:
-    if job_id not in _person_jobs:
-        if db and db.is_configured():
-            loaded = db.load_person_profile_job(job_id)
-            if loaded:
-                _person_jobs[job_id] = PersonProfileJobStatus(
-                    job_id=job_id,
-                    status=loaded.get("status", "pending"),
-                    progress=loaded.get("progress") or "",
-                    result=loaded.get("result_payload"),
-                    error=loaded.get("error"),
-                )
-                _resume_person_profile_job_if_needed(job_id, loaded)
-            else:
-                raise HTTPException(status_code=404, detail="Job not found")
-        else:
-            raise HTTPException(status_code=404, detail="Job not found")
-    else:
-        _resume_person_profile_job_if_needed(job_id)
-
-    job = _person_jobs[job_id]
-    return {
-        "job_id": job.job_id,
-        "status": job.status,
-        "progress": job.progress,
-        "result": job.result,
-        "error": job.error,
-    }
-
-
-async def _create_bulk_founder_jobs_payload(
-    req: BulkFounderJobRequest,
-) -> dict[str, Any]:
-    _cancel_scheduled_restart()
-
-    created: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-
-    for idx, founder in enumerate(req.founders):
-        person_key = founder.person_key or f"{req.company_slug}:founder:{idx + 1}"
-        if not founder.primary_profile_url:
-            skipped.append(
-                {
-                    "person_key": person_key,
-                    "full_name": founder.full_name or f"Founder {idx + 1}",
-                    "status": "needs_input",
-                    "reason": "missing_primary_profile_url",
-                }
-            )
-            continue
-
-        profile_req = PersonProfileJobRequest(
-            primary_profile_url=founder.primary_profile_url,
-            full_name=founder.full_name,
-            location=founder.location,
-            current_company=founder.current_company,
-            role=founder.role,
-            known_aliases=founder.known_aliases,
-            user_uploaded_text=req.user_uploaded_text,
-            user_uploaded_images=req.user_uploaded_images,
-            company_slug=req.company_slug,
-            person_key=person_key,
-        )
-        job_id = str(uuid.uuid4())[:8]
-        _person_jobs[job_id] = PersonProfileJobStatus(
-            job_id=job_id,
-            status="pending",
-            progress="Queued",
-        )
-        _persist_person_job(job_id, profile_req.model_dump())
-        _schedule_person_profile_job(job_id, profile_req)
-        created.append(
-            {
-                "person_key": person_key,
-                "full_name": founder.full_name or "",
-                "job_id": job_id,
-                "status": "running",
-            }
-        )
-
-    return {
-        "company_slug": req.company_slug,
-        "jobs": created,
-        "skipped": skipped,
-    }
-
-
-def _get_config_payload() -> dict[str, Any]:
-    default_llm = current_default_selection()
-    return {
-        "llm": default_llm["label"],
-        "default_llm": default_llm,
-        "available_models": available_models_payload(),
-        "pricing_catalog": pricing_catalog_payload(),
-        "phase_model_defaults": phase_model_defaults_payload(),
-        "quality_tiers": quality_tiers_payload(),
-        "premium_phase_options": premium_phase_options_payload(),
-    }
-
-
-async def _get_status_payload(
-    job_id: str,
-    response: Response,
-) -> dict[str, Any]:
-    _set_no_store_headers(response)
-
-    if job_id in _jobs:
-        job = _jobs[job_id]
-        cache = _results_cache.get(job_id, {})
-        if _is_worker_backed_job(job_id) and db and db.is_configured():
-            persisted_status = db.load_job_status(job_id)
-            if persisted_status:
-                job.status = _normalize_worker_status(persisted_status.get("status"))
-                job.progress = persisted_status.get("progress") or job.progress
-                job.progress_log = _load_worker_progress_log(job_id)
-        results = cache.get("results")
-        if _is_compact_results_payload(results) and job.status in {"done", "error", "stopped"}:
-            results = None
-        if results is None and job.status in {"pending", "running", "paused"}:
-            results = _maybe_promote_terminal_persisted_results(job_id, cache=cache)
-            job = _jobs[job_id]
-        if results is None and job.status in {"done", "error", "stopped"}:
-            loaded = _load_persisted_job_results(
-                job_id,
-                preferred_mode=cache.get("input_mode"),
-            )
-            if loaded:
-                results = loaded.get("results")
-                _promote_results_metadata(job_id, results)
-        if results is not None and not _is_terminal_job_status(job.status):
-            results = None
-        if results is not None and not _is_compact_results_payload(results):
-            _mark_terminal_results_served(job_id)
-        return {
-            "job_id": job.job_id,
-            "status": job.status,
-            "progress": job.progress,
-            "progress_log": getattr(job, "progress_log", []) or [],
-            "results": results,
-            "llm": _resolve_job_llm_label(job_id, results=results),
-        }
-
-    if db and db.is_configured():
-        persisted_status = db.load_job_status(job_id)
-        if persisted_status:
-            loaded_status = _normalize_worker_status(persisted_status.get("status"))
-            loaded_progress = persisted_status.get("progress") or "Analysis in progress"
-            progress_log = _load_worker_progress_log(job_id)
-            worker_active = bool(persisted_status.get("worker_active"))
-            if loaded_status in {"pending", "running", "paused"} and worker_active:
-                return {
-                    "job_id": job_id,
-                    "status": loaded_status,
-                    "progress": loaded_progress,
-                    "progress_log": progress_log,
-                    "results": None,
-                    "llm": _resolve_job_llm_label(job_id, results=None),
-                }
-            if loaded_status in {"pending", "running", "paused"}:
-                return {
-                    "job_id": job_id,
-                    "status": "stopped",
-                    "progress": "Run interrupted before completion.",
-                    "progress_log": [],
-                    "results": None,
-                    "llm": _resolve_job_llm_label(job_id, results=None),
-                }
-            loaded = _load_persisted_job_results(job_id)
-            if loaded and _is_terminal_job_status(loaded_status):
-                results = loaded.get("results")
-                _jobs[job_id] = AnalysisStatus(
-                    job_id=job_id,
-                    status=loaded_status,
-                    progress=loaded_progress,
-                    progress_log=[],
-                    results=None,
-                    persistence_complete=True,
-                )
-                _results_cache[job_id] = {}
-                _promote_results_metadata(job_id, results)
-                _mark_terminal_results_served(job_id)
-                return {
-                    "job_id": job_id,
-                    "status": loaded_status,
-                    "progress": loaded_progress,
-                    "progress_log": [],
-                    "results": results,
-                    "llm": _resolve_job_llm_label(job_id, results=results),
-                }
-            return {
-                "job_id": job_id,
-                "status": loaded_status,
-                "progress": loaded_progress,
-                "progress_log": [],
-                "results": None,
-                "llm": _resolve_job_llm_label(job_id, results=None),
-            }
-        saved_job = db.load_saved_job(job_id)
-        if saved_job:
-            return {
-                "job_id": job_id,
-                "status": "stopped",
-                "progress": "Run interrupted before completion.",
-                "progress_log": [],
-                "results": None,
-                "llm": saved_job.get("llm") or _resolve_job_llm_label(job_id, results=None),
-            }
-
-    loaded = _load_persisted_job_results(job_id)
-    if loaded:
-        results = loaded.get("results")
-        loaded_status = (results or {}).get("job_status") or "done"
-        loaded_progress = (results or {}).get("job_message") or "Analysis complete"
-        _jobs[job_id] = AnalysisStatus(
-            job_id=job_id,
-            status=loaded_status,
-            progress=loaded_progress,
-            progress_log=[],
-            results=None,
-            persistence_complete=True,
-        )
-        _results_cache[job_id] = {}
-        _promote_results_metadata(job_id, results)
-        _mark_terminal_results_served(job_id)
-        return {
-            "job_id": job_id,
-            "status": loaded_status,
-            "progress": loaded_progress,
-            "progress_log": [],
-            "results": results,
-            "llm": _resolve_job_llm_label(job_id, results=results),
-        }
-
-    raise HTTPException(status_code=404, detail="Job not found")
-
-
-async def _get_job_log_payload(
-    job_id: str,
-    response: Response,
-) -> dict[str, Any]:
-    _set_no_store_headers(response)
-
-    job = _jobs.get(job_id)
-    if job and job.status in {"pending", "running", "paused"}:
-        if _is_worker_backed_job(job_id) and db and db.is_configured():
-            persisted_status = db.load_job_status(job_id)
-            if persisted_status:
-                job.status = _normalize_worker_status(persisted_status.get("status"))
-                job.progress = persisted_status.get("progress") or job.progress
-                job.progress_log = _load_worker_progress_log(job_id)
-        return {
-            "job_id": job_id,
-            "status": job.status,
-            "progress": job.progress,
-            "progress_log": getattr(job, "progress_log", []) or [],
-        }
-
-    if db and db.is_configured():
-        persisted_status = db.load_job_status(job_id)
-        progress_log = _load_worker_progress_log(job_id) if persisted_status else []
-        if (
-            persisted_status
-            and persisted_status.get("status") in {"pending", "running", "paused"}
-            and progress_log
-        ):
-            return {
-                "job_id": job_id,
-                "status": _normalize_worker_status(persisted_status.get("status")),
-                "progress": persisted_status.get("progress") or "Analysis in progress",
-                "progress_log": progress_log,
-            }
-
-    raise HTTPException(status_code=409, detail="Run is no longer active.")
-
-
-async def _get_analysis_payload(
-    job_id: str,
-    response: Response,
-) -> dict[str, Any]:
-    _set_no_store_headers(response)
-
-    cache = _results_cache.get(job_id, {})
-    results = cache.get("results")
-    if results and not _is_compact_results_payload(results):
-        _mark_terminal_results_served(job_id)
-        return {"job_id": job_id, "results": results}
-
-    saved_job = None
-    if db and db.is_configured():
-        load_saved_job = getattr(db, "load_saved_job", None)
-        load_job_status = getattr(db, "load_job_status", None)
-        if callable(load_saved_job):
-            saved_job = load_saved_job(job_id)
-        if saved_job:
-            saved_status = _normalize_worker_status(saved_job.get("status"))
-            if not _is_terminal_job_status(saved_status):
-                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
-            if job_id in _jobs:
-                _jobs[job_id].status = saved_status
-                _jobs[job_id].progress = saved_job.get("progress") or _jobs[job_id].progress
-            else:
-                _jobs[job_id] = AnalysisStatus(
-                    job_id=job_id,
-                    status=saved_status,
-                    progress=saved_job.get("progress") or "Analysis complete",
-                    progress_log=[],
-                )
-        else:
-            persisted_status = load_job_status(job_id) if callable(load_job_status) else None
-            if persisted_status and not _is_terminal_job_status(persisted_status.get("status")):
-                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
-            if job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
-                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
-    elif job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
-        raise HTTPException(status_code=409, detail="Analysis is still in progress.")
-
-    loaded = _load_persisted_job_results(job_id, preferred_mode=cache.get("input_mode"))
-    if loaded:
-        results = loaded.get("results")
-        _promote_results_metadata(job_id, results)
-        _mark_terminal_results_served(job_id)
-        return {"job_id": job_id, "results": results}
-
-    raise HTTPException(status_code=404, detail="Analysis not found")
-
-
-def _list_jobs_payload() -> dict[str, Any]:
-    cached = _get_cached_overview_payload(_jobs_overview_cache)
-    if isinstance(cached, dict):
-        return cached
-
-    payload = {"jobs": _list_jobs_for_ui()}
-    return _set_cached_overview_payload(
-        _jobs_overview_cache,
-        payload,
-        JOBS_OVERVIEW_CACHE_SECONDS,
-    )
-
-
-def _list_company_runs_payload() -> dict[str, Any]:
-    cached = _get_cached_overview_payload(_company_runs_cache)
-    if isinstance(cached, dict):
-        return cached
-
-    payload = {"companies": _list_company_runs_for_ui()}
-    return _set_cached_overview_payload(
-        _company_runs_cache,
-        payload,
-        COMPANY_RUNS_CACHE_SECONDS,
-    )
-
-
-def _get_company_analyses_payload(company_name: str) -> dict[str, Any]:
-    if not db or not db.is_configured():
-        raise HTTPException(status_code=501, detail="Supabase not configured")
-
-    analyses = db.load_analyses_by_company(company_name)
-    return {"company_name": company_name, "analyses": analyses}
-
-
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return (STATIC_DIR / "index.html").read_text()
@@ -2116,6 +1926,11 @@ async def login(req: LoginRequest):
     _sessions[raw_id] = time.time() + SESSION_TTL_SECONDS
     _persist_sessions()
     return {"session_id": session_id}
+
+
+@app.get("/api/public-auth-config")
+async def public_auth_config():
+    return {"supabase_auth": _supabase_public_auth_config()}
 
 
 @app.get("/api/check-session")
@@ -2218,7 +2033,55 @@ async def upload_files(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _upload_files_payload(files)
+
+    job_id = str(uuid.uuid4())[:8]
+    upload_dir = Path(tempfile.mkdtemp()) / job_id
+    upload_dir.mkdir(parents=True)
+
+    saved = []
+    for f in files:
+        dest = upload_dir / f.filename
+        with open(dest, "wb") as buf:
+            shutil.copyfileobj(f.file, buf)
+        saved.append(
+            {
+                "name": f.filename,
+                "size": dest.stat().st_size,
+                "mime_type": f.content_type or "",
+                "sha256": _sha256_file(dest),
+                "local_path": str(dest),
+            }
+        )
+
+    specter = _detect_specter_csvs(upload_dir, [f["name"] for f in saved])
+
+    _jobs[job_id] = AnalysisStatus(
+        job_id=job_id, status="pending", progress="Files uploaded"
+    )
+    _results_cache[job_id] = {
+        "upload_dir": str(upload_dir),
+        "files": saved,
+        "specter": specter,
+    }
+    if db and db.is_configured():
+        db.insert_analysis_event(
+            job_id,
+            message="Files uploaded",
+            event_type="upload",
+            payload={"num_files": len(saved)},
+        )
+        db.insert_job_status_history(
+            job_id,
+            status="pending",
+            progress="Files uploaded",
+            source="upload",
+        )
+
+    return {
+        "job_id": job_id,
+        "files": saved,
+        "mode": "specter" if specter else "documents",
+    }
 
 
 @app.post("/api/analyze/{job_id}")
@@ -2226,10 +2089,148 @@ async def start_analysis(
     job_id: str,
     req: AnalyzeRequest = AnalyzeRequest(),
     session_id: str | None = Cookie(default=None),
+    authorization: str | None = Header(default=None),
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _start_analysis_payload(job_id, req)
+
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    _cancel_scheduled_restart()
+    started_by = await _require_supabase_identity(authorization)
+
+    quality_tier = normalize_quality_tier(req.quality_tier)
+    pipeline_policy = None
+    phase_models = normalize_phase_models(req.phase_models) if req.phase_models is not None else None
+    premium_phase_models = normalize_premium_phase_models(req.premium_phase_models)
+    if req.phase_models:
+        try:
+            pipeline_policy = build_phase_model_policy(phase_models)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = dict(pipeline_policy.answering)
+        effective_phase_models = resolve_effective_phase_models(pipeline_policy)
+        llm_display = build_phase_policy_display_label(effective_phase_models)
+        quality_tier = None
+        premium_phase_models = None
+    elif quality_tier:
+        try:
+            pipeline_policy = build_pipeline_policy(
+                quality_tier,
+                premium_phase_models if quality_tier == "premium" else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = dict(pipeline_policy.answering)
+        effective_phase_models = resolve_effective_phase_choices(pipeline_policy)
+        llm_display = build_tier_display_label(
+            quality_tier,
+            effective_phase_models=effective_phase_models,
+        )
+    elif not (req.llm_provider or req.llm_model):
+        try:
+            pipeline_policy = build_default_phase_model_policy()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        phase_models = phase_model_defaults_payload()
+        llm_selection = dict(pipeline_policy.answering)
+        effective_phase_models = resolve_effective_phase_models(pipeline_policy)
+        llm_display = build_phase_policy_display_label(effective_phase_models)
+    else:
+        try:
+            selected_entry = validate_requested_selection(req.llm_provider, req.llm_model)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = serialize_selection(
+            (selected_entry.provider if selected_entry else None),
+            (selected_entry.model if selected_entry else None),
+        )
+        effective_phase_models = None
+        llm_display = llm_selection["label"]
+
+    _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
+    _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
+    cache = _results_cache[job_id]
+    _jobs[job_id].started_by_user_id = started_by.get("started_by_user_id")
+    _jobs[job_id].started_by_email = started_by.get("started_by_email")
+    _jobs[job_id].started_by_display_name = started_by.get("started_by_display_name")
+    _jobs[job_id].started_by_label = started_by.get("started_by_label")
+    cache["started_by_user_id"] = started_by.get("started_by_user_id")
+    cache["started_by_email"] = started_by.get("started_by_email")
+    cache["started_by_display_name"] = started_by.get("started_by_display_name")
+    cache["started_by_label"] = started_by.get("started_by_label")
+    cache["input_mode"] = req.input_mode
+    cache["run_name"] = req.run_name
+    cache["vc_investment_strategy"] = req.vc_investment_strategy
+    cache["use_web_search"] = req.use_web_search
+    cache["instructions"] = req.instructions
+    cache["llm_selection"] = llm_selection
+    cache["phase_models"] = phase_models if (req.phase_models or pipeline_policy is not None and quality_tier is None) else None
+    cache["quality_tier"] = quality_tier
+    cache["premium_phase_models"] = (
+        premium_phase_models if quality_tier == "premium" else None
+    )
+    cache["effective_phase_models"] = effective_phase_models
+    cache["run_config"] = {
+        "input_mode": req.input_mode,
+        "run_name": req.run_name,
+        "vc_investment_strategy": req.vc_investment_strategy,
+        "instructions": req.instructions,
+        "use_web_search": req.use_web_search,
+        "phase_models": phase_models if (req.phase_models or pipeline_policy is not None and quality_tier is None) else None,
+        "quality_tier": quality_tier,
+        "premium_phase_models": premium_phase_models if quality_tier == "premium" else None,
+        "effective_phase_models": effective_phase_models,
+        "llm_provider": llm_selection["provider"],
+        "llm_model": llm_selection["model"],
+        "llm": llm_display,
+        **started_by,
+    }
+    cache["model_executions"] = []
+    cache["run_costs_aggregate"] = _empty_run_costs_summary()
+    cache["versions"] = _runtime_versions()
+
+    if db and db.is_configured():
+        run_config = dict(cache["run_config"])
+        db.upsert_job(job_id, run_config=run_config, versions=_runtime_versions())
+        db.upsert_job_control(
+            job_id,
+            pause_requested=False,
+            stop_requested=False,
+            last_action="start",
+        )
+
+    vc_str = _ensure_str(req.vc_investment_strategy).strip() or None
+    inst = _ensure_str(req.instructions).strip() or None
+    if req.input_mode == "specter" and ENABLE_SPECTER_WORKER_SERVICE:
+        queued, worker_message = _queue_worker_backed_specter_job(job_id)
+        if queued:
+            _set_job_status(job_id, "running", worker_message or "Queued for worker...", source="start_analysis")
+            _append_progress_and_log(job_id, worker_message or "Queued for worker...")
+            return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
+        queue_error = worker_message or "Unknown worker queue error."
+        _set_job_status(job_id, "error", f"Worker queue failed. {queue_error}", source="start_analysis")
+        _append_progress_and_log(job_id, f"Worker queue failed — {queue_error}")
+        raise HTTPException(status_code=503, detail=f"Specter worker queue failed: {queue_error}")
+
+    # Run the analysis loop in a dedicated thread/event-loop to keep
+    # the main FastAPI loop responsive for pause/resume/stop controls.
+    threading.Thread(
+        target=lambda: asyncio.run(
+            _run_analysis(
+                job_id,
+                use_web_search=req.use_web_search,
+                instructions=inst,
+                input_mode=req.input_mode,
+                vc_investment_strategy=vc_str,
+                llm_selection=llm_selection,
+                pipeline_policy=pipeline_policy,
+            )
+        ),
+        daemon=True,
+    ).start()
+    return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
 
 
 @app.post("/api/jobs/{job_id}/control")
@@ -2240,7 +2241,41 @@ async def control_analysis_job(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _control_analysis_job_payload(job_id, req)
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = _jobs[job_id]
+    if job.status in {"done", "error", "stopped"}:
+        return {"job_id": job_id, "status": job.status, "progress": job.progress}
+
+    control = _ensure_job_control(job_id)
+    action = req.action
+
+    if action == "pause":
+        control["pause_requested"] = True
+        if job.status in {"running", "pending"}:
+            _set_job_status(job_id, "paused", source="control")
+            _append_progress(job_id, "Paused by user.")
+    elif action == "resume":
+        control["pause_requested"] = False
+        if job.status in {"paused", "pending"}:
+            _set_job_status(job_id, "running", source="control")
+            _append_progress(job_id, "Resumed by user.")
+    else:  # stop
+        control["pause_requested"] = False
+        control["stop_requested"] = True
+        _append_progress(job_id, "Stopped by user.", allow_stopped=True)
+        _set_job_status(job_id, "stopped", "Stopped by user.", source="control")
+
+    if db and db.is_configured():
+        db.upsert_job_control(
+            job_id,
+            pause_requested=bool(control.get("pause_requested")),
+            stop_requested=bool(control.get("stop_requested")),
+            last_action=action,
+        )
+
+    return {"job_id": job_id, "status": job.status, "progress": job.progress}
 
 
 def _build_results_payload(
@@ -2359,6 +2394,18 @@ def _compose_results_payload(
         ranking = final_state.get("ranking_result")
         ranking_result = None
         if ranking:
+            dimension_scores_payload = []
+            for d in ranking.dimension_scores:
+                display_score = d.raw_score if d.dimension == "upside" else d.adjusted_score
+                dimension_scores_payload.append(
+                    {
+                        "dimension": d.dimension,
+                        "adjusted_score": display_score,
+                        "confidence": d.confidence,
+                        "evidence_snippets": d.evidence_snippets,
+                        "critical_gaps": d.critical_gaps,
+                    }
+                )
             ranking_result = {
                 "rank": ranking.rank,
                 "percentile": ranking.percentile,
@@ -2372,16 +2419,7 @@ def _compose_results_payload(
                 "potential_summary": getattr(ranking, "potential_summary", "") or "",
                 "key_points": getattr(ranking, "key_points", []) or [],
                 "red_flags": getattr(ranking, "red_flags", []) or [],
-                "dimension_scores": [
-                    {
-                        "dimension": d.dimension,
-                        "adjusted_score": d.adjusted_score,
-                        "confidence": d.confidence,
-                        "evidence_snippets": d.evidence_snippets,
-                        "critical_gaps": d.critical_gaps,
-                    }
-                    for d in ranking.dimension_scores
-                ],
+                "dimension_scores": dimension_scores_payload,
             }
 
         payload = {
@@ -2445,6 +2483,7 @@ def _compose_results_payload(
     payload["llm"] = llm_selection["label"]
     payload["llm_selection"] = llm_selection
     payload["run_costs"] = _run_costs_from_cache(job_id)
+    payload.update(_started_by_from_payload(_run_config_from_cache(job_id)))
     chunking = _results_cache.get(job_id, {}).get("batch_chunking")
     if isinstance(chunking, dict):
         payload["batch_chunking"] = chunking
@@ -2459,6 +2498,9 @@ def _run_config_from_cache(job_id: str) -> dict[str, Any]:
     cache = _results_cache.get(job_id, {})
     run_config = dict(cache.get("run_config") or {})
     if run_config:
+        for key in ("started_by_user_id", "started_by_email", "started_by_display_name", "started_by_label"):
+            if cache.get(key) and not run_config.get(key):
+                run_config[key] = cache.get(key)
         return run_config
 
     llm_selection = _resolve_job_llm_selection(job_id, results=cache.get("results"))
@@ -2475,6 +2517,10 @@ def _run_config_from_cache(job_id: str) -> dict[str, Any]:
         "llm_provider": llm_selection["provider"],
         "llm_model": llm_selection["model"],
         "llm": _resolve_job_llm_label(job_id, results=cache.get("results")),
+        "started_by_user_id": cache.get("started_by_user_id"),
+        "started_by_email": cache.get("started_by_email"),
+        "started_by_display_name": cache.get("started_by_display_name"),
+        "started_by_label": cache.get("started_by_label"),
     }
 
 
@@ -3018,7 +3064,7 @@ async def _run_analysis(
     instructions: str | None = None,
     input_mode: str = "pitchdeck",
     vc_investment_strategy: str | None = None,
-    llm_selection: dict[str, str] | None = None,
+    llm_selection: dict[str, Any] | None = None,
     pipeline_policy: Any = None,
 ):
     try:
@@ -3744,7 +3790,18 @@ async def create_person_profile_job(
     """Create one person intelligence job."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _create_person_profile_job_payload(req)
+
+    _cancel_scheduled_restart()
+
+    job_id = str(uuid.uuid4())[:8]
+    _person_jobs[job_id] = PersonProfileJobStatus(
+        job_id=job_id,
+        status="pending",
+        progress="Queued",
+    )
+    _persist_person_job(job_id, req.model_dump())
+    _schedule_person_profile_job(job_id, req)
+    return {"job_id": job_id, "status": "running"}
 
 
 @app.get("/api/person-profile/status/{job_id}")
@@ -3755,7 +3812,64 @@ async def get_person_profile_status(
     """Fetch person intelligence job state/result."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _get_person_profile_status_payload(job_id)
+    if job_id not in _person_jobs:
+        if db and db.is_configured():
+            loaded = db.load_person_profile_job(job_id)
+            if loaded:
+                _person_jobs[job_id] = PersonProfileJobStatus(
+                    job_id=job_id,
+                    status=loaded.get("status", "pending"),
+                    progress=loaded.get("progress") or "",
+                    result=loaded.get("result_payload"),
+                    error=loaded.get("error"),
+                )
+                _resume_person_profile_job_if_needed(job_id, loaded)
+            else:
+                raise HTTPException(status_code=404, detail="Job not found")
+        else:
+            raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        _resume_person_profile_job_if_needed(job_id)
+
+    job = _person_jobs[job_id]
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "progress": job.progress,
+        "result": job.result,
+        "error": job.error,
+    }
+
+
+@app.get("/api/person-profile/latest")
+async def get_latest_person_profile(
+    company_slug: str,
+    person_key: str,
+    session_id: str | None = Cookie(default=None),
+):
+    """Fetch the latest shared person intelligence result for a team member."""
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not (db and db.is_configured()):
+        raise HTTPException(status_code=503, detail="Database not configured")
+
+    loaded = db.load_latest_person_profile_job(company_slug, person_key)
+    if not loaded:
+        raise HTTPException(status_code=404, detail="Person profile not found")
+
+    job_id = loaded.get("person_job_id") or ""
+    return {
+        "job_id": job_id,
+        "company_slug": loaded.get("company_slug") or company_slug,
+        "person_key": loaded.get("person_key") or person_key,
+        "status": loaded.get("status") or "pending",
+        "progress": loaded.get("progress") or "",
+        "result": loaded.get("result_payload"),
+        "error": loaded.get("error"),
+        "request_payload": loaded.get("request_payload") or {},
+        "created_at": loaded.get("created_at"),
+        "updated_at": loaded.get("updated_at"),
+    }
 
 
 @app.post("/api/person-profile/jobs/bulk-founders")
@@ -3766,7 +3880,59 @@ async def create_bulk_founder_jobs(
     """Create one enrichment job per founder candidate."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _create_bulk_founder_jobs_payload(req)
+
+    _cancel_scheduled_restart()
+
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for idx, founder in enumerate(req.founders):
+        person_key = founder.person_key or f"{req.company_slug}:founder:{idx + 1}"
+        if not founder.primary_profile_url:
+            skipped.append(
+                {
+                    "person_key": person_key,
+                    "full_name": founder.full_name or f"Founder {idx + 1}",
+                    "status": "needs_input",
+                    "reason": "missing_primary_profile_url",
+                }
+            )
+            continue
+
+        profile_req = PersonProfileJobRequest(
+            primary_profile_url=founder.primary_profile_url,
+            full_name=founder.full_name,
+            location=founder.location,
+            current_company=founder.current_company,
+            role=founder.role,
+            known_aliases=founder.known_aliases,
+            user_uploaded_text=req.user_uploaded_text,
+            user_uploaded_images=req.user_uploaded_images,
+            company_slug=req.company_slug,
+            person_key=person_key,
+        )
+        job_id = str(uuid.uuid4())[:8]
+        _person_jobs[job_id] = PersonProfileJobStatus(
+            job_id=job_id,
+            status="pending",
+            progress="Queued",
+        )
+        _persist_person_job(job_id, profile_req.model_dump())
+        _schedule_person_profile_job(job_id, profile_req)
+        created.append(
+            {
+                "person_key": person_key,
+                "full_name": founder.full_name or "",
+                "job_id": job_id,
+                "status": "running",
+            }
+        )
+
+    return {
+        "company_slug": req.company_slug,
+        "jobs": created,
+        "skipped": skipped,
+    }
 
 
 @app.get("/api/config")
@@ -3774,7 +3940,45 @@ async def get_config(session_id: str | None = Cookie(default=None)):
     """Return current app config (e.g. LLM) for backfilling past runs."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return _get_config_payload()
+    default_llm = current_default_selection()
+    shared_vc_strategy = ""
+    vc_strategy_source = "local"
+    if db and db.is_configured():
+        vc_strategy_source = "supabase"
+        loaded_strategy = await _load_shared_vc_strategy()
+        if isinstance(loaded_strategy, str):
+            shared_vc_strategy = loaded_strategy
+    return {
+        "llm": default_llm["label"],
+        "default_llm": default_llm,
+        "available_models": available_models_payload(),
+        "pricing_catalog": pricing_catalog_payload(),
+        "phase_model_defaults": phase_model_defaults_payload(),
+        "quality_tiers": quality_tiers_payload(),
+        "premium_phase_options": premium_phase_options_payload(),
+        "vc_investment_strategy": shared_vc_strategy,
+        "vc_strategy_source": vc_strategy_source,
+        "supabase_auth": _supabase_public_auth_config(),
+    }
+
+
+@app.post("/api/settings/vc-strategy")
+async def save_vc_strategy(
+    req: VcStrategyRequest,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=503, detail="Shared settings storage is not configured.")
+    strategy = (req.vc_investment_strategy or "").strip()
+    ok = await _save_shared_vc_strategy(strategy)
+    if not ok:
+        raise HTTPException(status_code=503, detail="Could not save VC investment strategy.")
+    return {
+        "vc_investment_strategy": strategy,
+        "vc_strategy_source": "supabase",
+    }
 
 
 @app.get("/api/status/{job_id}")
@@ -3785,7 +3989,136 @@ async def get_status(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _get_status_payload(job_id, response)
+    _set_no_store_headers(response)
+
+    if job_id in _jobs:
+        job = _jobs[job_id]
+        cache = _results_cache.get(job_id, {})
+        if _is_worker_backed_job(job_id) and db and db.is_configured():
+            persisted_status = db.load_job_status(job_id)
+            if persisted_status:
+                job.status = _normalize_worker_status(persisted_status.get("status"))
+                job.progress = persisted_status.get("progress") or job.progress
+                job.progress_log = _load_worker_progress_log(job_id)
+        results = cache.get("results")
+        if _is_compact_results_payload(results) and job.status in {"done", "error", "stopped"}:
+            results = None
+        if results is None and job.status in {"pending", "running", "paused"}:
+            results = _maybe_promote_terminal_persisted_results(job_id, cache=cache)
+            job = _jobs[job_id]
+        if results is None and job.status in {"done", "error", "stopped"}:
+            loaded = _load_persisted_job_results(
+                job_id,
+                preferred_mode=cache.get("input_mode"),
+            )
+            if loaded:
+                results = loaded.get("results")
+                _promote_results_metadata(job_id, results)
+        if results is not None and not _is_terminal_job_status(job.status):
+            results = None
+        if results is not None and not _is_compact_results_payload(results):
+            _mark_terminal_results_served(job_id)
+        return {
+            "job_id": job.job_id,
+            "status": job.status,
+            "progress": job.progress,
+            "progress_log": getattr(job, "progress_log", []) or [],
+            "results": results,
+            "llm": _resolve_job_llm_label(job_id, results=results),
+        }
+
+    if db and db.is_configured():
+        persisted_status = db.load_job_status(job_id)
+        if persisted_status:
+            loaded_status = _normalize_worker_status(persisted_status.get("status"))
+            loaded_progress = persisted_status.get("progress") or "Analysis in progress"
+            progress_log = _load_worker_progress_log(job_id)
+            worker_active = bool(persisted_status.get("worker_active"))
+            if loaded_status in {"pending", "running", "paused"} and worker_active:
+                return {
+                    "job_id": job_id,
+                    "status": loaded_status,
+                    "progress": loaded_progress,
+                    "progress_log": progress_log,
+                    "results": None,
+                    "llm": _resolve_job_llm_label(job_id, results=None),
+                }
+            if loaded_status in {"pending", "running", "paused"}:
+                return {
+                    "job_id": job_id,
+                    "status": "stopped",
+                    "progress": "Run interrupted before completion.",
+                    "progress_log": [],
+                    "results": None,
+                    "llm": _resolve_job_llm_label(job_id, results=None),
+                }
+            loaded = _load_persisted_job_results(job_id)
+            if loaded and _is_terminal_job_status(loaded_status):
+                results = loaded.get("results")
+                _jobs[job_id] = AnalysisStatus(
+                    job_id=job_id,
+                    status=loaded_status,
+                    progress=loaded_progress,
+                    progress_log=[],
+                    results=None,
+                    persistence_complete=True,
+                )
+                _results_cache[job_id] = {}
+                _promote_results_metadata(job_id, results)
+                _mark_terminal_results_served(job_id)
+                return {
+                    "job_id": job_id,
+                    "status": loaded_status,
+                    "progress": loaded_progress,
+                    "progress_log": [],
+                    "results": results,
+                    "llm": _resolve_job_llm_label(job_id, results=results),
+                }
+            return {
+                "job_id": job_id,
+                "status": loaded_status,
+                "progress": loaded_progress,
+                "progress_log": [],
+                "results": None,
+                "llm": _resolve_job_llm_label(job_id, results=None),
+            }
+        saved_job = db.load_saved_job(job_id)
+        if saved_job:
+            return {
+                "job_id": job_id,
+                "status": "stopped",
+                "progress": "Run interrupted before completion.",
+                "progress_log": [],
+                "results": None,
+                "llm": saved_job.get("llm") or _resolve_job_llm_label(job_id, results=None),
+            }
+
+    loaded = _load_persisted_job_results(job_id)
+    if loaded:
+        results = loaded.get("results")
+        loaded_status = (results or {}).get("job_status") or "done"
+        loaded_progress = (results or {}).get("job_message") or "Analysis complete"
+        _jobs[job_id] = AnalysisStatus(
+            job_id=job_id,
+            status=loaded_status,
+            progress=loaded_progress,
+            progress_log=[],
+            results=None,
+            persistence_complete=True,
+        )
+        _results_cache[job_id] = {}
+        _promote_results_metadata(job_id, results)
+        _mark_terminal_results_served(job_id)
+        return {
+            "job_id": job_id,
+            "status": loaded_status,
+            "progress": loaded_progress,
+            "progress_log": [],
+            "results": results,
+            "llm": _resolve_job_llm_label(job_id, results=results),
+        }
+
+    raise HTTPException(status_code=404, detail="Job not found")
 
 
 @app.get("/api/jobs/{job_id}/log")
@@ -3796,7 +4129,39 @@ async def get_job_log(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _get_job_log_payload(job_id, response)
+    _set_no_store_headers(response)
+
+    job = _jobs.get(job_id)
+    if job and job.status in {"pending", "running", "paused"}:
+        if _is_worker_backed_job(job_id) and db and db.is_configured():
+            persisted_status = db.load_job_status(job_id)
+            if persisted_status:
+                job.status = _normalize_worker_status(persisted_status.get("status"))
+                job.progress = persisted_status.get("progress") or job.progress
+                job.progress_log = _load_worker_progress_log(job_id)
+        return {
+            "job_id": job_id,
+            "status": job.status,
+            "progress": job.progress,
+            "progress_log": getattr(job, "progress_log", []) or [],
+        }
+
+    if db and db.is_configured():
+        persisted_status = db.load_job_status(job_id)
+        progress_log = _load_worker_progress_log(job_id) if persisted_status else []
+        if (
+            persisted_status
+            and persisted_status.get("status") in {"pending", "running", "paused"}
+            and progress_log
+        ):
+            return {
+                "job_id": job_id,
+                "status": _normalize_worker_status(persisted_status.get("status")),
+                "progress": persisted_status.get("progress") or "Analysis in progress",
+                "progress_log": progress_log,
+            }
+
+    raise HTTPException(status_code=409, detail="Run is no longer active.")
 
 
 @app.get("/api/download/{job_id}")
@@ -3815,21 +4180,214 @@ async def get_analysis(
     """Return analysis results for a completed job. Uses in-memory cache or Supabase."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return await _get_analysis_payload(job_id, response)
+    _set_no_store_headers(response)
+
+    cache = _results_cache.get(job_id, {})
+    results = cache.get("results")
+    if results and not _is_compact_results_payload(results):
+        _mark_terminal_results_served(job_id)
+        return {"job_id": job_id, "results": results}
+
+    saved_job = None
+    if db and db.is_configured():
+        load_saved_job = getattr(db, "load_saved_job", None)
+        load_job_status = getattr(db, "load_job_status", None)
+        if callable(load_saved_job):
+            saved_job = load_saved_job(job_id)
+        if saved_job:
+            saved_status = _normalize_worker_status(saved_job.get("status"))
+            if not _is_terminal_job_status(saved_status):
+                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+            if job_id in _jobs:
+                _jobs[job_id].status = saved_status
+                _jobs[job_id].progress = saved_job.get("progress") or _jobs[job_id].progress
+            else:
+                _jobs[job_id] = AnalysisStatus(
+                    job_id=job_id,
+                    status=saved_status,
+                    progress=saved_job.get("progress") or "Analysis complete",
+                    progress_log=[],
+                )
+        else:
+            persisted_status = load_job_status(job_id) if callable(load_job_status) else None
+            if persisted_status and not _is_terminal_job_status(persisted_status.get("status")):
+                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+            if job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
+                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+    elif job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
+        raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+
+    loaded = _load_persisted_job_results(job_id, preferred_mode=cache.get("input_mode"))
+    if loaded:
+        results = loaded.get("results")
+        _promote_results_metadata(job_id, results)
+        _mark_terminal_results_served(job_id)
+        return {"job_id": job_id, "results": results}
+
+    raise HTTPException(status_code=404, detail="Analysis not found")
 
 
 @app.get("/api/jobs")
 async def list_jobs(session_id: str | None = Cookie(default=None)):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return _list_jobs_payload()
+
+    cached = _get_cached_overview_payload(_jobs_overview_cache)
+    if isinstance(cached, dict):
+        return cached
+
+    payload = {"jobs": _list_jobs_for_ui()}
+    return _set_cached_overview_payload(
+        _jobs_overview_cache,
+        payload,
+        JOBS_OVERVIEW_CACHE_SECONDS,
+    )
 
 
 @app.get("/api/company-runs")
 async def list_company_runs(session_id: str | None = Cookie(default=None)):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return _list_company_runs_payload()
+
+    cached = _get_cached_overview_payload(_company_runs_cache)
+    if isinstance(cached, dict):
+        return cached
+
+    payload = {"companies": _list_company_runs_for_ui()}
+    return _set_cached_overview_payload(
+        _company_runs_cache,
+        payload,
+        COMPANY_RUNS_CACHE_SECONDS,
+    )
+
+
+@app.get("/api/companies/{company_lookup_key}/chat")
+async def get_company_chat(
+    company_lookup_key: str,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=501, detail="Supabase not configured")
+
+    context = db.load_company_chat_context(company_lookup_key)
+    if not context:
+        raise HTTPException(status_code=404, detail="Company chat context not found")
+
+    chat_session = await _load_company_chat_session(session_id, company_lookup_key)
+    _company, _store, _citation_map, meta = build_company_chat_store(context)
+    selection = _company_chat_selection(chat_session)
+    return CompanyChatResponse(
+        company_lookup_key=company_lookup_key,
+        transcript=[CompanyChatMessage(**item) for item in chat_session.get("transcript") or []],
+        run_count=meta["run_count"],
+        source_counts=meta["source_counts"],
+        web_search_enabled=True,
+        model_label=_company_chat_model_label(chat_session),
+        llm_provider=selection["provider"],
+        llm_model=selection["model"],
+        session_run_costs=_company_chat_session_costs(chat_session),
+        available_models=available_chat_models_payload(),
+    )
+
+
+@app.post("/api/companies/{company_lookup_key}/chat")
+async def post_company_chat(
+    company_lookup_key: str,
+    req: CompanyChatRequest,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=501, detail="Supabase not configured")
+
+    context = db.load_company_chat_context(company_lookup_key)
+    if not context:
+        raise HTTPException(status_code=404, detail="Company chat context not found")
+
+    chat_session = await _load_company_chat_session(session_id, company_lookup_key)
+    if req.llm_provider or req.llm_model:
+        selection = _resolve_requested_company_chat_selection(req.llm_provider, req.llm_model)
+        chat_session["selection"] = selection
+    else:
+        selection = _company_chat_selection(chat_session)
+        chat_session["selection"] = selection
+
+    transcript = list(chat_session.get("transcript") or [])
+    transcript.append(
+        CompanyChatMessage(
+            role="user",
+            content=req.message,
+            citations=[],
+            created_at=_now_iso(),
+        ).model_dump()
+    )
+    transient_session = {"transcript": transcript, "summary": chat_session.get("summary") or ""}
+    _compress_company_chat_session(transient_session)
+
+    result = await answer_company_question(
+        context=context,
+        transcript=transient_session["transcript"],
+        conversation_summary=transient_session["summary"],
+        question=req.message,
+        use_web_search=True,
+        active_job_id=req.active_job_id,
+        llm_selection=selection,
+    )
+
+    chat_session["summary"] = transient_session["summary"]
+    session_model_executions = chat_session.setdefault("model_executions", [])
+    session_model_executions.extend(result.get("model_executions") or [])
+    chat_session["transcript"] = transcript + [
+        CompanyChatMessage(
+            role="assistant",
+            content=result["answer"],
+            citations=result["citations"],
+            created_at=_now_iso(),
+            llm_label=result.get("model_label"),
+            run_costs=result.get("run_costs"),
+        ).model_dump()
+    ]
+    _compress_company_chat_session(chat_session)
+    await _persist_company_chat_session(
+        session_id,
+        company_lookup_key,
+        context.get("company_name") or "Unknown company",
+        chat_session,
+    )
+    session_run_costs = _company_chat_session_costs(chat_session)
+
+    return {
+        "company_lookup_key": company_lookup_key,
+        "answer": result["answer"],
+        "citations": result["citations"],
+        "transcript": chat_session["transcript"],
+        "run_count": result["run_count"],
+        "source_counts": result["source_counts"],
+        "web_search_enabled": True,
+        "model_label": result["model_label"],
+        "llm_provider": selection["provider"],
+        "llm_model": selection["model"],
+        "run_costs": result.get("run_costs"),
+        "session_run_costs": session_run_costs,
+        "available_models": available_chat_models_payload(),
+        "used_run_ids": result["used_run_ids"],
+        "used_web_search": result["used_web_search"],
+        "web_search_query": result["web_search_query"],
+    }
+
+
+@app.delete("/api/companies/{company_lookup_key}/chat")
+async def delete_company_chat(
+    company_lookup_key: str,
+    session_id: str | None = Cookie(default=None),
+):
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    await _clear_company_chat_session(session_id, company_lookup_key)
+    return {"company_lookup_key": company_lookup_key, "cleared": True}
 
 
 @app.get("/api/companies/{company_name}/analyses")
@@ -3840,27 +4398,12 @@ async def get_company_analyses(
     """Return analyses for a company by name. Requires Supabase."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return _get_company_analyses_payload(company_name)
 
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=501, detail="Supabase not configured")
 
-app.include_router(
-    create_agent_router(
-        app=app,
-        upload_files_handler=_upload_files_payload,
-        start_analysis_handler=_start_analysis_payload,
-        get_status_handler=_get_status_payload,
-        get_job_log_handler=_get_job_log_payload,
-        get_analysis_handler=_get_analysis_payload,
-        control_analysis_handler=_control_analysis_job_payload,
-        get_config_handler=_get_config_payload,
-        list_jobs_handler=_list_jobs_payload,
-        list_company_runs_handler=_list_company_runs_payload,
-        get_company_analyses_handler=_get_company_analyses_payload,
-        create_person_profile_handler=_create_person_profile_job_payload,
-        get_person_profile_status_handler=_get_person_profile_status_payload,
-        create_bulk_founder_jobs_handler=_create_bulk_founder_jobs_payload,
-    )
-)
+    analyses = db.load_analyses_by_company(company_name)
+    return {"company_name": company_name, "analyses": analyses}
 
 
 if __name__ == "__main__":

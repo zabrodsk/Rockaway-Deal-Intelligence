@@ -23,7 +23,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 import tiktoken
 
-from agent.llm_catalog import normalize_provider
+from agent.llm_catalog import normalize_creativity, normalize_provider, supports_selection_creativity_control
 from agent.llm_policy import (
     resolve_openai_phase_sampling,
     resolve_openai_reasoning_fallback_temperature,
@@ -31,9 +31,9 @@ from agent.llm_policy import (
 from agent.rate_limit import wrap_llm
 from agent.run_context import (
     get_current_collector,
-    get_current_stage_name,
     get_current_llm_request_settings,
     get_current_llm_selection,
+    get_current_stage_name,
     set_current_llm_request_settings,
 )
 
@@ -43,8 +43,11 @@ _DEFAULT_PROVIDER = "gemini"
 _DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
 _DEFAULT_TIMEOUT_SECONDS = 90.0
 _DEFAULT_MAX_RETRIES = 2
+_CHAT_PROVIDER = "gemini"
+_CHAT_MODEL = "gemini-3.1-flash-lite-preview"
 _FALLBACK_ENCODING_NAME = "o200k_base"
 _DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+_OPENROUTER_DEFAULT_APP_NAME = "Rockaway Deal Intelligence"
 _GPT5_TEMPERATURE_MODE_ENV = "OPENAI_GPT5_TEMPERATURE_MODE"
 _DEFAULT_GPT5_TEMPERATURE_MODE = "respect_requested"
 
@@ -176,9 +179,10 @@ def _estimate_text_tokens(
 def _encoding_for_selection(provider: str | None, model: str | None):
     provider_norm = normalize_provider(provider or _DEFAULT_PROVIDER)
     model_norm = (model or _DEFAULT_MODEL).strip()
-    if provider_norm == "openai":
+    if provider_norm in {"openai", "openrouter"}:
+        lookup_model = model_norm.rsplit("/", 1)[-1]
         try:
-            return tiktoken.encoding_for_model(model_norm)
+            return tiktoken.encoding_for_model(lookup_model)
         except KeyError:
             return tiktoken.get_encoding(_FALLBACK_ENCODING_NAME)
     return tiktoken.get_encoding(_FALLBACK_ENCODING_NAME)
@@ -360,15 +364,14 @@ def _resolve_openai_request_settings(
     requested_temperature: float | None,
     requested_reasoning_effort: str | None,
 ) -> dict[str, Any]:
-    resolved_temperature = requested_temperature
-    resolved_reasoning_effort = requested_reasoning_effort
-
     if _is_reasoning_effort_model(model):
         resolved = resolve_openai_phase_sampling(
             model,
             get_current_stage_name(),
             requested_temperature,
         )
+        resolved_temperature = requested_temperature
+        resolved_reasoning_effort = requested_reasoning_effort
         if resolved:
             resolved_temperature = resolved.get("temperature")
             resolved_reasoning_effort = resolved.get("reasoning_effort")
@@ -424,29 +427,34 @@ def create_llm(
     selection = get_current_llm_selection() or {}
     provider = normalize_provider(selection.get("provider") or os.getenv("LLM_PROVIDER", _DEFAULT_PROVIDER))
     model = selection.get("model") or os.getenv("MODEL_NAME", _DEFAULT_MODEL)
+    selection_creativity = None
+    if supports_selection_creativity_control(provider, model):
+        selection_creativity = normalize_creativity(selection.get("creativity"))
+    requested_temperature = selection_creativity if selection_creativity is not None else temperature
     runtime = get_llm_runtime_settings()
     timeout_s = runtime["request_timeout_seconds"]
     max_retries = runtime["max_retries"]
 
     request_settings = {
-        "requested_temperature": temperature,
-        "effective_temperature": temperature,
-        "sampling_mode": "requested",
+        "requested_temperature": requested_temperature,
+        "effective_temperature": requested_temperature,
+        "sampling_mode": "selection_creativity" if selection_creativity is not None else "requested",
         "requested_reasoning_effort": reasoning_effort,
         "effective_reasoning_effort": reasoning_effort,
         "reasoning_fallback_applied": False,
         "provider": provider,
         "model": model,
+        "selection_creativity": selection_creativity,
     }
     if provider == "openai":
         request_settings.update(
-            _resolve_openai_request_settings(model, temperature, reasoning_effort)
+            _resolve_openai_request_settings(model, requested_temperature, reasoning_effort)
         )
     set_current_llm_request_settings(request_settings)
     effective_temperature = request_settings["effective_temperature"]
 
     if provider == "gemini":
-        return wrap_llm(_create_gemini(model, temperature, timeout_s, max_retries))
+        return wrap_llm(_create_gemini(model, requested_temperature, timeout_s, max_retries))
     elif provider == "openai":
         fallback_builder = _build_openai_reasoning_fallback_builder(
             model,
@@ -464,14 +472,30 @@ def create_llm(
             fallback_builder=fallback_builder,
         )
     elif provider == "openrouter":
-        return wrap_llm(_create_openrouter(model, temperature, timeout_s, max_retries))
+        return wrap_llm(_create_openrouter(model, requested_temperature, timeout_s, max_retries))
     elif provider == "anthropic":
-        return wrap_llm(_create_anthropic(model, temperature, timeout_s, max_retries))
+        return wrap_llm(_create_anthropic(model, requested_temperature, timeout_s, max_retries))
     else:
         raise ValueError(
             f"Unknown LLM_PROVIDER '{provider}'. "
             "Supported: gemini, openai, anthropic, openrouter"
         )
+
+
+def chat_llm_selection() -> dict[str, str]:
+    """Return the fixed model selection for company chat."""
+    return {
+        "provider": normalize_provider(_CHAT_PROVIDER),
+        "model": _CHAT_MODEL,
+    }
+
+
+def create_chat_llm(temperature: float = 0.2) -> BaseChatModel:
+    """Create the fixed Gemini model used by company chat."""
+    runtime = get_llm_runtime_settings()
+    timeout_s = runtime["request_timeout_seconds"]
+    max_retries = runtime["max_retries"]
+    return wrap_llm(_create_gemini(_CHAT_MODEL, temperature, timeout_s, max_retries))
 
 
 def get_llm_runtime_settings() -> dict[str, float | int]:
@@ -535,9 +559,7 @@ def _create_openai(
     if reasoning_effort is not None:
         kwargs["model_kwargs"] = {"reasoning": {"effort": reasoning_effort}}
 
-    return ChatOpenAI(
-        **kwargs,
-    )
+    return ChatOpenAI(**kwargs)
 
 
 def _build_openai_reasoning_fallback_builder(
@@ -597,14 +619,23 @@ def _create_openrouter(
         raise ValueError(
             "OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter"
         )
+    referer = os.getenv("OPENROUTER_SITE_URL") or os.getenv("APP_BASE_URL")
+    app_name = os.getenv("OPENROUTER_APP_NAME") or _OPENROUTER_DEFAULT_APP_NAME
+    default_headers = {"X-Title": app_name}
+    if referer:
+        default_headers["HTTP-Referer"] = referer
+
+    if model.startswith("openai/gpt-5") or model.startswith("gpt-5"):
+        temperature = 1
 
     return ChatOpenAI(
         model=model,
         api_key=api_key,
-        temperature=temperature,
         base_url=base_url,
+        temperature=temperature,
         request_timeout=timeout_s,
         max_retries=max_retries,
+        default_headers=default_headers,
         callbacks=[_TELEMETRY_CALLBACK],
     )
 

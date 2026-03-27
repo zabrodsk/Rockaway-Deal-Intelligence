@@ -422,6 +422,35 @@
       line-height: 1.6;
       color: var(--text-dim);
     }
+    .password-form-stage {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .password-form-stage[hidden] {
+      display: none !important;
+    }
+    .password-secondary-action {
+      margin-top: 0;
+    }
+    .login-status {
+      min-height: 20px;
+      font-size: 13px;
+      margin-top: 12px;
+      color: var(--text-dim);
+    }
+    .login-status.is-error {
+      color: var(--red);
+    }
+    .login-status.is-success {
+      color: var(--green);
+    }
+    .login-stage-note {
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.5;
+      margin-top: 10px;
+    }
 
     /* ── Upload Screen ── */
     .main-content {
@@ -444,7 +473,8 @@
     }
 
     .upload-zone {
-      width: 640px;
+      width: 100%;
+      max-width: 640px;
       padding: 48px;
       border: 1px dashed var(--text-dark);
       border-radius: var(--radius-lg);
@@ -471,7 +501,8 @@
     .upload-hint { color: var(--text-dim); font-size: 13px; margin-top: 8px; }
 
     .input-mode-section {
-      width: 640px;
+      width: 100%;
+      max-width: 640px;
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -568,7 +599,8 @@
     .instructions-input:focus { border-color: var(--green); }
     .instructions-input::placeholder { color: var(--text-dim); font-size: 13px; }
     .llm-model-section {
-      width: 640px;
+      width: 100%;
+      max-width: 640px;
       margin-top: 16px;
     }
     .visually-hidden {
@@ -792,6 +824,10 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
+      padding: 14px;
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.02);
     }
     .premium-phase-label {
       font-size: 12px;
@@ -811,6 +847,64 @@
       font: 14px var(--font-body);
       outline: none;
       min-height: 44px;
+    }
+    .phase-creativity-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .phase-creativity-header,
+    .phase-creativity-control {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .phase-creativity-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-mid);
+    }
+    .phase-creativity-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 10px;
+      border-radius: var(--radius-full);
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      color: var(--text-light);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .phase-creativity-badge.is-auto {
+      color: var(--green);
+      border-color: var(--green-border-strong);
+      background: var(--green-surface-subtle);
+    }
+    .phase-creativity-slider {
+      flex: 1 1 auto;
+      accent-color: var(--green);
+      cursor: pointer;
+    }
+    .phase-creativity-value {
+      min-width: 74px;
+      text-align: right;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-light);
+    }
+    .phase-creativity-note {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-gray);
+    }
+    .phase-creativity-note.is-unsupported {
+      color: var(--text-mid);
     }
     .advanced-llm-section {
       margin-top: 16px;
@@ -834,7 +928,7 @@
       padding: 0 16px 16px;
     }
 
-    .files-section { width: 640px; }
+    .files-section { width: 100%; max-width: 640px; }
     .files-header {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 16px;
@@ -1010,7 +1104,11 @@
       font-size: 12px;
       cursor: pointer;
     }
-    .recent-run-open:hover, .recent-run-view-log:hover, .recent-run-stop:hover { border-color: var(--text-gray); }
+    .recent-run-open:hover, .recent-run-view-log:hover, .recent-run-stop:hover,
+    .recent-run-open:focus-visible, .recent-run-view-log:focus-visible, .recent-run-stop:focus-visible {
+      border-color: var(--text-gray);
+      outline: none;
+    }
     .recent-run-stop {
       color: var(--red);
       border-color: var(--red-border);
@@ -1954,9 +2052,11 @@
       transition: border-color 0.2s, color 0.2s;
       min-height: 26px;
     }
-    .btn-audit-log:hover {
+    .btn-audit-log:hover,
+    .btn-audit-log:focus-visible {
       border-color: var(--text-gray);
       color: var(--text-light);
+      outline: none;
     }
     .btn-audit-log svg { width: 12px; height: 12px; flex-shrink: 0; }
 
@@ -1995,81 +2095,17 @@
       cursor: pointer;
     }
     .audit-modal-close:hover { border-color: var(--text-gray); }
-    .audit-search-shell {
-      margin-bottom: 20px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 12px 14px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      background: var(--bg-dark);
-    }
-    .audit-search-icon {
-      color: var(--text-dim);
-      font-size: 13px;
-      flex-shrink: 0;
-    }
-    .audit-search-input {
-      flex: 1;
-      border: none;
-      outline: none;
-      background: transparent;
-      color: var(--text-light);
-      font-size: 13px;
-    }
-    .audit-search-input::placeholder { color: var(--text-dim); }
-    .audit-search-hint {
-      color: var(--text-dim);
-      font-size: 11px;
-      letter-spacing: 0.3px;
-      flex-shrink: 0;
-    }
-    .audit-empty-state {
-      padding: 18px 16px;
-      border: 1px dashed var(--border-subtle);
-      border-radius: var(--radius-md);
-      background: color-mix(in srgb, var(--bg-dark) 82%, transparent);
-      color: var(--text-dim);
-      font-size: 13px;
-      line-height: 1.5;
-    }
-    .audit-dimension-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-    .audit-dimension-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 10px;
-      border-radius: var(--radius-full);
-      border: 1px solid var(--border-subtle);
-      background: var(--bg-card);
-      color: var(--text-mid);
-      font-size: 12px;
-    }
-    .audit-dimension-pill strong { color: var(--text-light); }
-    .audit-note {
-      margin-top: 10px;
-      color: var(--text-dim);
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    .audit-highlight {
-      background: color-mix(in srgb, var(--green) 30%, transparent);
-      color: var(--text-light);
-      border-radius: 3px;
-      padding: 0 1px;
-    }
     .companies-page {
       height: 100%;
       display: grid;
       grid-template-columns: minmax(280px, 20%) minmax(0, 1fr);
       gap: 0;
       min-height: 0;
+      transition: grid-template-columns 0.22s ease, gap 0.22s ease;
+    }
+    .companies-page.is-sidebar-collapsed {
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 16px;
     }
     .companies-screen-toolbar {
       justify-content: space-between;
@@ -2081,10 +2117,27 @@
       min-height: 0;
       background: var(--bg-surface);
     }
+    .companies-page-sidebar.is-collapsed {
+      border-right: none;
+      overflow: visible;
+      background: transparent;
+    }
     .companies-sidebar-shell {
       min-height: 100%;
       display: flex;
       flex-direction: column;
+    }
+    .companies-sidebar-rail {
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      padding: 18px 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, rgba(11, 14, 24, 0.98), rgba(7, 10, 18, 0.98));
+      box-shadow: var(--shadow-lg);
     }
     .companies-sidebar-head {
       padding: 26px 24px 18px;
@@ -2103,6 +2156,12 @@
       font-weight: 700;
       color: var(--text-white);
     }
+    .companies-sidebar-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: auto;
+    }
     .companies-sidebar-count {
       min-width: 40px;
       height: 40px;
@@ -2116,6 +2175,62 @@
       color: var(--text-light);
       font-size: 14px;
       font-weight: 700;
+    }
+    .companies-sidebar-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: var(--text-light);
+      cursor: pointer;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.12s ease;
+    }
+    .companies-sidebar-toggle:hover,
+    .companies-sidebar-toggle:focus-visible {
+      border-color: var(--blue-border-accent);
+      background: rgba(8, 57, 103, 0.28);
+      outline: none;
+      transform: translateY(-1px);
+    }
+    .companies-sidebar-toggle svg {
+      width: 18px;
+      height: 18px;
+    }
+    .companies-sidebar-rail .companies-sidebar-toggle {
+      width: 44px;
+      height: 44px;
+      border-radius: 16px;
+    }
+    .companies-sidebar-collapsed-badge {
+      min-width: 44px;
+      height: 44px;
+      padding: 0 10px;
+      border-radius: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.45);
+      border: 1px solid rgba(255,255,255,0.06);
+      color: var(--text-light);
+      font-size: 13px;
+      font-weight: 700;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      letter-spacing: 0.5px;
+    }
+    .companies-sidebar-collapsed-hint {
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
     }
     .companies-sidebar-sort {
       display: inline-flex;
@@ -2211,6 +2326,20 @@
       overflow: auto;
       padding: 8px 0 8px 24px;
     }
+    .companies-page-detail-topbar {
+      display: flex;
+      justify-content: flex-start;
+      margin-bottom: 14px;
+    }
+    .companies-page-detail-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .companies-page-detail-toggle svg {
+      width: 14px;
+      height: 14px;
+    }
     .companies-page-empty {
       min-height: 100%;
       display: flex;
@@ -2244,6 +2373,686 @@
     }
     .companies-page-detail .saved-run-subtitle {
       margin-top: 6px;
+    }
+    .company-detail-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      min-height: 0;
+    }
+    .company-detail-stack.is-assessment-collapsed {
+      min-height: calc(100vh - 176px);
+    }
+    /* ── Company chat ─────────────────────────────── */
+    .company-chat-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 360px;
+      max-height: min(76vh, 840px);
+      padding: 24px;
+      background:
+        radial-gradient(circle at top right, rgba(23, 76, 136, 0.16), transparent 34%),
+        linear-gradient(180deg, rgba(11, 14, 24, 0.98), rgba(7, 10, 18, 0.98));
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-lg);
+      overflow: hidden;
+    }
+    .company-chat-card.is-expanded {
+      min-height: calc(100vh - 248px);
+      max-height: none;
+    }
+    .company-chat-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0));
+      opacity: 0.7;
+    }
+    .company-chat-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      flex-wrap: wrap;
+      position: relative;
+      z-index: 1;
+    }
+    .company-chat-title {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+    .company-chat-title h3 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-white);
+    }
+    .company-chat-title p {
+      color: var(--text-dim);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .company-chat-toolbar {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      min-width: min(100%, 320px);
+    }
+    .company-chat-toolbar-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+    .company-chat-toolbar-main {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .company-chat-model-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-width: 0;
+    }
+    .company-assessment-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      flex-shrink: 0;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: var(--text-light);
+      cursor: pointer;
+      transition: border-color 0.18s ease, background 0.18s ease, transform 0.12s ease;
+    }
+    .company-assessment-toggle:hover,
+    .company-assessment-toggle:focus-visible {
+      border-color: var(--blue-border-accent);
+      background: rgba(8, 57, 103, 0.28);
+      outline: none;
+      transform: translateY(-1px);
+    }
+    .company-assessment-toggle svg {
+      width: 18px;
+      height: 18px;
+      transform: rotate(90deg);
+      transition: transform 0.18s ease;
+    }
+    .company-assessment-toggle.is-collapsed svg {
+      transform: rotate(-90deg);
+    }
+    .company-chat-model-control {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      width: 100%;
+    }
+    .company-chat-model-caption {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.42);
+    }
+    .company-chat-model-hint {
+      font-size: 11px;
+      line-height: 1.45;
+      color: rgba(255,255,255,0.48);
+      padding-left: 2px;
+    }
+    .company-chat-model-shell {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 11px 42px 11px 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+      transition: border-color 0.2s var(--ease-out-quart),
+                  background 0.2s var(--ease-out-quart),
+                  box-shadow 0.2s var(--ease-out-quart);
+    }
+    .company-chat-model-shell::after {
+      content: '';
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      width: 8px;
+      height: 8px;
+      border-right: 1.5px solid rgba(255,255,255,0.48);
+      border-bottom: 1.5px solid rgba(255,255,255,0.48);
+      transform: translateY(-60%) rotate(45deg);
+      pointer-events: none;
+    }
+    .company-chat-model-shell:focus-within {
+      border-color: rgba(91, 231, 196, 0.32);
+      background: linear-gradient(180deg, rgba(7, 33, 32, 0.66), rgba(8, 24, 25, 0.7));
+      box-shadow: 0 0 0 3px rgba(91, 231, 196, 0.08);
+    }
+    .company-chat-model-icon {
+      width: 18px;
+      height: 18px;
+      color: rgba(124, 245, 200, 0.84);
+      flex-shrink: 0;
+    }
+    .company-chat-model-select {
+      width: 100%;
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--text-light);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.4;
+      padding: 0;
+      outline: none;
+      min-width: 0;
+    }
+    .company-chat-model-select:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .company-chat-head-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+      gap: 8px;
+    }
+    .company-chat-metric {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: rgba(255,255,255,0.72);
+      padding: 7px 12px;
+      border-radius: var(--radius-full);
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.08);
+      white-space: nowrap;
+    }
+    .company-chat-shell {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+      padding: 0 16px 18px;
+      border-radius: 22px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background:
+        linear-gradient(180deg, rgba(18, 20, 30, 0.96), rgba(10, 13, 22, 0.98)),
+        radial-gradient(circle at top left, rgba(255,255,255,0.03), transparent 46%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+      overflow: hidden;
+    }
+    .company-chat-log {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      gap: 8px;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 18px 2px 14px;
+      scroll-behavior: smooth;
+      overscroll-behavior: auto;
+    }
+    .company-chat-log::-webkit-scrollbar { width: 4px; }
+    .company-chat-log::-webkit-scrollbar-track { background: transparent; }
+    .company-chat-log::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+    .company-chat-log::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+    .company-chat-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--text-dim);
+      line-height: 1.6;
+      font-size: 13px;
+      max-width: 44ch;
+      margin: auto;
+    }
+
+    /* ── Message bubbles (iMessage) ─────────────── */
+    .company-chat-message {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 14px 16px;
+      border-radius: 20px;
+      border: 1px solid transparent;
+      min-width: 0;
+      max-width: min(88%, 760px);
+      position: relative;
+      /* entrance animation */
+      animation: chat-bubble-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes chat-bubble-in {
+      from {
+        opacity: 0;
+        transform: translateY(12px) scale(0.97);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .company-chat-message {
+        animation: none;
+      }
+    }
+
+    /* User bubble — blue, right-aligned to match chat actions */
+    .company-chat-message.user {
+      align-self: flex-end;
+      background: linear-gradient(180deg, rgba(8, 99, 191, 0.98) 0%, rgba(7, 77, 152, 0.98) 100%);
+      color: #fff;
+      border-color: rgba(26, 136, 255, 0.24);
+      border-bottom-right-radius: 8px;
+      max-width: min(74%, 580px);
+      box-shadow: 0 14px 32px rgba(6, 33, 66, 0.26);
+    }
+    .company-chat-message.user + .company-chat-message.user {
+      margin-top: -2px;
+      border-top-right-radius: 6px;
+    }
+
+    /* Assistant bubble — subtle dark, left-aligned */
+    .company-chat-message.assistant {
+      align-self: flex-start;
+      background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.05));
+      border-color: rgba(255,255,255,0.06);
+      border-bottom-left-radius: 8px;
+      max-width: min(94%, 980px);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    .company-chat-message.assistant + .company-chat-message.assistant {
+      margin-top: -2px;
+      border-top-left-radius: 6px;
+    }
+
+    /* Space between messages from different senders */
+    .company-chat-message.user + .company-chat-message.assistant,
+    .company-chat-message.assistant + .company-chat-message.user {
+      margin-top: 10px;
+    }
+
+    /* Typing indicator bubble */
+    .company-chat-message.typing {
+      align-self: flex-start;
+      max-width: fit-content;
+      min-width: 72px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.05));
+      border: 1px solid rgba(255,255,255,0.06);
+      border-bottom-left-radius: 8px;
+      padding: 12px 16px;
+    }
+
+    /* Hide role labels — position communicates who is who */
+    .company-chat-role {
+      display: none;
+    }
+
+    /* Shimmer for loading states */
+    .company-chat-shimmer {
+      --base-color: rgba(183, 198, 214, 0.72);
+      --base-gradient-color: rgba(214, 255, 244, 0.98);
+      color: transparent;
+      background-image: linear-gradient(
+        90deg,
+        var(--base-color) 0%,
+        var(--base-color) 34%,
+        var(--base-gradient-color) 50%,
+        var(--base-color) 66%,
+        var(--base-color) 100%
+      );
+      background-size: 220% 100%;
+      background-position: 100% 50%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      animation: company-chat-text-shimmer 1.4s linear infinite;
+    }
+    .company-chat-shimmer.mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+    }
+    @keyframes company-chat-text-shimmer {
+      from { background-position: 100% 50%; }
+      to { background-position: -100% 50%; }
+    }
+
+    /* Message text content */
+    .company-chat-content {
+      font-size: 14px;
+      line-height: 1.68;
+      color: var(--text-light);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .company-chat-message.user .company-chat-content {
+      color: #fff;
+    }
+    .company-chat-turn-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 2px;
+    }
+    .company-chat-turn-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      line-height: 1.3;
+      color: rgba(255,255,255,0.62);
+      padding: 4px 9px;
+      border-radius: var(--radius-full);
+      background: rgba(255,255,255,0.045);
+      border: 1px solid rgba(255,255,255,0.07);
+      white-space: nowrap;
+    }
+    button.company-chat-turn-pill {
+      appearance: none;
+      cursor: pointer;
+      color: var(--text-light);
+      transition: border-color 0.18s var(--ease-out-quart),
+                  background 0.18s var(--ease-out-quart),
+                  transform 0.12s var(--ease-out-quart);
+    }
+    button.company-chat-turn-pill:hover,
+    button.company-chat-turn-pill:focus-visible {
+      border-color: rgba(91, 231, 196, 0.28);
+      background: rgba(91, 231, 196, 0.08);
+      outline: none;
+      transform: translateY(-1px);
+    }
+
+    /* Typing dots */
+    .company-chat-typing {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 20px;
+      padding: 2px 0;
+    }
+    .company-chat-loading-text {
+      display: none;
+    }
+    .company-chat-typing-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.5);
+      animation: chat-dot-bounce 1.4s ease-in-out infinite;
+      transform-origin: center;
+    }
+    .company-chat-typing-dot:nth-child(2) {
+      animation-delay: 0.16s;
+    }
+    .company-chat-typing-dot:nth-child(3) {
+      animation-delay: 0.32s;
+    }
+    @keyframes chat-dot-bounce {
+      0%, 60%, 100% {
+        transform: translateY(0);
+        opacity: 0.35;
+      }
+      30% {
+        transform: translateY(-4px);
+        opacity: 1;
+      }
+    }
+
+    /* Citations under assistant messages */
+    .company-chat-citations {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 2px;
+    }
+    .company-chat-citation {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.035);
+      color: var(--text-mid);
+      border-radius: var(--radius-full);
+      padding: 5px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: border-color 0.18s var(--ease-out-quart),
+                  background 0.18s var(--ease-out-quart),
+                  transform 0.18s var(--ease-out-quart),
+                  color 0.18s var(--ease-out-quart);
+    }
+    .company-chat-citation:hover,
+    .company-chat-citation:focus-visible {
+      border-color: rgba(91, 231, 196, 0.28);
+      background: rgba(91, 231, 196, 0.08);
+      color: var(--text-light);
+      transform: translateY(-1px);
+      outline: none;
+    }
+    .company-chat-citation:active {
+      transform: translateY(0) scale(0.97);
+    }
+
+    .company-chat-composer {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 14px 0 0;
+      border-top: 1px solid rgba(255,255,255,0.07);
+      margin-top: 0;
+      flex-shrink: 0;
+      background: linear-gradient(180deg, rgba(12, 16, 28, 0.72), rgba(10, 12, 21, 0.98));
+    }
+    .company-chat-textarea {
+      flex: 1;
+      min-height: 44px;
+      max-height: 140px;
+      resize: none;
+      border-radius: 18px;
+      border: 1px solid rgba(26, 136, 255, 0.22);
+      background: linear-gradient(180deg, rgba(6, 43, 76, 0.26) 0%, rgba(8, 38, 66, 0.18) 100%);
+      color: var(--text-white);
+      padding: 11px 16px;
+      font: 14px/1.45 var(--font-body);
+      outline: none;
+      transition: border-color 0.2s var(--ease-out-quart),
+                  background 0.2s var(--ease-out-quart),
+                  box-shadow 0.2s var(--ease-out-quart);
+    }
+    .company-chat-textarea::placeholder {
+      color: rgba(194, 214, 235, 0.56);
+    }
+    .company-chat-textarea:focus {
+      border-color: rgba(26, 136, 255, 0.42);
+      background: linear-gradient(180deg, rgba(6, 43, 76, 0.38) 0%, rgba(8, 38, 66, 0.26) 100%);
+      box-shadow: 0 0 0 3px rgba(26, 136, 255, 0.10);
+    }
+    .company-chat-actions {
+      display: none;
+    }
+    .company-chat-meta {
+      display: none;
+    }
+    .company-chat-error {
+      color: #ffb4b4;
+      font-size: 12px;
+      padding: 4px 0 0 4px;
+    }
+    .company-chat-actions-right {
+      display: flex;
+      gap: 6px;
+      align-items: flex-end;
+      flex-shrink: 0;
+    }
+
+    /* Chat buttons */
+    .company-chat-btn {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.04);
+      color: var(--text-dim);
+      padding: 0;
+      width: 42px;
+      height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: color 0.18s var(--ease-out-quart),
+                  background 0.18s var(--ease-out-quart),
+                  transform 0.12s var(--ease-out-quart);
+      white-space: nowrap;
+      font-size: 0;
+      flex-shrink: 0;
+    }
+    .company-chat-btn:hover,
+    .company-chat-btn:focus-visible {
+      color: var(--text-light);
+      background: rgba(255,255,255,0.07);
+      border-color: rgba(255,255,255,0.14);
+      outline: none;
+    }
+    .company-chat-btn:active {
+      transform: scale(0.92);
+    }
+    .company-chat-btn.primary {
+      background: linear-gradient(180deg, rgba(8, 99, 191, 0.98) 0%, rgba(7, 77, 152, 0.98) 100%);
+      color: #fff;
+      border-color: rgba(26, 136, 255, 0.28);
+      border-radius: 14px;
+      width: 42px;
+      height: 42px;
+      font-size: 0;
+      box-shadow: 0 10px 24px rgba(6, 33, 66, 0.28);
+    }
+    .company-chat-btn.primary:hover {
+      background: linear-gradient(180deg, rgba(10, 116, 223, 1) 0%, rgba(8, 88, 173, 1) 100%);
+    }
+    .company-chat-btn.primary:active {
+      transform: scale(0.9);
+    }
+    .company-chat-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+      pointer-events: none;
+    }
+    .company-chat-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    /* Web fallback badge on assistant messages */
+    .company-chat-web-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      color: rgba(255,255,255,0.66);
+      padding: 4px 9px;
+      border-radius: var(--radius-full);
+      background: rgba(0, 210, 106, 0.08);
+      border: 1px solid rgba(0, 210, 106, 0.12);
+      margin-bottom: 2px;
+      width: fit-content;
+    }
+
+    /* Follow-up suggestion chips */
+    .company-chat-followups {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-self: flex-start;
+      padding: 4px 0 2px;
+      animation: chat-bubble-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+      animation-delay: 0.12s;
+    }
+    .company-chat-followup {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.03);
+      color: var(--text-light);
+      border-radius: var(--radius-full);
+      padding: 7px 14px;
+      font-size: 13px;
+      line-height: 1.3;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 0.18s var(--ease-out-quart),
+                  background 0.18s var(--ease-out-quart),
+                  color 0.18s var(--ease-out-quart),
+                  transform 0.12s var(--ease-out-quart);
+    }
+    .company-chat-followup:hover,
+    .company-chat-followup:focus-visible {
+      border-color: rgba(0, 210, 106, 0.3);
+      background: rgba(0, 210, 106, 0.08);
+      color: var(--text-white);
+      outline: none;
+    }
+    .company-chat-followup:active {
+      transform: scale(0.97);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .company-chat-followups {
+        animation: none;
+      }
+    }
+
+    /* Touch device enhancements */
+    @media (pointer: coarse) {
+      .company-chat-followup {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+      }
+      .company-chat-citation {
+        min-height: 36px;
+        display: inline-flex;
+        align-items: center;
+      }
+      .company-chat-btn {
+        min-width: 44px;
+        min-height: 44px;
+      }
+      .company-chat-btn.primary {
+        min-width: 44px;
+        min-height: 44px;
+      }
+    }
+
+    /* Safe area for notched devices */
+    @supports (padding-bottom: env(safe-area-inset-bottom)) {
+      .company-chat-composer {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
     }
     .companies-screen-content {
       flex: 1;
@@ -2384,30 +3193,151 @@
       background: var(--color-warn-bg);
     }
     @media (max-width: 768px) {
-      .header { padding: 0 20px; }
-      .main-content { padding: 40px 20px; }
-      .hero-text h1 { font-size: 32px; }
-      .upload-zone { width: 100%; padding: 32px 20px; }
-      .instructions-section { width: 100% !important; }
-      .llm-model-section { width: 100%; }
+      /* ── Global layout ───────────────────── */
+      .header { padding: 0 16px; height: 56px; }
+      .logo-name { font-size: 20px; }
+      .logo-subtitle { font-size: 11px; }
+      .logo-icon { width: 38px; height: 38px; }
+      .logo-icon svg { width: 22px; height: 22px; }
+      .header-right { gap: 8px; }
+      .btn-ghost { padding: 8px 12px; font-size: 12px; }
+      .main-content { padding: 28px 16px; gap: 32px; }
+      .hero-text h1 { font-size: clamp(26px, 7vw, 36px); }
+      .hero-text p { font-size: 15px; }
+
+      /* ── Upload / input sections ─────────── */
+      .upload-zone { padding: 28px 16px; }
+      .instructions-section { max-width: 100% !important; }
       .llm-model-grid { grid-template-columns: 1fr; }
+      .llm-model-card { min-height: 110px; }
+      .llm-model-name { font-size: 16px; }
       .premium-phase-grid { grid-template-columns: 1fr; }
-      .files-section { width: 100%; }
-      .results-body { padding: 24px 20px; }
+      .onboarding-welcome { padding: 16px; }
+      .onboarding-welcome-steps { grid-template-columns: 1fr; gap: 10px; }
+      .getting-started-cards { grid-template-columns: 1fr; }
+
+      /* ── Analysis / results ──────────────── */
+      .analysis-screen-content { padding: 20px 16px 28px; }
+      .info-screen-content { padding: 20px 16px 28px; }
+      .results-body { padding: 20px 16px; }
+      .results-title h1 { font-size: clamp(22px, 5.5vw, 30px); }
       .stats-row { flex-direction: column; }
-      .run-cost-strip {
-        grid-template-columns: 1fr;
-      }
+      .run-cost-strip { grid-template-columns: 1fr; }
       .args-row { flex-direction: column; }
       .score-row { flex-wrap: wrap; }
       .rankings-row { flex-direction: column; align-items: flex-start; }
+      .rank-card { padding: 16px; }
+      .rank-top { flex-wrap: wrap; gap: 8px; }
+      .rank-name { font-size: 18px; }
+      .stat-card { padding: 14px; }
+
+      /* ── Recent runs ─────────────────────── */
       .recent-run-card { align-items: flex-start; flex-direction: column; }
       .recent-run-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-      .companies-sidebar-head { padding-left: 18px; padding-right: 18px; }
-      .saved-company-card { padding: 16px; }
+
+      /* ── Companies page ──────────────────── */
+      .companies-sidebar-head { padding-left: 16px; padding-right: 16px; }
+      .saved-company-card { padding: 14px; }
       .companies-page { grid-template-columns: 1fr; }
-      .companies-page-sidebar { border-right: none; border-bottom: 1px solid var(--border); max-height: 42vh; }
-      .companies-page-detail { padding: 20px 0 0; }
+      .companies-page.is-sidebar-collapsed { grid-template-columns: 1fr; gap: 12px; }
+      .companies-page-sidebar { border-right: none; border-bottom: 1px solid var(--border); max-height: 38vh; }
+      .companies-page-sidebar.is-collapsed {
+        max-height: none;
+        border-bottom: none;
+      }
+      .companies-sidebar-rail {
+        min-height: auto;
+        flex-direction: row;
+        justify-content: space-between;
+        padding: 12px 16px;
+      }
+      .companies-sidebar-collapsed-badge,
+      .companies-sidebar-collapsed-hint {
+        writing-mode: initial;
+        transform: none;
+      }
+      .companies-page-detail { padding: 16px 0 0; }
+
+      /* ── Empty states ────────────────────── */
+      .empty-state-enhanced { padding: 32px 20px; }
+
+      /* ── Chat mobile adaptation ──────────── */
+      .company-chat-card {
+        padding: 16px;
+        min-height: 280px;
+        max-height: min(64vh, 620px);
+      }
+      .company-chat-head {
+        align-items: stretch;
+      }
+      .company-chat-toolbar {
+        width: 100%;
+      }
+      .company-chat-toolbar-top {
+        align-items: stretch;
+      }
+      .company-chat-model-row {
+        align-items: stretch;
+      }
+      .company-assessment-toggle {
+        width: 44px;
+        height: 44px;
+        margin-top: 0;
+        border-radius: 16px;
+      }
+      .company-chat-model-control {
+        width: 100%;
+      }
+      .company-chat-model-shell {
+        width: 100%;
+      }
+      .company-chat-head-metrics {
+        justify-content: flex-start;
+      }
+      .company-chat-shell {
+        border-radius: 18px;
+        padding: 0 12px 16px;
+      }
+      .company-chat-log {
+        min-height: 0;
+        padding: 12px 0 10px;
+      }
+      .company-chat-message {
+        max-width: 88%;
+        padding: 9px 12px;
+        border-radius: 16px;
+      }
+      .company-chat-message.user {
+        border-bottom-right-radius: 5px;
+      }
+      .company-chat-message.assistant {
+        border-bottom-left-radius: 5px;
+      }
+      .company-chat-message.user + .company-chat-message.user {
+        border-top-right-radius: 5px;
+      }
+      .company-chat-message.assistant + .company-chat-message.assistant {
+        border-top-left-radius: 5px;
+      }
+      .company-chat-content {
+        font-size: 15px;
+      }
+      .company-chat-composer {
+        gap: 6px;
+        padding: 12px 0 0;
+      }
+      .company-chat-textarea {
+        padding: 10px 14px;
+        font-size: 16px; /* prevents iOS zoom on focus */
+        border-radius: 18px;
+      }
+      .company-chat-followup {
+        font-size: 13px;
+        padding: 8px 14px;
+      }
+      .company-chat-citation {
+        padding: 5px 10px;
+      }
     }
 
     .dim-bars-container { margin: 12px 0 16px; }
@@ -2427,17 +3357,6 @@
       margin-bottom: 8px; font-size: 12px;
       --dim-color: var(--green);
       --dim-color-bg: var(--green-bg);
-    }
-    .dim-bar-row.is-clickable {
-      cursor: pointer;
-      border-radius: var(--radius-md);
-      padding: 6px 8px;
-      margin: 0 -8px 8px;
-      transition: background 0.2s ease, box-shadow 0.2s ease;
-    }
-    .dim-bar-row.is-clickable:focus-visible {
-      outline: 1px solid color-mix(in srgb, var(--dim-color) 55%, white 45%);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--dim-color-bg) 60%, transparent);
     }
     .dim-label {
       width: 100px; color: var(--text-gray);
@@ -2540,10 +3459,12 @@
       transition: all 0.2s;
       white-space: nowrap;
     }
-    .team-member-pill:hover {
+    .team-member-pill:hover,
+    .team-member-pill:focus-visible {
       border-color: var(--green-border);
       color: var(--green);
       background: var(--green-surface-subtle);
+      outline: none;
     }
     .person-intel-list {
       display: flex;
@@ -2564,9 +3485,34 @@
       margin-bottom: 6px;
       align-items: center;
     }
+    .person-intel-card-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
     .person-intel-name { font-size: 13px; color: var(--text-light); }
     .person-intel-name.is-toggle { cursor: pointer; }
     .person-intel-name.is-toggle:hover { color: var(--green); }
+    .person-intel-refresh {
+      border: 1px solid var(--border-subtle);
+      background: rgba(16, 25, 39, 0.9);
+      color: var(--text-dim);
+      border-radius: var(--radius-full);
+      padding: 5px 10px;
+      font-size: 11px;
+      letter-spacing: 0.7px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .person-intel-refresh:hover,
+    .person-intel-refresh:focus-visible {
+      border-color: var(--green-border);
+      color: var(--green);
+      outline: none;
+    }
     .person-intel-status {
       font-size: 11px;
       text-transform: uppercase;
@@ -2792,7 +3738,8 @@
 
     /* ── Onboarding: Welcome Banner ── */
     .onboarding-welcome {
-      width: 640px;
+      width: 100%;
+      max-width: 640px;
       border: 1px solid var(--green-border-strong);
       border-radius: var(--radius-lg);
       background: linear-gradient(135deg, var(--green-surface-subtle), rgba(0, 210, 106, 0.03));
@@ -2860,7 +3807,8 @@
 
     /* ── Onboarding: Getting Started (empty recent runs) ── */
     .getting-started-section {
-      width: 640px;
+      width: 100%;
+      max-width: 640px;
       display: none;
       flex-direction: column;
       gap: 16px;
@@ -2887,9 +3835,11 @@
       gap: 8px;
       transition: border-color 0.2s, background 0.2s;
     }
-    .getting-started-card:hover {
+    .getting-started-card:hover,
+    .getting-started-card:focus-visible {
       border-color: var(--text-dark);
       background: var(--bg-surface);
+      outline: none;
     }
     .getting-started-card-icon {
       width: 28px;
@@ -3099,9 +4049,6 @@
       border-color: color-mix(in srgb, var(--dim-color) 30%, rgba(255,255,255,0.06));
       background: color-mix(in srgb, var(--dim-color-bg) 55%, rgba(255,255,255,0.02));
     }
-    .dim-bar-row.is-clickable:hover {
-      background: color-mix(in srgb, var(--dim-color-bg) 30%, transparent);
-    }
 
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
@@ -3109,6 +4056,12 @@
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
+      }
+      .company-chat-shimmer {
+        color: var(--text-light);
+        background: none;
+        -webkit-background-clip: border-box;
+        background-clip: border-box;
       }
       .screen,
       .screen.active,
@@ -3135,12 +4088,24 @@
       .password-card { max-width: none; }
     }
     @media (max-width: 640px) {
-      .login-stage h1 { font-size: 42px; }
+      /* ── Login ───────────────────────────── */
+      .login-stage h1 { font-size: clamp(32px, 9vw, 48px); }
       .login-signal-grid { grid-template-columns: 1fr; }
-      .password-card { padding: 24px; }
-      .password-card h2 { font-size: 32px; }
-      .password-input { letter-spacing: 2px; }
-      .info-screen-content { padding: 20px; }
+      .password-card { padding: 20px; }
+      .password-card h2 { font-size: clamp(24px, 7vw, 34px); }
+      .password-input { letter-spacing: 2px; font-size: 16px; }
+
+      /* ── Global small-screen ─────────────── */
+      .main-content { padding: 20px 12px; gap: 24px; }
+      .header { padding: 0 12px; }
+      .hero-text h1 { font-size: clamp(24px, 7vw, 32px); margin-bottom: 10px; }
+      .hero-text p { font-size: 14px; }
+      .upload-zone { padding: 24px 14px; }
+      .upload-icon { width: 44px; height: 44px; margin-bottom: 14px; }
+      .input-mode-option { padding: 10px 8px; font-size: 12px; }
+
+      /* ── Info / help pages ────────────────── */
+      .info-screen-content { padding: 16px 12px; }
       .info-layout,
       .info-grid {
         grid-template-columns: 1fr;
@@ -3149,7 +4114,78 @@
         position: static;
       }
       .info-panel {
-        padding: 22px;
+        padding: 18px;
+      }
+      .info-hero h1 { font-size: clamp(22px, 6vw, 30px); }
+
+      /* ── Results ─────────────────────────── */
+      .results-title h1 { font-size: clamp(20px, 5vw, 26px); }
+      .rank-name { font-size: 16px; }
+      .rank-badge { font-size: 14px; padding: 4px 10px; }
+      .dim-label { width: 80px; font-size: 11px; }
+      .dim-value { font-size: 11px; }
+      .stat-card { padding: 12px; }
+
+      /* ── Companies detail ────────────────── */
+      .companies-page-sidebar { max-height: 35vh; }
+      .companies-page-detail { padding: 12px 0 0; }
+      .saved-company-card { padding: 12px; }
+
+      /* ── Person intel ────────────────────── */
+      .person-report-avatar { width: 48px; height: 48px; font-size: 16px; }
+      .person-report-name { font-size: 18px; }
+
+      /* ── Chat small-screen tweaks ──────── */
+      .company-chat-message {
+        max-width: 92%;
+      }
+      .company-chat-followups {
+        flex-direction: column;
+      }
+      .company-chat-followup {
+        width: 100%;
+      }
+      .company-chat-title h3 {
+        font-size: 15px;
+      }
+      .company-chat-head {
+        gap: 12px;
+      }
+      .companies-page-detail-topbar {
+        margin-bottom: 12px;
+      }
+    }
+
+    /* ── Touch device enhancements (global) ──── */
+    @media (pointer: coarse) {
+      /* Ensure 44px minimum touch targets */
+      .btn-ghost { min-height: 44px; }
+      .input-mode-option { min-height: 44px; }
+      .btn-audit-log { min-height: 44px; min-width: 44px; }
+      .recent-run-open, .recent-run-view-log { min-height: 44px; }
+      .team-member-pill { min-height: 40px; }
+      .getting-started-card { min-height: 44px; }
+      .saved-company-card { min-height: 48px; }
+      .onboarding-welcome-dismiss { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+      /* Disable hover transforms on touch — they cause sticky states */
+      .rank-card:hover,
+      .stat-card:hover,
+      .recent-run-card:hover,
+      .team-member-pill:hover,
+      .companies-page-sidebar .saved-company-card:hover {
+        transform: none !important;
+      }
+    }
+
+    /* ── Safe area for notched devices (global) ── */
+    @supports (padding: env(safe-area-inset-bottom)) {
+      .main-content {
+        padding-left: max(env(safe-area-inset-left), 16px);
+        padding-right: max(env(safe-area-inset-right), 16px);
+      }
+      .header {
+        padding-left: max(env(safe-area-inset-left), 16px);
+        padding-right: max(env(safe-area-inset-right), 16px);
       }
     }
   </style>
@@ -3199,29 +4235,25 @@
       </div>
     </section>
     <div class="password-card">
-      <div class="logo">
-        <div class="logo-icon">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="12" width="4" height="8" rx="1.2"></rect>
-            <rect x="10" y="7" width="4" height="13" rx="1.2"></rect>
-            <rect x="17" y="3" width="4" height="17" rx="1.2"></rect>
-          </svg>
-        </div>
-        <div class="logo-lockup">
-          <div class="logo-name">Rockaway</div>
-          <div class="logo-subtitle">Deal Intelligence</div>
-        </div>
-      </div>
       <div class="password-meta">
         <span class="password-kicker">Secure access</span>
         <h2>Enter workspace</h2>
         <p>Protected internal interface for reviewing pipelines, company runs, and portfolio screening output.</p>
       </div>
       <form id="login-form">
-        <label class="password-field-label" for="password-input">Password</label>
-        <input type="password" class="password-input" id="password-input" placeholder="Enter password" maxlength="20" autofocus>
-        <div class="password-error" id="password-error"></div>
-        <button type="submit" class="btn-green">Unlock</button>
+        <div class="password-form-stage" id="login-email-stage">
+          <label class="password-field-label" for="login-email-input">Email</label>
+          <input type="email" class="password-input" id="login-email-input" placeholder="name@rockaway.vc" maxlength="200" autocomplete="email" autofocus>
+          <button type="button" class="btn-green password-secondary-action" id="login-request-code">Request verification link</button>
+        </div>
+        <div class="login-status" id="login-status"></div>
+        <div class="password-form-stage" id="login-unlock-stage" hidden>
+          <div class="login-stage-note" id="login-stage-note">Click the verification link in your email, then enter your workspace password.</div>
+          <label class="password-field-label" for="password-input">Password</label>
+          <input type="password" class="password-input" id="password-input" placeholder="Enter password" maxlength="40" autocomplete="current-password">
+          <div class="password-error" id="password-error"></div>
+          <button type="submit" class="btn-green" id="login-unlock-button">Unlock</button>
+        </div>
       </form>
       <div class="password-footnote">This session stays local to your browser and is validated against the server before any analysis routes are opened.</div>
     </div>
@@ -3229,7 +4261,7 @@
 </div>
 
 <!-- ═══════════════════ UPLOAD SCREEN ═══════════════════ -->
-<div id="upload-screen" class="screen">
+<div id="upload-screen" class="screen active">
   <div class="header">
     <a class="logo" href="/">
       <div class="logo-icon">
@@ -3306,13 +4338,13 @@
       <span class="input-mode-label">Input mode</span>
       <div class="input-mode-toggle">
         <button type="button" class="input-mode-option" data-mode="original">Multi-file</button>
-        <button type="button" class="input-mode-option" data-mode="specter">Specter</button>
-        <button type="button" class="input-mode-option active" data-mode="pitchdeck">Pitch deck</button>
+        <button type="button" class="input-mode-option active" data-mode="specter">Specter</button>
+        <button type="button" class="input-mode-option" data-mode="pitchdeck">Pitch deck</button>
       </div>
-      <p class="input-mode-hint" id="input-mode-hint">Each file = one company. Best for multiple pitch decks.</p>
+      <p class="input-mode-hint" id="input-mode-hint">Upload a Specter companies export, optionally with a people export. CSV or Excel; filenames do not matter.</p>
       <div class="input-mode-callout" id="input-mode-callout">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-        <span><strong>Pitch deck</strong> is best for most files. Use <strong>Specter</strong> for structured CSV exports, or <strong>Multi-file</strong> to combine multiple docs into one company.</span>
+        <span><strong>Specter</strong> is the default for structured company and people exports. Use <strong>Pitch deck</strong> for one company per file, or <strong>Multi-file</strong> to combine multiple docs into one company.</span>
         <button type="button" class="input-mode-callout-dismiss" id="input-mode-callout-dismiss" title="Dismiss">&times;</button>
       </div>
     </div>
@@ -3444,19 +4476,16 @@
       </div>
     </a>
     <div class="header-right">
+      <button type="button" class="btn-ghost" id="analysis-refresh-btn">Refresh</button>
       <button type="button" class="btn-ghost is-active" id="analysis-current-tab" data-nav-section="analysis" aria-current="page">Analysis</button>
       <button type="button" class="btn-ghost" id="saved-jobs-open-analysis" data-nav-section="companies">Companies</button>
-      <button type="button" class="btn-ghost" id="analysis-refresh-btn">Refresh</button>
-      <button class="btn-ghost" id="new-analysis-btn-history">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        New Analysis
-      </button>
+      <button class="btn-ghost" id="new-analysis-btn-history">New Analysis</button>
     </div>
   </div>
   <div id="analysis-screen-content" class="analysis-screen-content"></div>
 </div>
 
-<div id="companies-screen" class="screen active">
+<div id="companies-screen" class="screen">
   <div class="header companies-screen-toolbar">
     <a class="logo" href="/">
       <div class="logo-icon">
@@ -3472,13 +4501,10 @@
       </div>
     </a>
     <div class="header-right">
+      <button type="button" class="btn-ghost" id="companies-refresh-btn">Refresh</button>
       <button type="button" class="btn-ghost" id="analysis-open-companies" data-nav-section="analysis">Analysis</button>
       <button type="button" class="btn-ghost is-active" id="companies-current-tab" data-nav-section="companies" aria-current="page">Companies</button>
-      <button type="button" class="btn-ghost" id="companies-refresh-btn">Refresh</button>
-      <button class="btn-ghost" id="new-analysis-btn-companies">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        New Analysis
-      </button>
+      <button class="btn-ghost" id="new-analysis-btn-companies">New Analysis</button>
     </div>
   </div>
   <div id="companies-screen-content" class="companies-screen-content"></div>
@@ -3544,10 +4570,7 @@
     <div class="header-right">
       <button class="btn-ghost" id="analysis-open-results" data-nav-section="analysis">Analysis</button>
       <button type="button" class="btn-ghost" id="saved-jobs-open-results" data-nav-section="companies">Companies</button>
-      <button class="btn-ghost" id="new-analysis-btn">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        New Analysis
-      </button>
+      <button class="btn-ghost" id="new-analysis-btn">New Analysis</button>
     </div>
   </div>
   <div class="results-body">
@@ -3640,7 +4663,7 @@ let sessionId = localStorage.getItem('session_id');
 let currentJobId = null;
 let currentResults = null;
 let uploadedFiles = [];
-let inputMode = 'pitchdeck';
+let inputMode = 'specter';
 let inputModeTouched = false;
 const APP_STATE_VERSION = '2026-03-15-analysis-state-v2';
 const APP_STATE_VERSION_KEY = 'app_state_version';
@@ -3653,6 +4676,8 @@ const SHOW_PRO_CONTRA_ARGUMENTS = true;
 const SHOW_AVG_PRO_CONTRA_SCORES = false;
 const DEFAULT_RANKINGS_SORT = 'top_scored';
 const DEFAULT_SAVED_COMPANY_SORT = 'top_scored';
+const COMPANIES_SIDEBAR_COLLAPSED_KEY = 'companies_sidebar_collapsed_v1';
+const COMPANY_ASSESSMENT_COLLAPSED_KEY = 'company_assessment_collapsed_v1';
 let vcInvestmentStrategy = localStorage.getItem(VC_STRATEGY_KEY) || '';
 let personIntelState = {};
 let rankingsSortMode = DEFAULT_RANKINGS_SORT;
@@ -3669,7 +4694,13 @@ let selectedCompanyKey = null;
 let selectedCompanyJobId = null;
 /** Set of company_key that have runs collapsed (hidden). Empty = all expanded. */
 let companyRunsCollapsed = new Set();
+let companyChatStateByKey = {};
+let companyChatCitationRegistry = {};
 let companiesPageJustOpened = false;
+let companiesSidebarCollapsed = localStorage.getItem(COMPANIES_SIDEBAR_COLLAPSED_KEY) === '1';
+let companyAssessmentCollapsed = localStorage.getItem(COMPANY_ASSESSMENT_COLLAPSED_KEY) === '1';
+let companiesSidebarScrollTop = 0;
+let companiesDetailScrollTop = 0;
 let previousScreenBeforeCompanies = 'upload-screen';
 let previousScreenBeforeAnalysis = 'upload-screen';
 let previousScreenBeforeInfo = 'upload-screen';
@@ -3686,11 +4717,30 @@ const USER_PHASE_LABELS = {
   evaluation: 'Evaluation',
   ranking: 'Ranking',
 };
-let selectedPhaseModelKeys = {};
+const PHASE_AUTO_CREATIVITY = {
+  decomposition: 0.5,
+  answering: 0.0,
+  generation: 0.5,
+  evaluation: 0.0,
+  ranking: 0.3,
+};
+const CREATIVITY_MIN = 0;
+const CREATIVITY_MAX = 2;
+const CREATIVITY_STEP = 0.1;
+let selectedPhaseModelSettings = {};
 let analysisConfigLoadState = 'idle';
 let analysisFocusJobId = null;
 let analysisFocusClearTimer = null;
-let auditModalState = null;
+let supabaseClient = null;
+let supabaseClientPromise = null;
+let supabaseIdentity = null;
+let supabaseAuthState = 'idle';
+let supabaseMagicLinkEmail = '';
+let supabaseAuthListenerBound = false;
+let supabaseAuthError = '';
+let publicAuthConfig = null;
+let loginVerificationStage = 'email';
+let supabasePasswordReentryRequired = false;
 
 function migrateClientState() {
   try {
@@ -4061,7 +5111,7 @@ function getSelectedLlmFromConfig() {
 
 function getAdvancedLlmSelection() {
   if (!selectedLlmKey) return null;
-  const models = analysisConfig?.available_models || [];
+  const models = (analysisConfig?.available_models || []).filter((item) => item.provider !== 'openrouter');
   return models.find((item) => `${item.provider}:${item.model}` === selectedLlmKey && item.selectable) || null;
 }
 
@@ -4103,17 +5153,69 @@ function getModelByKey(key) {
   return (analysisConfig?.available_models || []).find((item) => `${item.provider}:${item.model}` === key) || null;
 }
 
+function normalizeCreativityValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const bounded = Math.min(CREATIVITY_MAX, Math.max(CREATIVITY_MIN, numeric));
+  return Math.round(bounded * 10) / 10;
+}
+
+function supportsPhaseCreativity(model) {
+  return !!model?.supports_creativity_control;
+}
+
+function getPhaseModelSetting(phase) {
+  const raw = selectedPhaseModelSettings[phase];
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return {
+      key: typeof raw.key === 'string' ? raw.key : '',
+      creativity: normalizeCreativityValue(raw.creativity),
+    };
+  }
+  if (typeof raw === 'string') {
+    return { key: raw, creativity: null };
+  }
+  return { key: '', creativity: null };
+}
+
+function setPhaseModelSetting(phase, nextSetting) {
+  selectedPhaseModelSettings[phase] = {
+    key: String(nextSetting?.key || ''),
+    creativity: normalizeCreativityValue(nextSetting?.creativity),
+  };
+}
+
+function getPhaseSliderValue(phase, model) {
+  const setting = getPhaseModelSetting(phase);
+  if (setting.creativity !== null) return setting.creativity;
+  return normalizeCreativityValue(model?.default_creativity) ?? PHASE_AUTO_CREATIVITY[phase] ?? 0.5;
+}
+
+function formatCreativityValue(value) {
+  const numeric = normalizeCreativityValue(value);
+  if (numeric === null) return 'Auto';
+  return numeric.toFixed(1);
+}
+
+function getPipelineSelectableModels() {
+  return (analysisConfig?.available_models || []).filter((item) => item.selectable && item.provider !== 'openrouter');
+}
+
 function getPhaseModelDefaults() {
   const serverDefaults = analysisConfig?.phase_model_defaults;
   if (serverDefaults && typeof serverDefaults === 'object') {
     return Object.fromEntries(
       USER_PHASES
         .filter((phase) => serverDefaults[phase]?.provider && serverDefaults[phase]?.model)
-        .map((phase) => [phase, `${serverDefaults[phase].provider}:${serverDefaults[phase].model}`])
+        .map((phase) => [phase, {
+          key: `${serverDefaults[phase].provider}:${serverDefaults[phase].model}`,
+          creativity: normalizeCreativityValue(serverDefaults[phase].creativity),
+        }])
     );
   }
 
-  const available = (analysisConfig?.available_models || []).filter((item) => item.selectable);
+  const available = getPipelineSelectableModels();
   const findKey = (provider, model) => {
     const found = available.find((item) => item.provider === provider && item.model === model);
     return found ? `${found.provider}:${found.model}` : null;
@@ -4121,45 +5223,60 @@ function getPhaseModelDefaults() {
 
   const decompositionKey = findKey('openai', 'gpt-5.4-mini')
     || findKey('gemini', 'gemini-3.1-pro-preview')
+    || findKey('gemini', 'gemini-2.5-flash')
     || findKey('openai', 'gpt-5.2')
-    || findKey('openai', 'gpt-5')
-    || (available[0] ? `${available[0].provider}:${available[0].model}` : null);
+    || findKey('openai', 'gpt-5');
   const answeringKey = findKey('openai', 'gpt-5.4-nano')
     || findKey('gemini', 'gemini-2.5-flash')
     || findKey('gemini', 'gemini-3.1-flash-lite-preview')
     || findKey('anthropic', 'claude-haiku-4-5-20251001')
     || (available[0] ? `${available[0].provider}:${available[0].model}` : null);
-  const criticalKey = findKey('openai', 'gpt-5.4-mini')
-    || findKey('openai', 'gpt-5')
-    || findKey('anthropic', 'claude-haiku-4-5-20251001')
+  const generationKey = findKey('openai', 'gpt-5.4-mini')
     || findKey('openai', 'gpt-5.2')
+    || findKey('openai', 'gpt-5')
+    || findKey('gemini', 'gemini-3.1-pro-preview')
+    || decompositionKey
+    || answeringKey;
+  const evaluationKey = findKey('openai', 'gpt-5.4-mini')
+    || findKey('openai', 'o4-mini')
+    || findKey('openai', 'gpt-4.1-mini')
+    || findKey('anthropic', 'claude-haiku-4-5-20251001')
+    || generationKey
+    || answeringKey;
+  const rankingKey = findKey('openai', 'gpt-5.4-mini')
+    || findKey('openai', 'gpt-5.2')
+    || findKey('openai', 'gpt-5')
+    || findKey('openai', 'o4-mini')
+    || findKey('anthropic', 'claude-haiku-4-5-20251001')
+    || generationKey
     || answeringKey;
 
   return {
-    decomposition: decompositionKey,
-    answering: answeringKey,
-    generation: criticalKey,
-    evaluation: criticalKey,
-    ranking: criticalKey,
+    decomposition: { key: decompositionKey || generationKey || answeringKey, creativity: null },
+    answering: { key: answeringKey, creativity: null },
+    generation: { key: generationKey, creativity: null },
+    evaluation: { key: evaluationKey, creativity: null },
+    ranking: { key: rankingKey, creativity: null },
   };
 }
 
 function ensurePhaseModelSelections() {
   const defaults = getPhaseModelDefaults();
-  const available = (analysisConfig?.available_models || []).filter((item) => item.selectable);
+  const available = getPipelineSelectableModels();
   const firstKey = available[0] ? `${available[0].provider}:${available[0].model}` : null;
 
   USER_PHASES.forEach((phase) => {
-    const current = selectedPhaseModelKeys[phase];
-    if (current && getModelByKey(current)?.selectable) return;
-    selectedPhaseModelKeys[phase] = defaults[phase] || firstKey || '';
+    const current = getPhaseModelSetting(phase);
+    if (current.key && available.some((item) => `${item.provider}:${item.model}` === current.key)) return;
+    const defaultSetting = defaults[phase];
+    setPhaseModelSetting(phase, defaultSetting || { key: firstKey || '', creativity: null });
   });
 }
 
 function getPhaseSelectionSummaryLabel() {
   ensurePhaseModelSelections();
   const parts = USER_PHASES.map((phase) => {
-    const model = getModelByKey(selectedPhaseModelKeys[phase]);
+    const model = getModelByKey(getPhaseModelSetting(phase).key);
     return `${USER_PHASE_LABELS[phase]} ${model?.label || 'Unknown'}`;
   });
   return `Per-phase · ${parts.join(' · ')}`;
@@ -4171,11 +5288,13 @@ function getAnalysisSelectionPayload() {
     ensurePhaseModelSelections();
     const phaseModels = {};
     USER_PHASES.forEach((phase) => {
-      const model = getModelByKey(selectedPhaseModelKeys[phase]);
+      const setting = getPhaseModelSetting(phase);
+      const model = getModelByKey(setting.key);
       if (!model) return;
       phaseModels[phase] = {
         provider: model.provider,
         model: model.model,
+        ...(supportsPhaseCreativity(model) && setting.creativity !== null ? { creativity: setting.creativity } : {}),
       };
     });
     return {
@@ -4214,7 +5333,7 @@ function renderPhaseModelSelector() {
     return;
   }
 
-  const models = (analysisConfig?.available_models || []).filter((item) => item.selectable);
+  const models = getPipelineSelectableModels();
   if (!models.length) {
     config.innerHTML = '<button type="button" class="llm-model-card is-unavailable" disabled><span class="llm-model-name">No models configured</span><span class="llm-model-meta">Add provider credentials to enable per-phase routing.</span></button>';
     hint.textContent = 'No configured analysis models are available in this environment.';
@@ -4225,7 +5344,44 @@ function renderPhaseModelSelector() {
   config.innerHTML = `
     <div class="premium-phase-grid">
       ${USER_PHASES.map((phase) => {
-        const selected = selectedPhaseModelKeys[phase] || '';
+        const setting = getPhaseModelSetting(phase);
+        const selected = setting.key || '';
+        const selectedModel = getModelByKey(selected);
+        const sliderValue = getPhaseSliderValue(phase, selectedModel);
+        const isAuto = setting.creativity === null;
+        const creativityHtml = supportsPhaseCreativity(selectedModel)
+          ? `
+            <div class="phase-creativity-block">
+              <div class="phase-creativity-header">
+                <span class="phase-creativity-title">Creativity</span>
+                <button type="button" class="phase-creativity-badge ${isAuto ? 'is-auto' : ''}" data-phase-creativity-reset="${escapeHtml(phase)}">
+                  ${isAuto ? 'Auto' : 'Reset'}
+                </button>
+              </div>
+              <div class="phase-creativity-control">
+                <input
+                  class="phase-creativity-slider"
+                  type="range"
+                  min="${CREATIVITY_MIN}"
+                  max="${CREATIVITY_MAX}"
+                  step="${CREATIVITY_STEP}"
+                  value="${sliderValue}"
+                  data-phase-creativity="${escapeHtml(phase)}"
+                >
+                <span class="phase-creativity-value" data-phase-creativity-value="${escapeHtml(phase)}">
+                  ${isAuto ? `Auto · ${formatCreativityValue(sliderValue)}` : formatCreativityValue(sliderValue)}
+                </span>
+              </div>
+              <div class="phase-creativity-note">
+                ${isAuto ? 'Uses the built-in stage default until you move the slider.' : 'Overrides the default stage sampling for this phase.'}
+              </div>
+            </div>
+          `
+          : `
+            <div class="phase-creativity-note is-unsupported">
+              This model uses fixed sampling for this stage.
+            </div>
+          `;
         return `
           <label class="premium-phase-field">
             <span class="premium-phase-label">${escapeHtml(USER_PHASE_LABELS[phase])}</span>
@@ -4235,6 +5391,7 @@ function renderPhaseModelSelector() {
                 return `<option value="${escapeHtml(key)}" ${selected === key ? 'selected' : ''}>${escapeHtml(item.label)}</option>`;
               }).join('')}
             </select>
+            ${creativityHtml}
           </label>
         `;
       }).join('')}
@@ -4243,14 +5400,43 @@ function renderPhaseModelSelector() {
 
   config.querySelectorAll('[data-phase-model]').forEach((select) => {
     select.addEventListener('change', (event) => {
-      selectedPhaseModelKeys[event.target.getAttribute('data-phase-model')] = event.target.value || '';
+      const phase = event.target.getAttribute('data-phase-model');
+      const current = getPhaseModelSetting(phase);
+      setPhaseModelSetting(phase, { key: event.target.value || '', creativity: current.creativity });
       selectedLlmKey = null;
       renderPhaseModelSelector();
       renderLlmSelector();
     });
   });
 
-  const answeringModel = getModelByKey(selectedPhaseModelKeys.answering);
+  config.querySelectorAll('[data-phase-creativity]').forEach((slider) => {
+    slider.addEventListener('input', (event) => {
+      const phase = event.target.getAttribute('data-phase-creativity');
+      const current = getPhaseModelSetting(phase);
+      const nextValue = normalizeCreativityValue(event.target.value);
+      setPhaseModelSetting(phase, { key: current.key, creativity: nextValue });
+      const valueEl = config.querySelector(`[data-phase-creativity-value="${phase}"]`);
+      if (valueEl) valueEl.textContent = formatCreativityValue(nextValue);
+    });
+    slider.addEventListener('change', () => {
+      selectedLlmKey = null;
+      renderPhaseModelSelector();
+      renderLlmSelector();
+    });
+  });
+
+  config.querySelectorAll('[data-phase-creativity-reset]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      const phase = event.currentTarget.getAttribute('data-phase-creativity-reset');
+      const current = getPhaseModelSetting(phase);
+      setPhaseModelSetting(phase, { key: current.key, creativity: null });
+      selectedLlmKey = null;
+      renderPhaseModelSelector();
+      renderLlmSelector();
+    });
+  });
+
+  const answeringModel = getModelByKey(getPhaseModelSetting('answering').key);
   const advancedSelection = getAdvancedLlmSelection();
   if (advancedSelection) {
     hint.textContent = `${advancedSelection.label || 'Advanced selection'} currently overrides the whole pipeline. Change any phase above to switch back to per-phase routing.`;
@@ -4287,7 +5473,7 @@ function renderLlmSelector() {
     return;
   }
 
-  const models = analysisConfig.available_models || [];
+  const models = (analysisConfig.available_models || []).filter((item) => item.provider !== 'openrouter');
   const explicitSelection = getAdvancedLlmSelection();
   const previewSelection = explicitSelection || getSelectedLlmFromConfig();
   const selectedKeyForUi = explicitSelection
@@ -4374,17 +5560,281 @@ async function loadAnalysisConfig() {
   renderLlmSelector();
   try {
     analysisConfig = await api('/api/config', { timeoutMs: 5000, retries: 0 });
+    if (analysisConfig?.vc_strategy_source === 'supabase') {
+      vcInvestmentStrategy = (analysisConfig.vc_investment_strategy || '').trim();
+      localStorage.setItem(VC_STRATEGY_KEY, vcInvestmentStrategy);
+    }
     analysisConfigLoadState = 'ready';
     renderPhaseModelSelector();
     renderLlmSelector();
+    await initializeSupabaseAuth();
+    renderLoginIdentity();
+    renderAnalysisIdentity();
+    updateAnalyzeButtonState();
     return analysisConfig;
   } catch (_) {
     analysisConfig = null;
     analysisConfigLoadState = 'error';
     renderPhaseModelSelector();
     renderLlmSelector();
+    renderLoginIdentity();
+    renderAnalysisIdentity();
+    updateAnalyzeButtonState();
     return null;
   }
+}
+
+function clearSupabaseAuthCallbackParams() {
+  const url = new URL(window.location.href);
+  let changed = false;
+  ['code', 'type', 'access_token', 'refresh_token', 'token_type', 'expires_in', 'expires_at'].forEach((key) => {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  });
+  if (url.hash) {
+    url.hash = '';
+    changed = true;
+  }
+  if (changed) {
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
+  }
+}
+
+function hasSupabaseAuthCallbackParams() {
+  const url = new URL(window.location.href);
+  if (url.hash) return true;
+  return ['code', 'type', 'access_token', 'refresh_token', 'token_type', 'expires_in', 'expires_at']
+    .some((key) => url.searchParams.has(key));
+}
+
+function clearLocalWorkspaceSession() {
+  sessionId = null;
+  try {
+    localStorage.removeItem('session_id');
+  } catch (_) {
+    // Ignore local storage failures.
+  }
+  document.cookie = 'session_id=; Path=/; Max-Age=0; SameSite=Lax';
+}
+
+function getSupabaseAuthConfig() {
+  return analysisConfig?.supabase_auth || publicAuthConfig || null;
+}
+
+function isSupabaseAuthRequired() {
+  return getSupabaseAuthConfig()?.required === true;
+}
+
+function getSupabaseAccessToken() {
+  return supabaseIdentity?.access_token || null;
+}
+
+async function ensureSupabaseClient() {
+  const config = getSupabaseAuthConfig();
+  if (!config?.configured) return null;
+  if (supabaseClient) return supabaseClient;
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import('https://esm.sh/@supabase/supabase-js@2')
+      .then((mod) => {
+        supabaseClient = mod.createClient(config.url, config.anon_key, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true,
+          },
+        });
+        return supabaseClient;
+      })
+      .catch((err) => {
+        supabaseClientPromise = null;
+        throw err;
+      });
+  }
+  return supabaseClientPromise;
+}
+
+async function loadPublicAuthConfig() {
+  try {
+    const data = await api('/api/public-auth-config', { timeoutMs: 5000, retries: 0 });
+    publicAuthConfig = data?.supabase_auth || null;
+  } catch (_) {
+    publicAuthConfig = null;
+  }
+  return publicAuthConfig;
+}
+
+function setSupabaseIdentityFromSession(session) {
+  const user = session?.user || null;
+  const metadata = user?.user_metadata || {};
+  const displayName = String(
+    metadata?.full_name || metadata?.name || metadata?.display_name || metadata?.user_name || ''
+  ).trim();
+  const email = String(user?.email || '').trim();
+  supabaseIdentity = session && user ? {
+    user_id: user.id || null,
+    email: email || null,
+    display_name: displayName || null,
+    label: displayName || email || null,
+    access_token: session.access_token || null,
+  } : null;
+}
+
+async function initializeSupabaseAuth() {
+  const config = getSupabaseAuthConfig();
+  const authCallbackPresent = hasSupabaseAuthCallbackParams();
+  if (authCallbackPresent) {
+    supabasePasswordReentryRequired = true;
+    clearLocalWorkspaceSession();
+  }
+  if (!config?.configured) {
+    supabaseIdentity = null;
+    supabaseAuthState = 'idle';
+    supabaseAuthError = '';
+    renderLoginIdentity();
+    return null;
+  }
+  const client = await ensureSupabaseClient();
+  if (!client) return null;
+  if (!supabaseAuthListenerBound) {
+    client.auth.onAuthStateChange((_event, session) => {
+      setSupabaseIdentityFromSession(session);
+      if (session?.access_token) {
+        supabaseAuthState = 'signed_in';
+        supabaseAuthError = '';
+        loginVerificationStage = 'unlock';
+        if (supabasePasswordReentryRequired) clearLocalWorkspaceSession();
+        clearSupabaseAuthCallbackParams();
+      } else if (supabaseAuthState !== 'pending') {
+        supabaseAuthState = 'signed_out';
+      }
+      renderLoginIdentity();
+      renderAnalysisIdentity();
+      updateAnalyzeButtonState();
+    });
+    supabaseAuthListenerBound = true;
+  }
+  try {
+    const { data } = await client.auth.getSession();
+    setSupabaseIdentityFromSession(data?.session || null);
+    supabaseAuthState = supabaseIdentity ? 'signed_in' : (supabaseMagicLinkEmail ? 'pending' : 'signed_out');
+    if (supabaseIdentity || supabaseMagicLinkEmail) loginVerificationStage = 'unlock';
+    if (supabaseIdentity?.access_token && authCallbackPresent) {
+      supabasePasswordReentryRequired = true;
+      clearLocalWorkspaceSession();
+    }
+    if (supabaseIdentity) supabaseAuthError = '';
+    if (supabaseIdentity?.access_token) clearSupabaseAuthCallbackParams();
+  } catch (_) {
+    supabaseAuthState = 'signed_out';
+    supabaseIdentity = null;
+  }
+  renderLoginIdentity();
+  return supabaseIdentity;
+}
+
+function renderLoginIdentity() {
+  const emailStage = $('#login-email-stage');
+  const unlockStage = $('#login-unlock-stage');
+  const emailInput = $('#login-email-input');
+  const requestBtn = $('#login-request-code');
+  const unlockBtn = $('#login-unlock-button');
+  const status = $('#login-status');
+  const note = $('#login-stage-note');
+  if (!emailStage || !unlockStage || !emailInput || !requestBtn || !unlockBtn || !status || !note) return;
+
+  const config = getSupabaseAuthConfig();
+  const authReady = !!getSupabaseAccessToken();
+  const showUnlockStage = authReady;
+
+  emailStage.hidden = authReady;
+  unlockStage.hidden = !showUnlockStage;
+  requestBtn.disabled = supabaseAuthState === 'sending';
+  unlockBtn.disabled = false;
+  emailInput.disabled = authReady;
+
+  if (authReady) {
+    const label = supabaseIdentity?.label || supabaseIdentity?.email || 'Verified user';
+    status.textContent = `Email verified as ${label}. Enter your workspace password to continue.`;
+    status.className = 'login-status is-success';
+    note.textContent = 'Verification complete. Your identity will be attached to any analysis you start.';
+  } else if (!config?.configured) {
+    status.textContent = 'Email verification is not configured yet in this local environment.';
+    status.className = 'login-status is-error';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  } else if (supabaseAuthState === 'sending') {
+    status.textContent = 'Requesting verification link…';
+    status.className = 'login-status';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  } else if (supabaseAuthState === 'pending') {
+    status.textContent = supabaseMagicLinkEmail
+      ? `Verification link sent to ${supabaseMagicLinkEmail}.`
+      : 'Check your inbox for the verification link.';
+    status.className = 'login-status is-success';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  } else if (supabaseAuthState === 'error' && supabaseAuthError) {
+    status.textContent = supabaseAuthError;
+    status.className = 'login-status is-error';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  } else {
+    status.textContent = '';
+    status.className = 'login-status';
+    note.textContent = 'Click the verification link in your email, then enter your workspace password.';
+  }
+}
+
+function renderAnalysisIdentity() {
+  const section = $('#analysis-identity-section');
+  const status = $('#analysis-identity-status');
+  const signedOut = $('#analysis-identity-signed-out');
+  const signedIn = $('#analysis-identity-signed-in');
+  const userEl = $('#analysis-identity-user');
+  const pendingEl = $('#analysis-identity-pending');
+  const sendBtn = $('#analysis-identity-send');
+  const emailInput = $('#analysis-identity-email');
+  if (!section || !status || !signedOut || !signedIn || !userEl || !pendingEl || !sendBtn || !emailInput) return;
+
+  const config = getSupabaseAuthConfig();
+  if (!config?.configured) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = 'block';
+  const label = supabaseIdentity?.label || 'Unknown';
+  const email = supabaseIdentity?.email || '';
+  const authReady = !!getSupabaseAccessToken();
+  signedOut.style.display = authReady ? 'none' : 'block';
+  signedIn.style.display = authReady ? 'block' : 'none';
+  pendingEl.style.display = supabaseAuthState === 'pending' && supabaseMagicLinkEmail ? 'block' : 'none';
+  pendingEl.textContent = supabaseMagicLinkEmail ? `Magic link sent to ${supabaseMagicLinkEmail}.` : '';
+  sendBtn.disabled = supabaseAuthState === 'sending';
+
+  if (authReady) {
+    status.textContent = config.required
+      ? 'Signed in. New runs will be stamped with this identity.'
+      : 'Signed in. This identity will be attached to any new run you start.';
+    userEl.textContent = email && label !== email ? `${label} · ${email}` : label;
+  } else if (supabaseAuthState === 'error' && supabaseAuthError) {
+    status.textContent = supabaseAuthError;
+  } else if (supabaseAuthState === 'sending') {
+    status.textContent = 'Sending magic link…';
+  } else if (supabaseAuthState === 'pending') {
+    status.textContent = 'Check your inbox to finish signing in.';
+  } else {
+    status.textContent = config.required
+      ? 'Sign in with Supabase before starting a new analysis.'
+      : 'Optional: sign in with Supabase so new runs show who started them.';
+  }
+}
+
+function updateAnalyzeButtonState() {
+  const button = $('#analyze-btn');
+  if (!button) return;
+  const identityReady = !isSupabaseAuthRequired() || !!getSupabaseAccessToken();
+  button.disabled = uploadedFiles.length === 0 || !identityReady;
+  button.title = identityReady ? '' : 'Sign in with Supabase before starting an analysis.';
 }
 
 async function backfillRecentRunsWithLlm() {
@@ -4534,6 +5984,142 @@ function mergeSavedAndRecentRuns() {
   });
 }
 
+function normalizeCompanyGroupKey(companyName, startupSlug) {
+  const normalize = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const nameToken = normalize(companyName);
+  if (nameToken) return `name:${nameToken}`;
+  const slugToken = normalize(startupSlug);
+  if (slugToken) return `slug:${slugToken}`;
+  return 'name:unknown';
+}
+
+function buildCompaniesFromJobs(runs) {
+  const grouped = new Map();
+
+  for (const run of runs || []) {
+    const results = run?.results;
+    if (!results || typeof results !== 'object') continue;
+    const createdAt = run.createdAt || run.updatedAt || null;
+    const payloadMode = results.mode;
+    const sourceMode = run.input_mode || payloadMode || null;
+    const extracted = [];
+
+    if (payloadMode === 'single') {
+      const companyName = results.company_name || results.startup_slug || run.jobId;
+      const startupSlug = results.startup_slug || null;
+      const ranking = results.ranking_result || {};
+      extracted.push({
+        companyName,
+        startupSlug,
+        run: {
+          job_id: run.jobId,
+          startup_slug: startupSlug,
+          decision: results.decision,
+          total_score: results.total_score,
+          composite_score: ranking.composite_score,
+          bucket: ranking.bucket,
+          mode: sourceMode,
+          input_order: null,
+          created_at: createdAt,
+          started_by_user_id: run.started_by_user_id || null,
+          started_by_email: run.started_by_email || null,
+          started_by_display_name: run.started_by_display_name || null,
+          started_by_label: run.started_by_label || null,
+          results,
+        },
+      });
+    } else {
+      for (const summaryRow of (results.summary_rows || [])) {
+        const companyName = summaryRow.company_name || summaryRow.startup_slug || run.jobId;
+        const startupSlug = summaryRow.startup_slug || null;
+        extracted.push({
+          companyName,
+          startupSlug,
+          run: {
+            job_id: run.jobId,
+            startup_slug: startupSlug,
+            decision: summaryRow.decision,
+            total_score: summaryRow.total_score,
+            composite_score: summaryRow.composite_score,
+            bucket: summaryRow.bucket,
+            mode: sourceMode,
+            input_order: summaryRow.specter_input_order ?? null,
+            created_at: createdAt,
+            started_by_user_id: run.started_by_user_id || null,
+            started_by_email: run.started_by_email || null,
+            started_by_display_name: run.started_by_display_name || null,
+            started_by_label: run.started_by_label || null,
+            results: {
+              mode: 'single',
+              source_mode: payloadMode || 'batch',
+              startup_slug: startupSlug,
+              company_name: companyName,
+              decision: summaryRow.decision,
+              total_score: summaryRow.total_score,
+              avg_pro: summaryRow.avg_pro,
+              avg_contra: summaryRow.avg_contra,
+              summary_rows: [summaryRow],
+              argument_rows: (results.argument_rows || []).filter((row) => (row.startup_slug || '') === (startupSlug || '')),
+              qa_provenance_rows: (results.qa_provenance_rows || []).filter((row) => (row.startup_slug || '') === (startupSlug || '')),
+              founders: summaryRow.founders || [],
+              team_members: summaryRow.team_members || [],
+              ranking_result: {
+                rank: summaryRow.rank,
+                percentile: summaryRow.percentile,
+                composite_score: summaryRow.composite_score,
+                strategy_fit_score: summaryRow.strategy_fit_score,
+                team_score: summaryRow.team_score,
+                upside_score: summaryRow.upside_score,
+                bucket: summaryRow.bucket,
+                strategy_fit_summary: summaryRow.strategy_fit_summary,
+                team_summary: summaryRow.team_summary,
+                potential_summary: summaryRow.potential_summary,
+                key_points: summaryRow.key_points,
+                red_flags: summaryRow.red_flags,
+              },
+            },
+          },
+        });
+      }
+    }
+
+    for (const item of extracted) {
+      const lookupKey = normalizeCompanyGroupKey(item.companyName, item.startupSlug);
+      const entry = grouped.get(lookupKey) || {
+        company_key: item.startupSlug || item.companyName,
+        company_lookup_key: lookupKey,
+        company_name: item.companyName,
+        latest_score: item.run.composite_score,
+        latest_total_score: item.run.total_score,
+        latest_input_order: item.run.input_order,
+        latest_run_at: item.run.created_at,
+        runs: [],
+      };
+      entry.runs.push(item.run);
+      grouped.set(lookupKey, entry);
+    }
+  }
+
+  const companies = Array.from(grouped.values());
+  for (const company of companies) {
+    company.runs.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+    if (company.runs.length) {
+      const latest = company.runs[0];
+      const latestResult = latest.results || {};
+      const latestSummary = ((latestResult.summary_rows || [])[0]) || {};
+      company.company_key = latest.startup_slug || latestResult.startup_slug || latestSummary.startup_slug || company.company_key;
+      company.company_name = latestResult.company_name || latestSummary.company_name || company.company_name;
+      company.latest_score = latest.composite_score;
+      company.latest_total_score = latest.total_score;
+      company.latest_input_order = latest.input_order;
+      company.latest_run_at = latest.created_at;
+    }
+  }
+
+  companies.sort((a, b) => new Date(b.latest_run_at || 0).getTime() - new Date(a.latest_run_at || 0).getTime());
+  return companies;
+}
+
 function getServerAuthoritativeRuns() {
   const savedRuns = savedJobsCache
     .filter((run) => run?.jobId)
@@ -4569,6 +6155,7 @@ function renderSavedJobCards(
     const metaBits = [
       createdLine ? `Saved ${createdLine}` : '',
       modeLabel,
+      run.started_by_label ? `Started by ${run.started_by_label}` : 'Legacy run',
       run.useWebSearch === true ? 'Web search on' : '',
       run.jobId ? `Job ${run.jobId}` : '',
     ].filter(Boolean);
@@ -4844,7 +6431,6 @@ function renderAnalysisHistoryScreen() {
 
 function getSavedCompanySortLabel(mode) {
   if (mode === 'latest') return 'Latest';
-  if (mode === 'alphabetical') return 'Alphabetical';
   if (mode === 'strategy_fit') return 'Strategy Fit';
   if (mode === 'team') return 'Team';
   if (mode === 'upside') return 'Potential';
@@ -4860,12 +6446,6 @@ function getCompanyDimScores(company) {
   // 1. dimension_scores array (single-mode runs with full ranking)
   if (ranking.dimension_scores?.length) {
     for (const d of ranking.dimension_scores) {
-      dimScores[d.dimension] = d.adjusted_score ?? d.score ?? null;
-    }
-  }
-  // 1b. summary dimension_scores array (batch rows / compact saved runs)
-  if (!Object.keys(dimScores).length && summary.dimension_scores?.length) {
-    for (const d of summary.dimension_scores) {
       dimScores[d.dimension] = d.adjusted_score ?? d.score ?? null;
     }
   }
@@ -4891,19 +6471,11 @@ function filterSavedCompanies(companies) {
 
 function sortSavedCompanies(companies) {
   const list = [...companies];
-  if (savedCompanySortMode === 'alphabetical') {
-    list.sort((a, b) => String(a.company_name || '').localeCompare(String(b.company_name || '')));
-    return list;
-  }
   if (savedCompanySortMode === 'latest') {
     list.sort((a, b) => {
       const aTs = new Date(a.latest_run_at || 0).getTime();
       const bTs = new Date(b.latest_run_at || 0).getTime();
-      if (aTs !== bTs) return bTs - aTs;
-      const aScore = Number(a.latest_score ?? a.latest_total_score ?? -999999);
-      const bScore = Number(b.latest_score ?? b.latest_total_score ?? -999999);
-      if (aScore !== bScore) return bScore - aScore;
-      return String(a.company_name || a.company_key || '').localeCompare(String(b.company_name || b.company_key || ''), undefined, { sensitivity: 'base' });
+      return bTs - aTs;
     });
     return list;
   }
@@ -4927,12 +6499,16 @@ function sortSavedCompanies(companies) {
   return list;
 }
 
+function getCompanyLookupKey(company) {
+  return company?.company_lookup_key || company?.company_key || '';
+}
+
 function getSelectedCompanyState(companies) {
   const ordered = companies || [];
-  let company = ordered.find((item) => item.company_key === selectedCompanyKey) || null;
+  let company = ordered.find((item) => getCompanyLookupKey(item) === selectedCompanyKey) || null;
   if (!company && ordered.length) {
     company = ordered[0];
-    selectedCompanyKey = company.company_key;
+    selectedCompanyKey = getCompanyLookupKey(company);
   }
   let run = company?.runs?.find((item) => item.job_id === selectedCompanyJobId) || null;
   if (!run && company?.runs?.length) {
@@ -4940,6 +6516,419 @@ function getSelectedCompanyState(companies) {
     selectedCompanyJobId = run.job_id || null;
   }
   return { company, run };
+}
+
+function setCompaniesSidebarCollapsed(nextValue) {
+  companiesSidebarCollapsed = !!nextValue;
+  localStorage.setItem(COMPANIES_SIDEBAR_COLLAPSED_KEY, companiesSidebarCollapsed ? '1' : '0');
+}
+
+function setCompanyAssessmentCollapsed(nextValue) {
+  companyAssessmentCollapsed = !!nextValue;
+  localStorage.setItem(COMPANY_ASSESSMENT_COLLAPSED_KEY, companyAssessmentCollapsed ? '1' : '0');
+}
+
+function getCompanyChatState(companyLookupKey) {
+  if (!companyLookupKey) return null;
+  if (!companyChatStateByKey[companyLookupKey]) {
+    companyChatStateByKey[companyLookupKey] = {
+      loaded: false,
+      loading: false,
+      sending: false,
+      error: '',
+      transcript: [],
+      source_counts: {},
+      run_count: 0,
+      web_search_enabled: true,
+      model_label: 'Gemini 3.1 Flash Lite',
+      selectedLlmKey: 'gemini:gemini-3.1-flash-lite-preview',
+      sessionRunCosts: null,
+      availableModels: [],
+      draft: '',
+      lastQuestion: '',
+    };
+  }
+  return companyChatStateByKey[companyLookupKey];
+}
+
+function getChatAvailableModels(state) {
+  const fromState = (state?.availableModels || []).filter((item) => item?.available && item?.provider !== 'openrouter');
+  if (fromState.length) return fromState;
+  return (analysisConfig?.available_models || []).filter((item) => item?.available && item?.provider !== 'openrouter');
+}
+
+function formatChatCostSummary(costs) {
+  if (!costs || costs.status === 'unavailable') return 'Cost unavailable';
+  if (costs.total_usd === null || costs.total_usd === undefined) return 'Cost partial';
+  return formatUsd(costs.total_usd);
+}
+
+async function fetchCompanyChat(companyLookupKey, { silent = true, force = false } = {}) {
+  const state = getCompanyChatState(companyLookupKey);
+  if (!state) return null;
+  if (state.loading) return state;
+  if (state.loaded && !force) return state;
+  state.loading = true;
+  state.error = '';
+  renderSavedCompaniesWindow();
+  try {
+    const data = await api(`/api/companies/${encodeURIComponent(companyLookupKey)}/chat`, { timeoutMs: 15000, retries: 1 });
+    state.loaded = true;
+    state.loading = false;
+    state.transcript = data.transcript || [];
+    state.source_counts = data.source_counts || {};
+    state.run_count = data.run_count || 0;
+    state.web_search_enabled = data.web_search_enabled !== false;
+    state.model_label = data.model_label || 'Gemini 3.1 Flash Lite';
+    state.selectedLlmKey = data.llm_provider && data.llm_model ? `${data.llm_provider}:${data.llm_model}` : state.selectedLlmKey;
+    state.sessionRunCosts = data.session_run_costs || null;
+    state.availableModels = data.available_models || state.availableModels || [];
+    state.error = '';
+    renderSavedCompaniesWindow();
+    return state;
+  } catch (err) {
+    state.loading = false;
+    if (!silent) {
+      state.error = err.message || 'Failed to load chat.';
+      renderSavedCompaniesWindow();
+    }
+    return state;
+  }
+}
+
+async function sendCompanyChatMessage(companyLookupKey, activeJobId, message) {
+  const state = getCompanyChatState(companyLookupKey);
+  if (!state || !message.trim()) return;
+  state.sending = true;
+  state.error = '';
+  state.lastQuestion = message;
+  state.scrollIntent = 'bottom';
+  /* Optimistic: show user bubble immediately before server responds */
+  state.transcript = [...(state.transcript || []), { role: 'user', content: message, citations: [] }];
+  renderSavedCompaniesWindow();
+  try {
+    const selectedModel = getModelByKey(state.selectedLlmKey)
+      || getChatAvailableModels(state).find((item) => `${item.provider}:${item.model}` === state.selectedLlmKey)
+      || null;
+    const data = await api(`/api/companies/${encodeURIComponent(companyLookupKey)}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message,
+        active_job_id: activeJobId || null,
+        llm_provider: selectedModel?.provider || null,
+        llm_model: selectedModel?.model || null,
+      }),
+      timeoutMs: 45000,
+      retries: 0,
+    });
+    state.loaded = true;
+    state.sending = false;
+    state.transcript = data.transcript || [];
+    state.source_counts = data.source_counts || state.source_counts || {};
+    state.run_count = data.run_count || state.run_count || 0;
+    state.web_search_enabled = data.web_search_enabled !== false;
+    state.model_label = data.model_label || state.model_label || 'Gemini 3.1 Flash Lite';
+    state.selectedLlmKey = data.llm_provider && data.llm_model ? `${data.llm_provider}:${data.llm_model}` : state.selectedLlmKey;
+    state.sessionRunCosts = data.session_run_costs || state.sessionRunCosts || null;
+    state.availableModels = data.available_models || state.availableModels || [];
+    state.error = '';
+    state.scrollIntent = 'latest-assistant';
+    renderSavedCompaniesWindow();
+  } catch (err) {
+    state.sending = false;
+    state.error = err.message || 'Chat request failed.';
+    state.scrollIntent = 'bottom';
+    renderSavedCompaniesWindow();
+  }
+}
+
+async function clearCompanyChat(companyLookupKey) {
+  const state = getCompanyChatState(companyLookupKey);
+  if (!state) return;
+  state.sending = true;
+  state.error = '';
+  renderSavedCompaniesWindow();
+  try {
+    await api(`/api/companies/${encodeURIComponent(companyLookupKey)}/chat`, {
+      method: 'DELETE',
+      timeoutMs: 15000,
+      retries: 0,
+    });
+    state.loaded = true;
+    state.sending = false;
+    state.transcript = [];
+    state.sessionRunCosts = null;
+    state.error = '';
+    renderSavedCompaniesWindow();
+  } catch (err) {
+    state.sending = false;
+    state.error = err.message || 'Could not clear chat.';
+    renderSavedCompaniesWindow();
+  }
+}
+
+function openChatCitationModal(registryKey) {
+  const citation = companyChatCitationRegistry[registryKey];
+  if (!citation) return;
+  const meta = [
+    citation.job_id ? `Run ${citation.job_id}` : '',
+    citation.created_at ? formatRunTimestamp(citation.created_at) : '',
+    citation.web_search_provider ? `Provider ${String(citation.web_search_provider).toUpperCase()}` : '',
+    citation.web_search_cost_usd != null ? `Cost ${formatUsd(citation.web_search_cost_usd)}` : '',
+    citation.source_file || '',
+    citation.page_or_slide ? `Location ${citation.page_or_slide}` : '',
+  ].filter(Boolean);
+  let html = `<div class="audit-section"><div class="audit-section-title">${escapeHtml(citation.kind || 'Source')}</div><div class="audit-section-body">`;
+  if (meta.length) {
+    html += `<div class="audit-decision-reason" style="margin-bottom:12px">${escapeHtml(meta.join(' • '))}</div>`;
+  }
+  if (citation.question) {
+    html += `<div class="audit-qa-q">Q: ${escapeHtml(citation.question)}</div>`;
+  }
+  if (citation.answer) {
+    html += `<div class="audit-qa-a" style="margin-bottom:10px">${escapeHtml(citation.answer)}</div>`;
+  }
+  if (citation.argument_type || citation.score != null) {
+    html += `<div class="audit-arg-header"><span class="audit-arg-type ${escapeHtml((citation.argument_type || '').toLowerCase())}">${escapeHtml((citation.argument_type || 'argument').toUpperCase())}</span><span style="font-size:12px;color:var(--text-dim)">Score ${escapeHtml(String(citation.score ?? 'n/a'))}</span></div>`;
+  }
+  if (citation.web_search_query) {
+    html += `<div class="audit-qa-q">Query: ${escapeHtml(citation.web_search_query)}</div>`;
+  }
+  html += `<div class="audit-expand-content" style="display:block;max-height:none">${escapeHtml(citation.web_search_results || citation.excerpt || '')}</div>`;
+  html += `</div></div>`;
+  $('#audit-modal-title').textContent = citation.label || 'Source';
+  $('#audit-modal-content').innerHTML = html;
+  $('#audit-modal-overlay').classList.add('audit-modal-open');
+}
+
+function _generateChatFollowups(companyName, transcript, run) {
+  /* Show follow-ups only after the last message is from the assistant */
+  if (!transcript.length) return [];
+  const last = transcript[transcript.length - 1];
+  if (last.role !== 'assistant') return [];
+
+  const answer = (last.content || '').toLowerCase();
+  const question = transcript.length >= 2
+    ? (transcript[transcript.length - 2].content || '').toLowerCase()
+    : '';
+  const result = run?.results || {};
+  const summary = (result.summary_rows || [])[0] || {};
+  const ranking = result.ranking_result || {};
+  const asked = new Set(
+    transcript.filter((m) => m.role === 'user').map((m) => m.content.toLowerCase().trim())
+  );
+
+  /* Pool of contextual follow-ups — pick ones relevant to the conversation */
+  const pool = [];
+
+  /* If the answer mentioned risks or concerns */
+  if (/risk|concern|weak|threat|challeng/i.test(answer)) {
+    pool.push(`What mitigates these risks?`);
+    pool.push(`How does the team address these challenges?`);
+  }
+  /* If strengths or positive signals were discussed */
+  if (/strong|advantage|strength|opportunity|promising/i.test(answer)) {
+    pool.push(`What could go wrong despite these strengths?`);
+    pool.push(`How defensible is this advantage?`);
+  }
+  /* If revenue / financials were discussed */
+  if (/revenue|margin|burn|funding|valuation|arr|mrr/i.test(answer)) {
+    pool.push(`What's the path to profitability?`);
+    pool.push(`How does the unit economics look?`);
+  }
+  /* If team was discussed */
+  if (/team|founder|ceo|cto|executive|leadership/i.test(answer)) {
+    pool.push(`What's the team's relevant prior experience?`);
+    pool.push(`Any red flags in the founding team?`);
+  }
+  /* If market was discussed */
+  if (/market|tam|sam|competitor|industry/i.test(answer)) {
+    pool.push(`Who are the main competitors?`);
+    pool.push(`What's the market sizing?`);
+  }
+
+  /* Generic follow-ups based on available data */
+  if (ranking.composite_score != null || summary.composite_score != null) {
+    pool.push(`Why did ${companyName} get this score?`);
+  }
+  if (result.pro_arguments?.length) {
+    pool.push(`Summarize the top pro arguments`);
+  }
+  if (result.contra_arguments?.length) {
+    pool.push(`What are the biggest contra arguments?`);
+  }
+
+  /* Fallback generic questions */
+  pool.push(`What's the investment thesis?`);
+  pool.push(`Summarize the key findings`);
+  pool.push(`What would you investigate further?`);
+
+  /* Filter out already-asked questions and dedupe */
+  const seen = new Set();
+  return pool.filter((q) => {
+    const low = q.toLowerCase().trim();
+    if (asked.has(low)) return false;
+    if (seen.has(low)) return false;
+    seen.add(low);
+    return true;
+  }).slice(0, 3);
+}
+
+function renderCompanyChatSection(company, run) {
+  const companyLookupKey = getCompanyLookupKey(company);
+  const state = getCompanyChatState(companyLookupKey);
+  if (!state) return '';
+  const assessmentToggleTitle = companyAssessmentCollapsed ? 'Show company assessment' : 'Hide company assessment';
+
+  const companyName = company?.company_name || run?.results?.company_name || 'this company';
+  const transcript = state.transcript || [];
+
+  companyChatCitationRegistry = {};
+  const messagesHtml = transcript.length
+    ? transcript.map((message, msgIndex) => {
+        const citations = (message.citations || []).map((citation, citationIndex) => {
+          const key = `${companyLookupKey}::${msgIndex}::${citationIndex}`;
+          companyChatCitationRegistry[key] = citation;
+          const tag = citation.kind === 'web' ? 'WEB' : citation.kind.toUpperCase();
+          return `<button type="button" class="company-chat-citation" data-chat-citation="${escapeHtml(key)}">${escapeHtml(tag)} · ${escapeHtml(citation.label || 'Source')}</button>`;
+        }).join('');
+        const usedWeb = (message.citations || []).some((citation) => citation.kind === 'web');
+        const webBadge = usedWeb ? `<span class="company-chat-web-badge"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> Web</span>` : '';
+        const webCitation = (message.citations || []).find((citation) => citation.kind === 'web') || null;
+        const webCitationKey = webCitation ? `${companyLookupKey}::${msgIndex}::web-cost` : '';
+        if (webCitation) {
+          companyChatCitationRegistry[webCitationKey] = webCitation;
+        }
+        const webSearchCost = Number(message.run_costs?.perplexity_usd || 0);
+        const turnMeta = message.role === 'assistant'
+          ? `<div class="company-chat-turn-meta">
+              ${message.llm_label ? `<span class="company-chat-turn-pill">${escapeHtml(message.llm_label)}</span>` : ''}
+              ${message.run_costs ? `<span class="company-chat-turn-pill">Q&A cost ${escapeHtml(formatChatCostSummary(message.run_costs))}</span>` : ''}
+              ${webCitation ? `<button type="button" class="company-chat-turn-pill" data-chat-citation="${escapeHtml(webCitationKey)}">Web-search cost ${escapeHtml(webSearchCost > 0 ? formatUsd(webSearchCost) : 'Used')}</button>` : ''}
+            </div>`
+          : '';
+        return `<div class="company-chat-message ${message.role}" data-chat-role="${escapeHtml(message.role)}" data-chat-message-index="${msgIndex}">
+          ${webBadge}
+          <div class="company-chat-content">${escapeHtml(message.content || '')}</div>
+          ${turnMeta}
+          ${citations ? `<div class="company-chat-citations">${citations}</div>` : ''}
+        </div>`;
+      }).join('')
+    : (state.sending ? '' : `<div class="company-chat-empty">Ask anything about ${escapeHtml(companyName)}. Answers draw from your saved analysis runs.</div>`);
+
+  const typingIndicatorHtml = state.sending
+    ? `<div class="company-chat-message assistant typing" aria-live="polite" aria-label="Generating response">
+        <div class="company-chat-content">
+          <div class="company-chat-typing" aria-hidden="true">
+            <span class="company-chat-typing-dot"></span>
+            <span class="company-chat-typing-dot"></span>
+            <span class="company-chat-typing-dot"></span>
+          </div>
+        </div>
+      </div>`
+    : '';
+
+  /* Follow-up suggestions — only when not sending and last message is assistant */
+  const followups = !state.sending ? _generateChatFollowups(companyName, transcript, run) : [];
+  const followupsHtml = followups.length
+    ? `<div class="company-chat-followups">${followups.map((q) =>
+        `<button type="button" class="company-chat-followup" data-chat-followup="${escapeHtml(q)}">${escapeHtml(q)}</button>`
+      ).join('')}</div>`
+    : '';
+
+  const loadingHtml = state.loading && !transcript.length
+    ? `<div class="company-chat-empty">Loading conversation…</div>`
+    : `${messagesHtml}${typingIndicatorHtml}${followupsHtml}`;
+
+  const errorHtml = state.error ? `<div class="company-chat-error">${escapeHtml(state.error)}</div>` : '';
+  const disabled = state.sending ? 'disabled' : '';
+  const modelLabel = state.model_label || 'Gemini 3.1 Flash Lite';
+  const runCount = state.run_count || 0;
+  const availableModels = getChatAvailableModels(state);
+  const selectedLlmKey = state.selectedLlmKey || '';
+  const formatChatModelOptionLabel = (item) => {
+    const base = String(item?.label || item?.model || 'Model').replace(/^OpenRouter · /, '');
+    if (item?.provider === 'openrouter' && !/via OpenRouter$/i.test(base)) {
+      return `${base} via OpenRouter`;
+    }
+    return base;
+  };
+  const tierOrder = ['budget', 'balanced', 'premium'];
+  const tierLabels = { budget: 'Budget', balanced: 'Balanced', premium: 'Premium' };
+  const groupedModels = new Map();
+  availableModels.forEach((item) => {
+    const tier = tierOrder.includes(item?.tier) ? item.tier : 'other';
+    if (!groupedModels.has(tier)) groupedModels.set(tier, []);
+    groupedModels.get(tier).push(item);
+  });
+  const modelOptionsHtml = [...tierOrder, 'other']
+    .filter((tier) => groupedModels.has(tier))
+    .map((tier) => {
+      const options = groupedModels.get(tier).map((item) => {
+        const key = `${item.provider}:${item.model}`;
+        return `<option value="${escapeHtml(key)}" ${selectedLlmKey === key ? 'selected' : ''}>${escapeHtml(formatChatModelOptionLabel(item))}</option>`;
+      }).join('');
+      if (tier === 'other') return options;
+      return `<optgroup label="${escapeHtml(tierLabels[tier])}">${options}</optgroup>`;
+    }).join('');
+  const selectedModel = availableModels.find((item) => `${item.provider}:${item.model}` === selectedLlmKey) || null;
+  const selectedModelHint = selectedModel
+    ? `${selectedModel.summary || selectedModel.tier || ''}${selectedModel.pricing_available === false ? ' · pricing TBD' : ''}`
+    : 'Choose the model used to answer this company chat.';
+  const contextNote = `${runCount} run${runCount === 1 ? '' : 's'} indexed`;
+  const sessionCostText = formatChatCostSummary(state.sessionRunCosts);
+  const questionCount = transcript.filter((message) => message.role === 'assistant').length;
+
+  /* Arrow-up send icon (like iMessage) */
+  const sendIconSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M3.4 20.4l17.45-7.48a1 1 0 0 0 0-1.84L3.4 3.6a.993.993 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>`;
+
+  /* Trash icon for clear */
+  const clearIconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+
+  const modelSparkSvg = `<svg class="company-chat-model-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.4L18 9.2l-4.2 1.8L12 15.5 10.2 11 6 9.2l4.2-1.8L12 3z"/><path d="M18.2 15.2l.9 2.2 2.2.9-2.2.9-.9 2.2-.9-2.2-2.2-.9 2.2-.9.9-2.2z"/><path d="M5.6 14.5l.8 2 .8.3-.8.3-.8 2-.8-2-.8-.3.8-.3.8-2z"/></svg>`;
+  const assessmentChevronSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>`;
+
+  return `
+    <section class="company-chat-card${companyAssessmentCollapsed ? ' is-expanded' : ''}">
+      <div class="company-chat-head">
+        <div class="company-chat-title">
+          <h3>Chat · ${escapeHtml(companyName)}</h3>
+          <p>${contextNote}</p>
+        </div>
+        <div class="company-chat-toolbar">
+          <div class="company-chat-toolbar-top">
+            <label class="company-chat-model-control company-chat-toolbar-main">
+              <span class="company-chat-model-caption">Answer model</span>
+              <span class="company-chat-model-row">
+                <span class="company-chat-model-shell">
+                  ${modelSparkSvg}
+                  <select class="company-chat-model-select" data-company-chat-model="${escapeHtml(companyLookupKey)}" ${disabled} ${availableModels.length ? '' : 'disabled'}>
+                    ${modelOptionsHtml || '<option value="">No chat models available</option>'}
+                  </select>
+                </span>
+                <button type="button" class="company-assessment-toggle${companyAssessmentCollapsed ? ' is-collapsed' : ''}" data-company-assessment-toggle title="${escapeHtml(assessmentToggleTitle)}" aria-label="${escapeHtml(assessmentToggleTitle)}">${assessmentChevronSvg}</button>
+              </span>
+              <span class="company-chat-model-hint">${escapeHtml(selectedModelHint)}</span>
+            </label>
+          </div>
+          <div class="company-chat-head-metrics">
+            <span class="company-chat-metric">${escapeHtml(modelLabel)}</span>
+            <span class="company-chat-metric">Session ${escapeHtml(sessionCostText)}</span>
+            <span class="company-chat-metric">${escapeHtml(String(questionCount))} answer${questionCount === 1 ? '' : 's'}</span>
+          </div>
+        </div>
+      </div>
+      <div class="company-chat-shell">
+        <div class="company-chat-log" data-company-chat-log="${escapeHtml(companyLookupKey)}">${loadingHtml}</div>
+        ${errorHtml}
+        <form class="company-chat-composer" data-company-chat-form="${escapeHtml(companyLookupKey)}">
+          <button type="button" class="company-chat-btn" data-company-chat-clear="${escapeHtml(companyLookupKey)}" ${disabled} title="Clear conversation">${clearIconSvg}</button>
+          <textarea class="company-chat-textarea" data-company-chat-input="${escapeHtml(companyLookupKey)}" placeholder="Ask about ${escapeHtml(companyName)}…" rows="1" ${disabled}>${escapeHtml(state.draft || '')}</textarea>
+          <button type="submit" class="company-chat-btn primary" ${disabled} title="Send message">${state.sending ? '<span class="company-chat-shimmer mono" style="font-size:0;width:18px;height:18px;display:block;background:rgba(255,255,255,0.3);border-radius:50%;animation:chat-dot-bounce 1.4s ease-in-out infinite"></span>' : sendIconSvg}</button>
+        </form>
+      </div>
+    </section>
+  `;
 }
 
 function getCompanyDetailArgumentHtml(result, type) {
@@ -4969,6 +6958,7 @@ function renderCompanyDetail(company, run) {
   const ranking = result.ranking_result || {};
   const companyName = result.company_name || company?.company_name || 'Unknown company';
   const companySlug = result.startup_slug || summary.startup_slug || company?.company_key || companyName;
+  const companyLookupKey = getCompanyLookupKey(company);
   const subtitleBits = [
     formatRunTimestamp(run?.created_at),
     run?.mode ? getRunModeLabel({ input_mode: run.mode }) : '',
@@ -4979,20 +6969,15 @@ function renderCompanyDetail(company, run) {
   const composite = ranking.composite_score ?? run?.composite_score ?? summary.composite_score ?? result.total_score ?? run?.total_score ?? '—';
   const bucket = ranking.bucket || run?.bucket || summary.bucket || '';
   const bucketLabel = bucket === 'priority_review' ? 'Priority Review' : bucket === 'watchlist' ? 'Watchlist' : bucket ? 'Low Priority' : '';
-  const detailDimScores = ranking.dimension_scores?.length
-    ? ranking.dimension_scores
-    : (summary.dimension_scores?.length
-      ? summary.dimension_scores
-      : ((summary.strategy_fit_score !== undefined && summary.team_score !== undefined && summary.upside_score !== undefined)
-        ? [
-            { dimension: 'strategy_fit', adjusted_score: summary.strategy_fit_score },
-            { dimension: 'team', adjusted_score: summary.team_score },
-            { dimension: 'upside', adjusted_score: summary.upside_score },
-          ]
-        : []));
-  const dimBars = detailDimScores.length
-    ? buildDimensionBars(detailDimScores, typeof composite === 'number' ? composite : null, companySlug)
-    : '';
+  const dimBars = ranking.dimension_scores?.length
+    ? buildDimensionBars(ranking.dimension_scores, typeof composite === 'number' ? composite : null)
+    : ((summary.strategy_fit_score !== undefined && summary.team_score !== undefined && summary.upside_score !== undefined)
+      ? buildDimensionBars([
+          { dimension: 'strategy_fit', adjusted_score: summary.strategy_fit_score },
+          { dimension: 'team', adjusted_score: summary.team_score },
+          { dimension: 'upside', adjusted_score: summary.upside_score },
+        ], typeof composite === 'number' ? composite : null)
+      : '');
   const executiveSummaryBlock = buildExecutiveSummaryBlock(Object.keys(ranking).length ? ranking : summary);
   const proHtml = getCompanyDetailArgumentHtml(result, 'pro');
   const contraHtml = getCompanyDetailArgumentHtml(result, 'contra');
@@ -5007,35 +6992,40 @@ function renderCompanyDetail(company, run) {
     </button>`;
 
   currentResults = result;
+  const detailStackClass = `company-detail-stack${companyAssessmentCollapsed ? ' is-assessment-collapsed' : ''}`;
+  const assessmentCardHtml = companyAssessmentCollapsed ? '' : `<div class="rank-card">
+        <div class="rank-top">
+          ${rank ? `<span class="rank-badge first">#${escapeHtml(String(rank))}</span>` : ''}
+          <span class="rank-name">${escapeHtml(companyName)}</span>
+          ${bucketLabel ? `<span class="bucket-badge bucket-${bucket.replace(/_/g, '-')}">${bucketLabel}</span>` : ''}
+          <div class="rank-top-actions">${auditButtonHtml}</div>
+        </div>
+        ${dimBars ? `<div class="dim-bars-container">${dimBars}</div>` : ''}
+        ${executiveSummaryBlock ? `<div class="executive-summary-container">${executiveSummaryBlock}</div>` : ''}
+        ${SHOW_PRO_CONTRA_ARGUMENTS && (proHtml || contraHtml) ? `<div class="args-row">
+          <div class="args-col">
+            <div class="title pro">TOP PRO ARGUMENTS</div>
+            ${proHtml || '<div class="arg-item">No pro arguments</div>'}
+          </div>
+          <div class="args-col">
+            <div class="title contra">TOP CONTRA ARGUMENTS</div>
+            ${contraHtml || '<div class="arg-item">No contra arguments</div>'}
+          </div>
+        </div>` : ''}
+        ${personIntelHtml}
+      </div>`;
 
   return `
-    <div class="results-title-row">
-      <div class="results-title">
-        <h1>${escapeHtml(companyName)}</h1>
-        <p>${escapeHtml(subtitleBits.join(' • '))}</p>
-      </div>
-      <button class="recent-run-open" data-job-open="${escapeHtml(run?.job_id || '')}">Open full run</button>
-    </div>
-    <div class="rank-card">
-      <div class="rank-top">
-        ${rank ? `<span class="rank-badge first">#${escapeHtml(String(rank))}</span>` : ''}
-        <span class="rank-name">${escapeHtml(companyName)}</span>
-        ${bucketLabel ? `<span class="bucket-badge bucket-${bucket.replace(/_/g, '-')}">${bucketLabel}</span>` : ''}
-        <div class="rank-top-actions">${auditButtonHtml}</div>
-      </div>
-      ${dimBars ? `<div class="dim-bars-container">${dimBars}</div>` : ''}
-      ${executiveSummaryBlock ? `<div class="executive-summary-container">${executiveSummaryBlock}</div>` : ''}
-      ${SHOW_PRO_CONTRA_ARGUMENTS && (proHtml || contraHtml) ? `<div class="args-row">
-        <div class="args-col">
-          <div class="title pro">TOP PRO ARGUMENTS</div>
-          ${proHtml || '<div class="arg-item">No pro arguments</div>'}
+    <div class="${detailStackClass}" data-company-detail="${escapeHtml(companyLookupKey)}">
+      <div class="results-title-row">
+        <div class="results-title">
+          <h1>${escapeHtml(companyName)}</h1>
+          <p>${escapeHtml(subtitleBits.join(' • '))}</p>
         </div>
-        <div class="args-col">
-          <div class="title contra">TOP CONTRA ARGUMENTS</div>
-          ${contraHtml || '<div class="arg-item">No contra arguments</div>'}
-        </div>
-      </div>` : ''}
-      ${personIntelHtml}
+        <button class="recent-run-open" data-job-open="${escapeHtml(run?.job_id || '')}">Open full run</button>
+      </div>
+      ${assessmentCardHtml}
+      ${renderCompanyChatSection(company, run)}
     </div>
   `;
 }
@@ -5080,13 +7070,20 @@ function renderSavedCompaniesWindow() {
 
   const companies = filterSavedCompanies(sortSavedCompanies(savedCompaniesCache));
   if (companiesPageJustOpened && companies.length > 0) {
-    companies.forEach((c) => companyRunsCollapsed.add(c.company_key));
+    companies.forEach((c) => companyRunsCollapsed.add(getCompanyLookupKey(c)));
     companiesPageJustOpened = false;
   }
 
   // Save sidebar scroll position before re-render
   const sidebar = content.querySelector('.companies-page-sidebar');
-  const savedScrollTop = sidebar ? sidebar.scrollTop : 0;
+  if (sidebar && !companiesSidebarCollapsed) {
+    companiesSidebarScrollTop = sidebar.scrollTop;
+  }
+  const detail = content.querySelector('.companies-page-detail');
+  if (detail) {
+    companiesDetailScrollTop = detail.scrollTop;
+  }
+  const savedPageScrollTop = window.scrollY;
 
   const totalCount = savedCompaniesCache.length;
   if (!savedCompaniesCache.length) {
@@ -5115,11 +7112,12 @@ function renderSavedCompaniesWindow() {
 
   const { company: activeCompany, run: activeRun } = getSelectedCompanyState(companies);
   const sidebarHtml = companies.map((company) => {
+    const companyLookupKey = getCompanyLookupKey(company);
     const latestRun = (company.runs || [])[0] || {};
     const latestScore = latestRun.composite_score ?? latestRun.total_score;
     const runs = company.runs || [];
     const runCount = (company.runs || []).length;
-    const isSelected = company.company_key === activeCompany?.company_key;
+    const isSelected = companyLookupKey === getCompanyLookupKey(activeCompany);
     const latestMode = latestRun.mode ? getRunModeLabel({ input_mode: latestRun.mode }) : '';
     const summaryBits = [
       `${runCount} run${runCount === 1 ? '' : 's'}`,
@@ -5128,7 +7126,7 @@ function renderSavedCompaniesWindow() {
     const scoreDisplay = latestScore === null || latestScore === undefined || latestScore === ''
       ? '—'
       : Number(latestScore).toFixed(1);
-    const isExpanded = !companyRunsCollapsed.has(company.company_key);
+    const isExpanded = !companyRunsCollapsed.has(companyLookupKey);
     const runsHtml = isExpanded && runs.length
       ? `<div class="saved-company-runs">${runs.map((run, index) => {
           const runScore = run.composite_score ?? run.total_score;
@@ -5138,11 +7136,12 @@ function renderSavedCompaniesWindow() {
           const runBits = [
             formatRunTimestamp(run.created_at),
             run.mode ? getRunModeLabel({ input_mode: run.mode }) : '',
+            run.started_by_label ? `Started by ${run.started_by_label}` : 'Legacy run',
             run.job_id ? `Job ${run.job_id}` : '',
             getLlmLabel(run?.results, run?.llm),
           ].filter(Boolean);
           const isActiveRun = run.job_id === activeRun?.job_id;
-          return `<button type="button" class="saved-company-run${isActiveRun ? ' selected' : ''}" data-company-run-open="${escapeHtml(company.company_key)}" data-job-id="${escapeHtml(run.job_id || '')}">
+          return `<button type="button" class="saved-company-run${isActiveRun ? ' selected' : ''}" data-company-run-open="${escapeHtml(companyLookupKey)}" data-job-id="${escapeHtml(run.job_id || '')}">
             <div class="saved-company-run-main">
               <div class="saved-company-run-title">Run ${runs.length - index}</div>
               <div class="saved-company-run-summary">${escapeHtml(runBits.join('  •  '))}</div>
@@ -5152,7 +7151,7 @@ function renderSavedCompaniesWindow() {
         }).join('')}</div>`
       : '';
 
-    return `<div class="saved-company-card${isSelected ? ' selected' : ''}" data-company-select="${escapeHtml(company.company_key)}">
+    return `<div class="saved-company-card${isSelected ? ' selected' : ''}" data-company-select="${escapeHtml(companyLookupKey)}">
       <div class="saved-company-header">
         <div class="saved-company-main">
           <div class="saved-company-name">${escapeHtml(company.company_name || 'Unknown company')}</div>
@@ -5172,41 +7171,60 @@ function renderSavedCompaniesWindow() {
         </div>
         Select a company on the left to view its scoring and run history.
       </div>`;
-
-  content.innerHTML = `<div class="companies-page">
-    <div class="companies-page-sidebar">
-      <div class="companies-sidebar-shell">
-        <div class="companies-sidebar-head">
-          <div class="companies-sidebar-head-row">
-            <div class="companies-sidebar-title">Companies</div>
-            <div class="companies-sidebar-count">${companies.length}${companies.length !== totalCount ? `<span class="companies-sidebar-count-total"> / ${totalCount}</span>` : ''}</div>
-          </div>
-          <div class="companies-sidebar-search-wrap">
-            <span class="companies-sidebar-search-icon">⌕</span>
-            <input id="companies-search-input" class="companies-sidebar-search-input" type="text" placeholder="Search companies…" autocomplete="off" value="${escapeHtml(savedCompanySearch)}">
-            ${savedCompanySearch ? `<button class="companies-sidebar-search-clear" id="companies-search-clear" title="Clear">✕</button>` : ''}
-          </div>
-          <label class="companies-sidebar-sort" for="companies-sort-select">
-            <span class="companies-sidebar-sort-icon">⇅</span>
-            <select id="companies-sort-select" class="companies-sidebar-sort-select">
-              <option value="top_scored">TOP SCORED</option>
-              <option value="latest">LATEST</option>
-              <option value="alphabetical">ALPHABETICAL</option>
-              <option value="strategy_fit">STRATEGY FIT</option>
-              <option value="team">TEAM</option>
-              <option value="upside">POTENTIAL</option>
-            </select>
-          </label>
+  const collapseIconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>`;
+  const expandIconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>`;
+  const sidebarPanelHtml = companiesSidebarCollapsed
+    ? `<div class="companies-page-sidebar is-collapsed">
+        <div class="companies-sidebar-rail">
+          <button type="button" class="companies-sidebar-toggle" data-companies-sidebar-toggle="expand" title="Show companies" aria-label="Show companies">${expandIconSvg}</button>
+          <div class="companies-sidebar-collapsed-badge">${companies.length}</div>
+          <div class="companies-sidebar-collapsed-hint">Companies</div>
         </div>
-        <div class="companies-page-list">${sidebarHtml}</div>
-      </div>
-    </div>
-    <div class="companies-page-detail">${detailHtml}</div>
+      </div>`
+    : `<div class="companies-page-sidebar">
+        <div class="companies-sidebar-shell">
+          <div class="companies-sidebar-head">
+            <div class="companies-sidebar-head-row">
+              <div class="companies-sidebar-title">Companies</div>
+              <div class="companies-sidebar-head-actions">
+                <div class="companies-sidebar-count">${companies.length}${companies.length !== totalCount ? `<span class="companies-sidebar-count-total"> / ${totalCount}</span>` : ''}</div>
+                <button type="button" class="companies-sidebar-toggle" data-companies-sidebar-toggle="collapse" title="Hide companies" aria-label="Hide companies">${collapseIconSvg}</button>
+              </div>
+            </div>
+            <div class="companies-sidebar-search-wrap">
+              <span class="companies-sidebar-search-icon">⌕</span>
+              <input id="companies-search-input" class="companies-sidebar-search-input" type="text" placeholder="Search companies…" autocomplete="off" value="${escapeHtml(savedCompanySearch)}">
+              ${savedCompanySearch ? `<button class="companies-sidebar-search-clear" id="companies-search-clear" title="Clear">✕</button>` : ''}
+            </div>
+            <label class="companies-sidebar-sort" for="companies-sort-select">
+              <span class="companies-sidebar-sort-icon">⇅</span>
+              <select id="companies-sort-select" class="companies-sidebar-sort-select">
+                <option value="top_scored">TOP SCORED</option>
+                <option value="latest">LATEST</option>
+                <option value="strategy_fit">STRATEGY FIT</option>
+                <option value="team">TEAM</option>
+                <option value="upside">POTENTIAL</option>
+              </select>
+            </label>
+          </div>
+          <div class="companies-page-list">${sidebarHtml}</div>
+        </div>
+      </div>`;
+  const detailTopbarHtml = '';
+
+  content.innerHTML = `<div class="companies-page${companiesSidebarCollapsed ? ' is-sidebar-collapsed' : ''}">
+    ${sidebarPanelHtml}
+    <div class="companies-page-detail">${detailTopbarHtml}${detailHtml}</div>
   </div>`;
 
   // Restore sidebar scroll position after re-render
   const newSidebar = content.querySelector('.companies-page-sidebar');
-  if (newSidebar) newSidebar.scrollTop = savedScrollTop;
+  if (newSidebar && !companiesSidebarCollapsed) newSidebar.scrollTop = companiesSidebarScrollTop;
+  const newDetail = content.querySelector('.companies-page-detail');
+  if (newDetail) newDetail.scrollTop = companiesDetailScrollTop;
+  if (window.scrollY !== savedPageScrollTop) {
+    window.scrollTo(0, savedPageScrollTop);
+  }
 
   bindSavedJobActions(content);
   const sortSelect = content.querySelector('#companies-sort-select');
@@ -5263,6 +7281,125 @@ function renderSavedCompaniesWindow() {
       selectCompanyRun(el.dataset.companyRunOpen || '', el.dataset.jobId || null);
     });
   });
+  content.querySelectorAll('[data-companies-sidebar-toggle]').forEach((el) => {
+    el.addEventListener('click', () => {
+      setCompaniesSidebarCollapsed(el.dataset.companiesSidebarToggle === 'collapse' ? true : false);
+      renderSavedCompaniesWindow();
+    });
+  });
+  bindCompanyChatActions(content, activeCompany, activeRun);
+  if (activeCompany) {
+    const chatState = getCompanyChatState(getCompanyLookupKey(activeCompany));
+    if (chatState && !chatState.loaded && !chatState.loading && !chatState.sending && !chatState.error) {
+      fetchCompanyChat(getCompanyLookupKey(activeCompany), { silent: true });
+    }
+  }
+}
+
+function _autosizeChatTextarea(textarea) {
+  if (!textarea) return;
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
+}
+
+function _scrollChatLogToBottom(root, companyLookupKey) {
+  const log = root.querySelector(`[data-company-chat-log="${CSS.escape(companyLookupKey)}"]`);
+  if (log) {
+    requestAnimationFrame(() => {
+      log.scrollTop = log.scrollHeight;
+    });
+  }
+}
+
+function _scrollChatLogToLatestAssistant(root, companyLookupKey) {
+  const log = root.querySelector(`[data-company-chat-log="${CSS.escape(companyLookupKey)}"]`);
+  if (!log) return;
+  const messages = log.querySelectorAll('[data-chat-role="assistant"]:not(.typing)');
+  const latestAssistant = messages[messages.length - 1];
+  if (!latestAssistant) {
+    _scrollChatLogToBottom(root, companyLookupKey);
+    return;
+  }
+  requestAnimationFrame(() => {
+    log.scrollTop = Math.max(0, latestAssistant.offsetTop - 12);
+  });
+}
+
+function bindCompanyChatActions(root, activeCompany, activeRun) {
+  if (!root || !activeCompany) return;
+  const companyLookupKey = getCompanyLookupKey(activeCompany);
+  const state = getCompanyChatState(companyLookupKey);
+  const textarea = root.querySelector(`[data-company-chat-input="${CSS.escape(companyLookupKey)}"]`);
+  const modelSelect = root.querySelector(`[data-company-chat-model="${CSS.escape(companyLookupKey)}"]`);
+  if (modelSelect) {
+    modelSelect.addEventListener('change', (event) => {
+      state.selectedLlmKey = event.target.value || state.selectedLlmKey;
+      renderSavedCompaniesWindow();
+    });
+  }
+  if (textarea) {
+    /* Auto-resize textarea as user types */
+    textarea.addEventListener('input', (event) => {
+      state.draft = event.target.value;
+      _autosizeChatTextarea(textarea);
+    });
+    /* Cmd/Ctrl+Enter OR plain Enter to send (Shift+Enter for newline) */
+    textarea.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey && !state.sending) {
+        event.preventDefault();
+        root.querySelector(`[data-company-chat-form="${CSS.escape(companyLookupKey)}"]`)?.requestSubmit();
+      }
+    });
+    /* Initial sizing */
+    _autosizeChatTextarea(textarea);
+  }
+
+  const form = root.querySelector(`[data-company-chat-form="${CSS.escape(companyLookupKey)}"]`);
+  if (form) {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const message = (state.draft || '').trim();
+      if (!message || state.sending) return;
+      state.draft = '';
+      await sendCompanyChatMessage(companyLookupKey, activeRun?.job_id || null, message);
+    });
+  }
+
+  root.querySelectorAll('[data-company-chat-clear]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (state.sending) return;
+      await clearCompanyChat(companyLookupKey);
+    });
+  });
+
+  root.querySelectorAll('[data-chat-citation]').forEach((button) => {
+    button.addEventListener('click', () => openChatCitationModal(button.dataset.chatCitation || ''));
+  });
+
+  /* Follow-up suggestion chips — tap to send */
+  root.querySelectorAll('[data-chat-followup]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const question = button.dataset.chatFollowup || '';
+      if (!question || state.sending) return;
+      state.draft = '';
+      await sendCompanyChatMessage(companyLookupKey, activeRun?.job_id || null, question);
+    });
+  });
+
+  root.querySelectorAll('[data-company-assessment-toggle]').forEach((button) => {
+    button.addEventListener('click', () => {
+      setCompanyAssessmentCollapsed(!companyAssessmentCollapsed);
+      renderSavedCompaniesWindow();
+    });
+  });
+
+  if (state?.scrollIntent === 'bottom') {
+    _scrollChatLogToBottom(root, companyLookupKey);
+    state.scrollIntent = '';
+  } else if (state?.scrollIntent === 'latest-assistant') {
+    _scrollChatLogToLatestAssistant(root, companyLookupKey);
+    state.scrollIntent = '';
+  }
 }
 
 async function fetchSavedJobs({ silent = true } = {}) {
@@ -5275,6 +7412,10 @@ async function fetchSavedJobs({ silent = true } = {}) {
       createdAt: job.created_at || null,
       input_mode: job.input_mode || null,
       runName: job.run_name || null,
+      started_by_user_id: job.started_by_user_id || null,
+      started_by_email: job.started_by_email || null,
+      started_by_display_name: job.started_by_display_name || null,
+      started_by_label: job.started_by_label || null,
       useWebSearch: job.use_web_search === true,
       results: job.results || null,
       hasResults: job.has_results === true || !!job.results,
@@ -5319,6 +7460,24 @@ async function fetchSavedCompanies({ silent = true } = {}) {
   try {
     const data = await api('/api/company-runs', { timeoutMs: 30000, retries: 1 });
     savedCompaniesCache = data.companies || [];
+    if (!savedCompaniesCache.length) {
+      const jobsData = await api('/api/jobs', { timeoutMs: 30000, retries: 1 });
+      const jobs = (jobsData.jobs || []).map((job) => ({
+        jobId: job.job_id,
+        status: job.status || 'pending',
+        progress: job.progress || '',
+        createdAt: job.created_at || null,
+        input_mode: job.input_mode || null,
+        started_by_user_id: job.started_by_user_id || null,
+        started_by_email: job.started_by_email || null,
+        started_by_display_name: job.started_by_display_name || null,
+        started_by_label: job.started_by_label || null,
+        useWebSearch: job.use_web_search === true,
+        results: job.results || null,
+        llm: job.llm || null,
+      }));
+      savedCompaniesCache = buildCompaniesFromJobs(jobs);
+    }
     companiesFetched = true;
     renderSavedCompaniesWindow();
     return savedCompaniesCache;
@@ -5381,13 +7540,13 @@ function closeInfoPage() {
 }
 
 function syncRoute() {
-  if (!sessionId) {
+  if (!sessionId || supabasePasswordReentryRequired || (isSupabaseAuthRequired() && !getSupabaseAccessToken())) {
     showScreen('password-screen');
     return;
   }
   const activeScreenId = getActiveScreenId();
   if (!activeScreenId || activeScreenId === 'password-screen') {
-    openCompaniesPage();
+    openNewAnalysis();
   }
 }
 
@@ -5415,6 +7574,9 @@ async function api(path, opts = {}) {
       if (attempt === retries) {
         if (err?.name === 'AbortError') {
           throw new Error('Request timed out. Please try again.');
+        }
+        if (err instanceof Error && err.message && err.name !== 'TypeError') {
+          throw err;
         }
         throw new Error('Network error. Please retry.');
       }
@@ -5572,6 +7734,7 @@ function renderPersonIntelCards(slug) {
     const error = entry.error ? `<div class="person-intel-md" style="color:var(--red)">${escapeHtml(entry.error)}</div>` : '';
     const canToggle = statusClass === 'done' && !!(reportUi || error);
     const isCollapsed = !!entry.collapsed;
+    const canRefresh = statusClass !== 'running' && !!(entry.member?.primary_profile_url || entry.primary_profile_url);
     const statusLabel = escapeHtml(entry.status || 'queued');
     const statusUi = statusClass === 'running'
       ? `<span class="person-intel-status-spinner" aria-hidden="true"></span><span class="person-intel-status-label">Fetching</span>`
@@ -5580,13 +7743,51 @@ function renderPersonIntelCards(slug) {
       <div class="person-intel-card">
         <div class="person-intel-card-header">
           <div class="person-intel-name ${canToggle ? 'is-toggle' : ''}" ${canToggle ? `data-person-toggle="${slug}" data-person-entry-index="${idx}"` : ''}>${escapeHtml(entry.full_name || 'Team Member')}</div>
-          <div class="person-intel-status ${statusClass} ${canToggle ? 'is-toggle' : ''}" ${canToggle ? `data-person-toggle="${slug}" data-person-entry-index="${idx}"` : ''} aria-label="${statusLabel}">${statusUi}</div>
+          <div class="person-intel-card-actions">
+            ${canRefresh ? `<button type="button" class="person-intel-refresh" data-person-refresh="${slug}" data-person-entry-index="${idx}">Refresh</button>` : ''}
+            <div class="person-intel-status ${statusClass} ${canToggle ? 'is-toggle' : ''}" ${canToggle ? `data-person-toggle="${slug}" data-person-entry-index="${idx}"` : ''} aria-label="${statusLabel}">${statusUi}</div>
+          </div>
         </div>
         ${isCollapsed ? '' : reportUi}
         ${isCollapsed ? '' : error}
       </div>
     `;
   }).join('');
+}
+
+function buildPersonIntelEntry(member, overrides = {}) {
+  return {
+    full_name: member?.full_name || 'Team Member',
+    role: member?.role || '',
+    person_key: member?.person_key || '',
+    primary_profile_url: member?.primary_profile_url || '',
+    member: member ? { ...member } : null,
+    ...overrides,
+  };
+}
+
+function storePersonIntelCache(entry, result) {
+  if (!result?.profile_json) return;
+  const cache = loadPersonIntelCache();
+  const key = personIntelCacheKey({
+    primary_profile_url: result.profile_json?.subject?.normalized_profile_url || entry.primary_profile_url || '',
+    full_name: entry.full_name || result.profile_json?.subject?.full_name || '',
+    current_company: result.profile_json?.subject?.current_company || entry.member?.current_company || '',
+  });
+  cache[key] = result;
+  savePersonIntelCache(cache);
+}
+
+async function loadSharedPersonIntelForMember(slug, member) {
+  if (!slug || !(member?.person_key || '').trim()) return null;
+  try {
+    return await api(`/api/person-profile/latest?company_slug=${encodeURIComponent(slug)}&person_key=${encodeURIComponent(member.person_key)}`, {
+      timeoutMs: 8000,
+      retries: 0,
+    });
+  } catch (err) {
+    return null;
+  }
 }
 
 async function pollPersonIntelJob(slug, index) {
@@ -5601,14 +7802,7 @@ async function pollPersonIntelJob(slug, index) {
     renderPersonIntelCards(slug);
 
     if (status.status === 'done' && status.result?.profile_json) {
-      const cache = loadPersonIntelCache();
-      const key = personIntelCacheKey({
-        primary_profile_url: status.result.profile_json?.subject?.normalized_profile_url || '',
-        full_name: entry.full_name || status.result.profile_json?.subject?.full_name || '',
-        current_company: status.result.profile_json?.subject?.current_company || '',
-      });
-      cache[key] = status.result;
-      savePersonIntelCache(cache);
+      storePersonIntelCache(entry, status.result);
       return;
     }
     if (status.status === 'error') return;
@@ -5618,8 +7812,9 @@ async function pollPersonIntelJob(slug, index) {
   }
 }
 
-async function startPersonIntelForMember(slug, member) {
+async function startPersonIntelForMember(slug, member, options = {}) {
   if (!member) return;
+  const forceRefresh = options?.forceRefresh === true;
   const manualEl = document.querySelector(`[data-person-intel-manual="${slug}"]`);
   const emptyEl = document.querySelector(`[data-person-intel-section="${slug}"] .person-intel-empty`);
 
@@ -5641,29 +7836,50 @@ async function startPersonIntelForMember(slug, member) {
     (e) => (e.person_key || '') === (member.person_key || '')
   );
 
-  if (cache[key]) {
-    const cachedEntry = {
-      full_name: member.full_name || 'Team Member',
-      role: member.role || '',
-      person_key: member.person_key || '',
+  if (!forceRefresh) {
+    const shared = await loadSharedPersonIntelForMember(slug, member);
+    if (shared) {
+      const sharedEntry = buildPersonIntelEntry(member, {
+        job_id: shared.job_id || undefined,
+        status: shared.status || 'done',
+        result: shared.result || null,
+        error: shared.error || null,
+      });
+      if (existingIndex >= 0) personIntelState[slug].entries[existingIndex] = sharedEntry;
+      else personIntelState[slug].entries.unshift(sharedEntry);
+      renderPersonIntelCards(slug);
+      if (shared.status === 'done' && shared.result?.profile_json) {
+        storePersonIntelCache(sharedEntry, shared.result);
+        return;
+      }
+      if (shared.status === 'running' && shared.job_id) {
+        const activeIndex = (personIntelState[slug].entries || []).findIndex(
+          (e) => (e.person_key || '') === (member.person_key || '')
+        );
+        if (activeIndex >= 0) pollPersonIntelJob(slug, activeIndex);
+        return;
+      }
+      if (shared.status === 'error') return;
+    }
+  }
+
+  if (!forceRefresh && cache[key]) {
+    const cachedEntry = buildPersonIntelEntry(member, {
       status: 'done',
       result: cache[key],
       error: null,
-    };
+    });
     if (existingIndex >= 0) personIntelState[slug].entries[existingIndex] = cachedEntry;
     else personIntelState[slug].entries.unshift(cachedEntry);
     renderPersonIntelCards(slug);
     return;
   }
 
-  const runningEntry = {
-    full_name: member.full_name || 'Team Member',
-    role: member.role || '',
-    person_key: member.person_key || '',
+  const runningEntry = buildPersonIntelEntry(member, {
     status: 'running',
     result: null,
     error: null,
-  };
+  });
   if (existingIndex >= 0) personIntelState[slug].entries[existingIndex] = runningEntry;
   else personIntelState[slug].entries.unshift(runningEntry);
   renderPersonIntelCards(slug);
@@ -5934,37 +8150,78 @@ async function controlJob(jobId, action) {
 }
 
 // ── Password ──
+$('#login-request-code').addEventListener('click', async () => {
+  const email = ($('#login-email-input')?.value || '').trim();
+  const status = $('#login-status');
+  if (!email) {
+    supabaseAuthState = 'error';
+    supabaseAuthError = 'Please enter your email address to verify your identity.';
+    renderLoginIdentity();
+    $('#login-email-input')?.focus();
+    return;
+  }
+  try {
+    supabaseAuthState = 'sending';
+    supabaseMagicLinkEmail = email;
+    supabaseAuthError = '';
+    renderLoginIdentity();
+    const client = await ensureSupabaseClient();
+    if (!client) {
+      throw new Error('Email verification is not configured yet in this local environment.');
+    }
+    const redirectTo = getSupabaseAuthConfig()?.redirect_url || window.location.href;
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: redirectTo },
+    });
+    if (error) throw error;
+    supabaseAuthState = 'pending';
+    renderLoginIdentity();
+    $('#login-email-input')?.focus();
+  } catch (err) {
+    supabaseAuthState = 'error';
+    supabaseAuthError = err?.message || 'Failed to request verification code.';
+    renderLoginIdentity();
+    status?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+});
+
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const pw = $('#password-input').value;
+  $('#password-error').textContent = '';
   try {
+    if (isSupabaseAuthRequired() && !getSupabaseAccessToken()) {
+      throw new Error('Verify your email from the link we sent before unlocking the workspace.');
+    }
     const data = await api('/api/login', {
       method: 'POST',
       body: JSON.stringify({ password: pw }),
     });
-    try {
-      sessionId = data.session_id;
-      localStorage.setItem('session_id', sessionId);
-      setCookie('session_id', sessionId);
-      syncRoute();
-      checkWebSearchAvailable();
-      await loadAnalysisConfig();
-      renderRecentRuns();
-      initOnboardingWelcome();
-      initInputModeCallout();
-      backfillRecentRunsWithLlm();
-    } catch (postLoginErr) {
-      console.error('Post-login initialization failed', postLoginErr);
-      const detail = postLoginErr?.message || String(postLoginErr || 'Unknown post-login failure');
-      throw new Error(`Login succeeded but app initialization failed: ${detail}`);
-    }
+    sessionId = data.session_id;
+    supabasePasswordReentryRequired = false;
+    localStorage.setItem('session_id', sessionId);
+    setCookie('session_id', sessionId);
+    syncRoute();
+    checkWebSearchAvailable();
+    await loadAnalysisConfig();
+    renderRecentRuns();
+    initOnboardingWelcome();
+    initInputModeCallout();
+    backfillRecentRunsWithLlm();
   } catch (err) {
-    console.error('Login flow failed', err);
     const msg = err.message === 'Wrong password' ? 'Wrong password. Try again.'
       : err.message || 'Connection error. Is the server running?';
-    $('#password-error').textContent = msg;
-    $('#password-input').value = '';
-    $('#password-input').focus();
+    if (msg.toLowerCase().includes('verify') || msg.toLowerCase().includes('email')) {
+      supabaseAuthState = 'error';
+      supabaseAuthError = msg;
+      renderLoginIdentity();
+      $('#login-email-input')?.focus();
+    } else {
+      $('#password-error').textContent = msg;
+      $('#password-input').value = '';
+      $('#password-input').focus();
+    }
   }
 });
 
@@ -5980,6 +8237,23 @@ async function checkWebSearchAvailable() {
     }
   } catch {}
 }
+
+$('#analysis-identity-signout')?.addEventListener('click', async () => {
+  try {
+    const client = await ensureSupabaseClient();
+    await client?.auth.signOut();
+  } catch (_) {
+    // Ignore sign-out failures and clear local UI state regardless.
+  }
+  supabaseIdentity = null;
+  supabaseAuthState = 'signed_out';
+  supabaseMagicLinkEmail = '';
+  supabaseAuthError = '';
+  loginVerificationStage = 'email';
+  renderLoginIdentity();
+  renderAnalysisIdentity();
+  updateAnalyzeButtonState();
+});
 
 async function resumeActiveJob() {
   const savedJobId = getPersistedActiveJob();
@@ -6011,7 +8285,7 @@ async function resumeActiveJob() {
       });
       renderRecentRuns();
     }
-    openCompaniesPage();
+    openNewAnalysis();
     return false;
   }
 }
@@ -6106,11 +8380,18 @@ async function loadConfirmedTerminalResults(jobId, fallbackResults = null) {
 
 // Check existing session on load
 (async () => {
+  await loadPublicAuthConfig();
+  try {
+    await initializeSupabaseAuth();
+  } catch (_) {
+    // Keep the login page usable even if the browser auth client fails to initialize.
+  }
+  renderLoginIdentity();
   if (sessionId) {
     setCookie('session_id', sessionId);
     try {
       const data = await api('/api/check-session');
-      if (data.authenticated) {
+      if (data.authenticated && (!isSupabaseAuthRequired() || !!getSupabaseAccessToken())) {
         checkWebSearchAvailable();
         await loadAnalysisConfig();
         renderRecentRuns();
@@ -6120,7 +8401,9 @@ async function loadConfirmedTerminalResults(jobId, fallbackResults = null) {
         backfillRecentRunsWithLlm();
         const resumed = await resumeActiveJob();
         if (!resumed) {
-          openCompaniesPage();
+          openNewAnalysis();
+        } else {
+          fetchSavedCompanies();
         }
         return;
       }
@@ -6152,6 +8435,7 @@ function renderFiles() {
   const list = $('#files-list');
   if (uploadedFiles.length === 0) {
     section.style.display = 'none';
+    updateAnalyzeButtonState();
     return;
   }
   section.style.display = 'block';
@@ -6171,6 +8455,7 @@ function renderFiles() {
       </div>
     </div>`;
   }).join('');
+  updateAnalyzeButtonState();
 }
 
 function isSpecterMode() {
@@ -6204,6 +8489,7 @@ $('#clear-files').addEventListener('click', () => {
   uploadedFiles = [];
   renderFiles();
   $('#specter-badge').style.display = 'none';
+  updateAnalyzeButtonState();
 });
 
 const uploadZone = $('#upload-zone');
@@ -6259,6 +8545,10 @@ $('#llm-model-select')?.addEventListener('change', (event) => {
 // ── Analyze ──
 $('#analyze-btn').addEventListener('click', async () => {
   if (uploadedFiles.length === 0) return;
+  if (isSupabaseAuthRequired() && !getSupabaseAccessToken()) {
+    window.alert('Sign in with Supabase before starting an analysis.');
+    return;
+  }
 
   // Dismiss onboarding once user starts their first analysis
   localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
@@ -6294,6 +8584,10 @@ $('#analyze-btn').addEventListener('click', async () => {
       progress: 'Queued for worker',
       input_mode: effectiveInputMode,
       runName: requestedRunName,
+      started_by_user_id: supabaseIdentity?.user_id || null,
+      started_by_email: supabaseIdentity?.email || null,
+      started_by_display_name: supabaseIdentity?.display_name || null,
+      started_by_label: supabaseIdentity?.label || null,
       llm: analysisSelection.llmLabel || null,
       title: effectiveInputMode === 'specter' ? undefined : uploadedFiles.map((f) => f.name).join(', '),
     });
@@ -6305,7 +8599,10 @@ $('#analyze-btn').addEventListener('click', async () => {
     try {
       await api(`/api/analyze/${currentJobId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getSupabaseAccessToken() ? { Authorization: `Bearer ${getSupabaseAccessToken()}` } : {}),
+        },
         body: JSON.stringify({
           use_web_search: useWebSearch,
           instructions: instructions || undefined,
@@ -6330,6 +8627,10 @@ $('#analyze-btn').addEventListener('click', async () => {
         progress: 'Connection unstable while starting analysis. Tracking from Analysis overview...',
         input_mode: effectiveInputMode,
         runName: requestedRunName,
+        started_by_user_id: supabaseIdentity?.user_id || null,
+        started_by_email: supabaseIdentity?.email || null,
+        started_by_display_name: supabaseIdentity?.display_name || null,
+        started_by_label: supabaseIdentity?.label || null,
         llm: analysisSelection.llmLabel || null,
       });
     }
@@ -6559,9 +8860,8 @@ function sortSummaryRows(rows, mode) {
   return decorated.map((item) => item.row);
 }
 
-function buildDimensionBars(dimScores, compositeScore = null, auditSlug = '') {
+function buildDimensionBars(dimScores, compositeScore = null) {
   if (!dimScores || !dimScores.length) return '';
-  const slugAttr = escapeHtml(String(auditSlug || ''));
   let rows = '';
   if (typeof compositeScore === 'number' && Number.isFinite(compositeScore)) {
     const compositePct = Math.min(100, Math.max(0, Math.round(compositeScore)));
@@ -6571,11 +8871,7 @@ function buildDimensionBars(dimScores, compositeScore = null, auditSlug = '') {
     const pct = Math.min(100, Math.round(d.adjusted_score || 0));
     const label = getDimensionLabel(d.dimension);
     const dimClass = String(d.dimension || '').replace(/_/g, '-');
-    const isClickable = Boolean(slugAttr) && ['strategy_fit', 'team', 'upside'].includes(String(d.dimension || ''));
-    const interactiveAttrs = isClickable
-      ? ` tabindex="0" role="button" data-audit-dimension="${escapeHtml(String(d.dimension || ''))}" data-slug="${slugAttr}" aria-label="Open ${escapeHtml(label)} audit evidence"`
-      : '';
-    return `<div class="dim-bar-row ${dimClass}${isClickable ? ' is-clickable' : ''}"${interactiveAttrs}><span class="dim-label">${label}</span><div class="dim-bar-bg"><div class="dim-bar-fill" style="width:${pct}%"></div></div><span class="dim-value">${pct}</span></div>`;
+    return `<div class="dim-bar-row ${dimClass}"><span class="dim-label">${label}</span><div class="dim-bar-bg"><div class="dim-bar-fill" style="width:${pct}%"></div></div><span class="dim-value">${pct}</span></div>`;
   }).join('');
   return rows;
 }
@@ -6745,7 +9041,7 @@ function renderSingleResult(r) {
     `<div class="arg-item"><span class="arg-score contra">${a.score}</span>${a.text}</div>`
   ).join('');
 
-  const dimBars = r.ranking_result?.dimension_scores ? buildDimensionBars(r.ranking_result.dimension_scores, composite !== undefined ? composite : r.total_score, r.startup_slug || r.company_name || '') : '';
+  const dimBars = r.ranking_result?.dimension_scores ? buildDimensionBars(r.ranking_result.dimension_scores, composite !== undefined ? composite : r.total_score) : '';
   const executiveSummaryBlock = buildExecutiveSummaryBlock(r.ranking_result);
   const personIntelHtml = renderPersonIntelSection(
     (r.startup_slug || r.company_name || ''),
@@ -6823,17 +9119,12 @@ function renderBatchResults(r) {
     const bucket = row.bucket || '';
     const bucketLabel = bucket === 'priority_review' ? 'Priority Review' : bucket === 'watchlist' ? 'Watchlist' : bucket ? 'Low Priority' : '';
     const composite = typeof row.composite_score === 'number' ? row.composite_score : row.total_score;
-    const rowDimScores = Array.isArray(row.dimension_scores) && row.dimension_scores.length
-      ? row.dimension_scores
-      : ((row.strategy_fit_score !== undefined && row.team_score !== undefined && row.upside_score !== undefined)
-        ? [
-            { dimension: 'strategy_fit', adjusted_score: row.strategy_fit_score },
-            { dimension: 'team', adjusted_score: row.team_score },
-            { dimension: 'upside', adjusted_score: row.upside_score },
-          ]
-        : []);
-    const dimBars = rowDimScores.length
-      ? buildDimensionBars(rowDimScores, composite, row.startup_slug || row.company_name || '')
+    const dimBars = (row.strategy_fit_score !== undefined && row.team_score !== undefined && row.upside_score !== undefined)
+      ? buildDimensionBars([
+          { dimension: 'strategy_fit', adjusted_score: row.strategy_fit_score },
+          { dimension: 'team', adjusted_score: row.team_score },
+          { dimension: 'upside', adjusted_score: row.upside_score },
+        ], composite)
       : '';
     const executiveSummaryBlock = buildExecutiveSummaryBlock(row);
     const personIntelHtml = renderPersonIntelSection(
@@ -6910,336 +9201,97 @@ function renderBatchResults(r) {
     (cardsHtml || '<p style="color:var(--text-dim)">No companies were successfully evaluated.</p>') + failedHtml;
 }
 
+function showAuditLog(slug) {
+  if (!currentResults || !slug) return;
+  const r = currentResults;
+  const summaryRows = r.summary_rows || [];
+  const summary = r.mode === 'batch'
+    ? summaryRows.find((row) => (row.startup_slug || row.company_name) === slug)
+    : summaryRows[0] || { company_name: r.company_name, startup_slug: r.startup_slug || r.company_name, decision: r.decision, total_score: r.total_score, avg_pro: r.avg_pro, avg_contra: r.avg_contra };
+  const companyName = summary?.company_name || r.company_name || slug;
+  const argRows = (r.argument_rows || []).filter((a) => (a.startup_slug || a.company_name) === slug);
+  const qaRows = (r.qa_provenance_rows || []).filter((q) => (q.startup_slug || q.company_name) === slug);
+
+  const avgPro = summary?.avg_pro ?? r.avg_pro ?? 0;
+  const avgContra = summary?.avg_contra ?? r.avg_contra ?? 0;
+  const totalScore = summary?.total_score ?? r.total_score ?? 0;
+
+  let html = '';
+  html += `<div class="audit-section"><div class="audit-section-title">Decision</div><div class="audit-section-body">`;
+  html += SHOW_AVG_PRO_CONTRA_SCORES
+    ? `<div class="audit-decision-reason">Avg pro: ${avgPro} · Avg contra: ${avgContra} → total score ${totalScore}. Invest when pro > contra.</div>`
+    : `<div class="audit-decision-reason">Total score ${totalScore}.</div>`;
+  html += `</div></div>`;
+
+  html += `<div class="audit-section"><div class="audit-section-title">Evidence Used</div><div class="audit-section-body">`;
+  if (qaRows.length === 0) {
+    html += `<div class="audit-qa-block"><div class="audit-qa-a" style="color:var(--text-dim)">No provenance data available.</div></div>`;
+  } else {
+    qaRows.forEach((qa) => {
+      html += `<div class="audit-qa-block">`;
+      html += `<div class="audit-qa-q">Q: ${escapeHtml(qa.question || '')}</div>`;
+      html += `<div class="audit-qa-a">${escapeHtml(qa.answer || '')}</div>`;
+      if (qa.web_search_decision) {
+        const used = !!qa.web_search_used;
+        const label = used ? 'Web search used' : 'Web search skipped';
+        html += `<div class="audit-qa-a" style="font-size:12px;color:var(--text-dim)">${label}: ${escapeHtml(qa.web_search_decision)}</div>`;
+      }
+      const chunkIds = (qa.chunk_ids || '').toString().split(',').map((s) => s.trim()).filter(Boolean);
+      if (chunkIds.length > 0) {
+        html += `<div class="audit-chunk-tags">`;
+        chunkIds.forEach((id) => { html += `<span class="audit-chunk-tag">${escapeHtml(id)}</span>`; });
+        html += `</div>`;
+      }
+      if (qa.chunks_preview) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Show chunk preview</div>`;
+        html += `<div class="audit-expand-content" style="display:none">${escapeHtml(qa.chunks_preview)}</div>`;
+      }
+      if (qa.web_search_query && qa.web_search_results) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Show web search</div>`;
+        html += `<div class="audit-expand-content" style="display:none">Query: ${escapeHtml(qa.web_search_query)}\n\n${escapeHtml(qa.web_search_results)}</div>`;
+      }
+      html += `</div>`;
+    });
+  }
+  html += `</div></div>`;
+
+  html += `<div class="audit-section"><div class="audit-section-title">Arguments & Reasoning</div><div class="audit-section-body">`;
+  if (argRows.length === 0) {
+    html += `<div class="audit-arg-block"><div class="audit-arg-text" style="color:var(--text-dim)">No argument details available.</div></div>`;
+  } else {
+    argRows.forEach((arg) => {
+      html += `<div class="audit-arg-block">`;
+      html += `<div class="audit-arg-header"><span class="audit-arg-type ${arg.type}">${(arg.type || '').toUpperCase()}</span><span style="font-size:12px;color:var(--text-dim)">Score ${arg.score}</span></div>`;
+      html += `<div class="audit-arg-text">${escapeHtml(arg.refined_text || arg.argument_text || '')}</div>`;
+      if (arg.qa_pairs_used) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Based on Q&A</div>`;
+        html += `<div class="audit-expand-content" style="display:none">${escapeHtml(arg.qa_pairs_used)}</div>`;
+      }
+      if (arg.argument_feedback) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Scoring criteria</div>`;
+        html += `<div class="audit-expand-content" style="display:none">${escapeHtml(arg.argument_feedback)}</div>`;
+      }
+      if (arg.critique_text) {
+        html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Critique</div>`;
+        html += `<div class="audit-expand-content" style="display:none">${escapeHtml(arg.critique_text)}</div>`;
+      }
+      html += `</div>`;
+    });
+  }
+  html += `</div></div>`;
+
+  $('#audit-modal-title').textContent = `Audit Log — ${companyName}`;
+  $('#audit-modal-content').innerHTML = html;
+  $('#audit-modal-overlay').classList.add('audit-modal-open');
+}
+
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
 }
 
-function escapeRegExp(s) {
-  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function highlightAuditText(value, query) {
-  const text = String(value ?? '');
-  const needle = String(query || '').trim();
-  if (!needle) return escapeHtml(text);
-  const regex = new RegExp(`(${escapeRegExp(needle)})`, 'ig');
-  return text
-    .split(regex)
-    .map((part, idx) => (idx % 2 === 1 ? `<mark class="audit-highlight">${escapeHtml(part)}</mark>` : escapeHtml(part)))
-    .join('');
-}
-
-function matchesAuditQuery(value, query) {
-  const needle = String(query || '').trim().toLowerCase();
-  if (!needle) return true;
-  return String(value || '').toLowerCase().includes(needle);
-}
-
-function normalizeAuditDimension(dimension) {
-  const value = String(dimension || '').trim().toLowerCase();
-  return value === 'potential' ? 'upside' : value;
-}
-
-function getDimensionSummaryKey(dimension) {
-  return normalizeAuditDimension(dimension) === 'upside' ? 'potential_summary' : `${normalizeAuditDimension(dimension)}_summary`;
-}
-
-function getDimensionScoreKey(dimension) {
-  return `${normalizeAuditDimension(dimension)}_score`;
-}
-
-function parseAuditDimensions(value) {
-  if (Array.isArray(value)) return value.map((item) => normalizeAuditDimension(item)).filter(Boolean);
-  if (typeof value === 'string') return value.split(',').map((item) => normalizeAuditDimension(item)).filter(Boolean);
-  return [];
-}
-
-function formatAuditNumber(value, digits = 1) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return '—';
-  const rounded = Number(num.toFixed(digits));
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(digits);
-}
-
-function matchesAuditTarget(row, slug, companyName = '') {
-  if (!row) return false;
-  const rowSlug = String(row.startup_slug || '').trim();
-  if (rowSlug && rowSlug === slug) return true;
-  const targetName = String(companyName || '').trim().toLowerCase();
-  const rowCompanyName = String(row.company_name || '').trim().toLowerCase();
-  return Boolean(targetName && rowCompanyName && rowCompanyName === targetName);
-}
-
-function getAuditContext(slug) {
-  if (!currentResults || !slug) return null;
-  const r = currentResults;
-  const summaryRows = r.summary_rows || [];
-  const summary = r.mode === 'batch'
-    ? summaryRows.find((row) => matchesAuditTarget(row, slug))
-    : (summaryRows[0] || {
-        company_name: r.company_name,
-        startup_slug: r.startup_slug || r.company_name,
-        decision: r.decision,
-        total_score: r.total_score,
-        avg_pro: r.avg_pro,
-        avg_contra: r.avg_contra,
-      });
-  const companyName = summary?.company_name || r.company_name || slug;
-  return {
-    slug,
-    companyName,
-    result: r,
-    summary,
-    argRows: (r.argument_rows || []).filter((arg) => matchesAuditTarget(arg, slug, companyName)),
-    qaRows: (r.qa_provenance_rows || []).filter((qa) => matchesAuditTarget(qa, slug, companyName)),
-  };
-}
-
-function getAuditDimensionScores(context) {
-  const ranking = context?.result?.ranking_result || {};
-  if (Array.isArray(ranking.dimension_scores) && ranking.dimension_scores.length) return ranking.dimension_scores;
-  if (Array.isArray(context?.summary?.dimension_scores) && context.summary.dimension_scores.length) return context.summary.dimension_scores;
-  return [];
-}
-
-function getAuditDimensionDetail(context, dimension) {
-  const normalized = normalizeAuditDimension(dimension);
-  const ranking = context?.result?.ranking_result || {};
-  const summary = context?.summary || {};
-  const dimensionEntry = getAuditDimensionScores(context).find((item) => normalizeAuditDimension(item?.dimension) === normalized) || null;
-  return {
-    dimension: normalized,
-    label: getDimensionLabel(normalized),
-    score: dimensionEntry?.adjusted_score ?? dimensionEntry?.score ?? ranking[getDimensionScoreKey(normalized)] ?? summary[getDimensionScoreKey(normalized)] ?? null,
-    confidence: dimensionEntry?.confidence,
-    evidenceCount: dimensionEntry?.evidence_count,
-    summaryText: ranking[getDimensionSummaryKey(normalized)] || summary[getDimensionSummaryKey(normalized)] || '',
-    evidenceSnippets: Array.isArray(dimensionEntry?.evidence_snippets) ? dimensionEntry.evidence_snippets : [],
-    criticalGaps: Array.isArray(dimensionEntry?.critical_gaps) ? dimensionEntry.critical_gaps : [],
-  };
-}
-
-function renderAuditSearch(query, placeholder) {
-  return `
-    <div class="audit-search-shell">
-      <span class="audit-search-icon">⌕</span>
-      <input id="audit-modal-search" class="audit-search-input" type="text" autocomplete="off" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(query || '')}">
-      <span class="audit-search-hint">Live filter</span>
-    </div>
-  `;
-}
-
-function getQaSearchText(qa) {
-  return [
-    qa.question,
-    qa.answer,
-    qa.chunk_ids,
-    qa.chunks_preview,
-    qa.web_search_query,
-    qa.web_search_results,
-    qa.web_search_decision,
-    qa.aspect,
-    qa.dimension,
-  ].filter(Boolean).join('\n');
-}
-
-function getArgumentSearchText(arg) {
-  return [
-    arg.type,
-    arg.score,
-    arg.argument_text,
-    arg.refined_text,
-    arg.argument_feedback,
-    arg.critique_text,
-    arg.qa_pairs_used,
-    parseAuditDimensions(arg.dimensions).join(', '),
-  ].filter(Boolean).join('\n');
-}
-
-function renderAuditQaBlock(qa, query) {
-  const chunkIds = (qa.chunk_ids || '').toString().split(',').map((s) => s.trim()).filter(Boolean);
-  let html = '<div class="audit-qa-block">';
-  html += `<div class="audit-qa-q">Q: ${highlightAuditText(qa.question || '', query)}</div>`;
-  html += `<div class="audit-qa-a">${highlightAuditText(qa.answer || '', query)}</div>`;
-  if (qa.web_search_decision) {
-    const label = qa.web_search_used ? 'Web search used' : 'Web search skipped';
-    html += `<div class="audit-qa-a" style="font-size:12px;color:var(--text-dim)">${label}: ${highlightAuditText(qa.web_search_decision, query)}</div>`;
-  }
-  if (chunkIds.length > 0) {
-    html += `<div class="audit-chunk-tags">${chunkIds.map((id) => `<span class="audit-chunk-tag">${highlightAuditText(id, query)}</span>`).join('')}</div>`;
-  }
-  if (qa.chunks_preview) {
-    html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Show chunk preview</div>`;
-    html += `<div class="audit-expand-content" style="display:none">${highlightAuditText(qa.chunks_preview, query)}</div>`;
-  }
-  if (qa.web_search_query && qa.web_search_results) {
-    html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Show web search</div>`;
-    html += `<div class="audit-expand-content" style="display:none">Query: ${highlightAuditText(qa.web_search_query, query)}\n\n${highlightAuditText(qa.web_search_results, query)}</div>`;
-  }
-  html += '</div>';
-  return html;
-}
-
-function renderAuditArgumentBlock(arg, query) {
-  let html = '<div class="audit-arg-block">';
-  html += `<div class="audit-arg-header"><span class="audit-arg-type ${arg.type}">${escapeHtml((arg.type || '').toUpperCase())}</span><span style="font-size:12px;color:var(--text-dim)">Score ${escapeHtml(formatAuditNumber(arg.score, 0))}</span></div>`;
-  html += `<div class="audit-arg-text">${highlightAuditText(arg.refined_text || arg.argument_text || '', query)}</div>`;
-  if (Array.isArray(arg.dimensions) && arg.dimensions.length) {
-    html += `<div class="audit-note">Supports: ${arg.dimensions.map((dimension) => `<strong>${escapeHtml(getDimensionLabel(dimension))}</strong>`).join(', ')}</div>`;
-  }
-  if (arg.qa_pairs_used) {
-    html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Based on Q&A</div>`;
-    html += `<div class="audit-expand-content" style="display:none">${highlightAuditText(arg.qa_pairs_used, query)}</div>`;
-  }
-  if (arg.argument_feedback) {
-    html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Scoring criteria</div>`;
-    html += `<div class="audit-expand-content" style="display:none">${highlightAuditText(arg.argument_feedback, query)}</div>`;
-  }
-  if (arg.critique_text) {
-    html += `<div class="audit-expand-toggle" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Critique</div>`;
-    html += `<div class="audit-expand-content" style="display:none">${highlightAuditText(arg.critique_text, query)}</div>`;
-  }
-  html += '</div>';
-  return html;
-}
-
-function renderFullAuditModal(context, query) {
-  const filteredQa = context.qaRows.filter((qa) => matchesAuditQuery(getQaSearchText(qa), query));
-  const filteredArgs = context.argRows.filter((arg) => matchesAuditQuery(getArgumentSearchText(arg), query));
-  const avgPro = context.summary?.avg_pro ?? context.result?.avg_pro ?? 0;
-  const avgContra = context.summary?.avg_contra ?? context.result?.avg_contra ?? 0;
-  const totalScore = context.summary?.total_score ?? context.result?.total_score ?? 0;
-
-  let html = renderAuditSearch(query, 'Search evidence, chunks, arguments, and critiques…');
-  html += `<div class="audit-section"><div class="audit-section-title">Decision</div><div class="audit-section-body">`;
-  html += SHOW_AVG_PRO_CONTRA_SCORES
-    ? `<div class="audit-decision-reason">Avg pro: ${escapeHtml(formatAuditNumber(avgPro))} · Avg contra: ${escapeHtml(formatAuditNumber(avgContra))} → total score ${escapeHtml(formatAuditNumber(totalScore))}. Invest when pro > contra.</div>`
-    : `<div class="audit-decision-reason">Total score ${escapeHtml(formatAuditNumber(totalScore))}.</div>`;
-  html += `</div></div>`;
-
-  if (query && filteredQa.length === 0 && filteredArgs.length === 0) {
-    html += `<div class="audit-empty-state">No audit entries match <strong>${escapeHtml(query)}</strong>.</div>`;
-    return html;
-  }
-
-  html += `<div class="audit-section"><div class="audit-section-title">Evidence Used</div><div class="audit-section-body">`;
-  html += filteredQa.length
-    ? filteredQa.map((qa) => renderAuditQaBlock(qa, query)).join('')
-    : `<div class="audit-qa-block"><div class="audit-qa-a" style="color:var(--text-dim)">${query ? 'No evidence entries match this search.' : 'No provenance data available.'}</div></div>`;
-  html += `</div></div>`;
-
-  html += `<div class="audit-section"><div class="audit-section-title">Arguments & Reasoning</div><div class="audit-section-body">`;
-  html += filteredArgs.length
-    ? filteredArgs.map((arg) => renderAuditArgumentBlock(arg, query)).join('')
-    : `<div class="audit-arg-block"><div class="audit-arg-text" style="color:var(--text-dim)">${query ? 'No arguments match this search.' : 'No argument details available.'}</div></div>`;
-  html += `</div></div>`;
-  return html;
-}
-
-function renderDimensionAuditModal(context, dimension, query) {
-  const detail = getAuditDimensionDetail(context, dimension);
-  const normalized = detail.dimension;
-  const filteredQa = context.qaRows.filter((qa) => normalizeAuditDimension(qa.dimension) === normalized && matchesAuditQuery(getQaSearchText(qa), query));
-  const filteredArgs = context.argRows
-    .filter((arg) => parseAuditDimensions(arg.dimensions).includes(normalized) && matchesAuditQuery(getArgumentSearchText(arg), query))
-    .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
-  const hasTaggedEvidence = context.qaRows.some((qa) => normalizeAuditDimension(qa.dimension) === normalized)
-    || context.argRows.some((arg) => parseAuditDimensions(arg.dimensions).includes(normalized));
-  const hasRenderableData = detail.summaryText || detail.evidenceSnippets.length || detail.criticalGaps.length || filteredQa.length || filteredArgs.length;
-
-  let html = renderAuditSearch(query, `Search ${detail.label} evidence and reasoning…`);
-  html += `<div class="audit-section"><div class="audit-section-title">${escapeHtml(detail.label)} Overview</div><div class="audit-section-body">`;
-  html += `<div class="audit-dimension-meta">`;
-  html += `<span class="audit-dimension-pill"><strong>Score</strong> ${escapeHtml(formatAuditNumber(detail.score))}</span>`;
-  if (typeof detail.confidence === 'number') {
-    html += `<span class="audit-dimension-pill"><strong>Confidence</strong> ${escapeHtml(formatAuditNumber(detail.confidence * 100))}%</span>`;
-  }
-  if (Number.isFinite(Number(detail.evidenceCount))) {
-    html += `<span class="audit-dimension-pill"><strong>Evidence</strong> ${escapeHtml(String(detail.evidenceCount))}</span>`;
-  }
-  html += `</div>`;
-  if (detail.summaryText) {
-    html += `<div class="audit-decision-reason">${highlightAuditText(detail.summaryText, query)}</div>`;
-  }
-  if (detail.evidenceSnippets.length) {
-    html += `<div class="audit-note">Evidence snippets: ${detail.evidenceSnippets.map((snippet) => `<strong>${highlightAuditText(snippet, query)}</strong>`).join(' · ')}</div>`;
-  }
-  if (detail.criticalGaps.length) {
-    html += `<div class="audit-note">Critical gaps: ${detail.criticalGaps.map((gap) => highlightAuditText(gap, query)).join(' · ')}</div>`;
-  }
-  if (!hasTaggedEvidence && (context.qaRows.length || context.argRows.length)) {
-    html += `<div class="audit-note">This saved run predates dimension-tagged audit rows. Summary data is shown, but Q&A and arguments cannot be mapped to ${escapeHtml(detail.label)} with confidence.</div>`;
-  }
-  html += `</div></div>`;
-
-  if (query && !filteredQa.length && !filteredArgs.length && !detail.summaryText && !detail.evidenceSnippets.some((snippet) => matchesAuditQuery(snippet, query)) && !detail.criticalGaps.some((gap) => matchesAuditQuery(gap, query))) {
-    html += `<div class="audit-empty-state">No ${escapeHtml(detail.label)} audit entries match <strong>${escapeHtml(query)}</strong>.</div>`;
-    return html;
-  }
-
-  html += `<div class="audit-section"><div class="audit-section-title">Evidence Used</div><div class="audit-section-body">`;
-  html += filteredQa.length
-    ? filteredQa.map((qa) => renderAuditQaBlock(qa, query)).join('')
-    : `<div class="audit-qa-block"><div class="audit-qa-a" style="color:var(--text-dim)">${hasTaggedEvidence ? (query ? 'No evidence entries match this search.' : `No ${escapeHtml(detail.label)} provenance rows available.`) : 'No dimension-tagged evidence available for this run.'}</div></div>`;
-  html += `</div></div>`;
-
-  html += `<div class="audit-section"><div class="audit-section-title">Arguments & Reasoning</div><div class="audit-section-body">`;
-  html += filteredArgs.length
-    ? filteredArgs.map((arg) => renderAuditArgumentBlock(arg, query)).join('')
-    : `<div class="audit-arg-block"><div class="audit-arg-text" style="color:var(--text-dim)">${hasTaggedEvidence ? (query ? 'No arguments match this search.' : `No ${escapeHtml(detail.label)} argument details available.`) : 'No dimension-tagged arguments available for this run.'}</div></div>`;
-  html += `</div></div>`;
-
-  if (!hasRenderableData && !hasTaggedEvidence) {
-    html += `<div class="audit-empty-state">No focused ${escapeHtml(detail.label)} audit data is available for this run.</div>`;
-  }
-  return html;
-}
-
-function renderAuditModal(options = {}) {
-  if (!auditModalState?.slug) return;
-  const context = getAuditContext(auditModalState.slug);
-  if (!context) return;
-  const dimension = normalizeAuditDimension(auditModalState.dimension);
-  const title = dimension
-    ? `${getDimensionLabel(dimension)} Audit — ${context.companyName}`
-    : `Audit Log — ${context.companyName}`;
-  const html = dimension
-    ? renderDimensionAuditModal(context, dimension, auditModalState.query || '')
-    : renderFullAuditModal(context, auditModalState.query || '');
-  $('#audit-modal-title').textContent = title;
-  $('#audit-modal-content').innerHTML = html;
-  $('#audit-modal-overlay').classList.add('audit-modal-open');
-  const searchInput = $('#audit-modal-search');
-  if (searchInput) {
-    searchInput.addEventListener('input', (event) => {
-      const nextQuery = event.target.value || '';
-      const selectionStart = event.target.selectionStart ?? nextQuery.length;
-      const selectionEnd = event.target.selectionEnd ?? nextQuery.length;
-      auditModalState = { ...auditModalState, query: nextQuery };
-      renderAuditModal({ focusSearch: true, selectionStart, selectionEnd });
-    });
-    if (options.focusSearch) {
-      searchInput.focus();
-      searchInput.setSelectionRange(options.selectionStart ?? searchInput.value.length, options.selectionEnd ?? searchInput.value.length);
-    }
-  }
-}
-
-function showAuditLog(slug) {
-  auditModalState = { slug, dimension: null, query: '' };
-  renderAuditModal();
-}
-
-function showDimensionAudit(slug, dimension) {
-  auditModalState = { slug, dimension: normalizeAuditDimension(dimension), query: '' };
-  renderAuditModal();
-}
-
 function hideAuditLog() {
-  auditModalState = null;
-  $('#audit-modal-content').innerHTML = '';
   $('#audit-modal-overlay').classList.remove('audit-modal-open');
 }
 
@@ -7361,6 +9413,22 @@ document.addEventListener('click', (e) => {
     return;
   }
 
+  const refreshBtn = e.target.closest('[data-person-refresh][data-person-entry-index]');
+  if (refreshBtn) {
+    const slug = refreshBtn.getAttribute('data-person-refresh');
+    const idx = Number(refreshBtn.getAttribute('data-person-entry-index') || '-1');
+    const entry = personIntelState?.[slug]?.entries?.[idx];
+    const members = getTeamMembersForSlug(slug);
+    const member = entry?.member || members.find((candidate) => (candidate.person_key || '') === (entry?.person_key || ''));
+    if (slug && member) {
+      startPersonIntelForMember(slug, member, { forceRefresh: true }).catch((err) => {
+        const section = document.querySelector(`[data-person-intel-section="${slug}"] .person-intel-empty`);
+        if (section) section.textContent = err?.message || 'Failed to refresh person profile job.';
+      });
+    }
+    return;
+  }
+
   const submitBtn = e.target.closest('[data-person-submit]');
   if (submitBtn) {
     const slug = submitBtn.getAttribute('data-person-submit');
@@ -7402,13 +9470,6 @@ document.addEventListener('click', (e) => {
     const slug = scoreItem.getAttribute('data-slug');
     const type = scoreItem.getAttribute('data-type');
     if (slug && type) showArgumentsModal(slug, type);
-    return;
-  }
-  const dimensionRow = e.target.closest('.dim-bar-row.is-clickable');
-  if (dimensionRow) {
-    const slug = dimensionRow.getAttribute('data-slug');
-    const dimension = dimensionRow.getAttribute('data-audit-dimension');
-    if (slug && dimension) showDimensionAudit(slug, dimension);
     return;
   }
   const btn = e.target.closest('.btn-audit-log');
@@ -7495,14 +9556,6 @@ $('#arguments-modal-overlay').addEventListener('click', (e) => {
   if (e.target === $('#arguments-modal-overlay')) hideArgumentsModal();
 });
 document.addEventListener('keydown', (e) => {
-  const dimensionRow = e.target.closest?.('.dim-bar-row.is-clickable');
-  if (dimensionRow && (e.key === 'Enter' || e.key === ' ')) {
-    e.preventDefault();
-    const slug = dimensionRow.getAttribute('data-slug');
-    const dimension = dimensionRow.getAttribute('data-audit-dimension');
-    if (slug && dimension) showDimensionAudit(slug, dimension);
-    return;
-  }
   if (e.key === 'Escape') {
     if ($('#audit-modal-overlay').classList.contains('audit-modal-open')) hideAuditLog();
     if ($('#arguments-modal-overlay').classList.contains('audit-modal-open')) hideArgumentsModal();
@@ -7517,14 +9570,29 @@ function showSettingsModal() {
 function hideSettingsModal() {
   $('#settings-modal-overlay').classList.remove('audit-modal-open');
 }
-function saveVcStrategy() {
+async function saveVcStrategy() {
   vcInvestmentStrategy = ($('#vc-strategy-input').value || '').trim();
   localStorage.setItem(VC_STRATEGY_KEY, vcInvestmentStrategy);
+  if (analysisConfig?.vc_strategy_source === 'supabase') {
+    const response = await api('/api/settings/vc-strategy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vc_investment_strategy: vcInvestmentStrategy }),
+      timeoutMs: 5000,
+      retries: 0,
+    });
+    vcInvestmentStrategy = (response?.vc_investment_strategy || '').trim();
+    localStorage.setItem(VC_STRATEGY_KEY, vcInvestmentStrategy);
+  }
 }
 $('#settings-open').addEventListener('click', showSettingsModal);
-$('#settings-save-vc-btn').addEventListener('click', () => {
-  saveVcStrategy();
-  hideSettingsModal();
+$('#settings-save-vc-btn').addEventListener('click', async () => {
+  try {
+    await saveVcStrategy();
+    hideSettingsModal();
+  } catch (err) {
+    window.alert(err?.message || 'Failed to save VC investment strategy.');
+  }
 });
 $('#settings-close-btn').addEventListener('click', hideSettingsModal);
 $('#settings-modal-overlay').addEventListener('click', (e) => {

@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from supabase import Client, create_client
 from agent.run_context import build_run_costs_from_model_executions
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 _client: Client | None = None
 _client_config: tuple[str, str] | None = None
@@ -68,6 +68,17 @@ def _normalize_text_token(value: str | None) -> str:
 
 def _strip_legacy_company_key_suffix(company_key: str | None) -> str:
     return re.sub(r"--legacy-\d+$", "", (company_key or "").strip().lower())
+
+
+def _extract_started_by_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    started_by = {
+        "started_by_user_id": source.get("started_by_user_id"),
+        "started_by_email": source.get("started_by_email"),
+        "started_by_display_name": source.get("started_by_display_name"),
+        "started_by_label": source.get("started_by_label"),
+    }
+    return {key: value for key, value in started_by.items() if value not in (None, "")}
 
 
 def _company_history_group_key(row: dict[str, Any]) -> str:
@@ -203,6 +214,26 @@ def _ranking_sort_key_from_payload(payload: dict[str, Any]) -> tuple[float, floa
         -avg_confidence,
         critical_gaps,
     )
+
+
+def _job_result_summary(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    data = _serialize(payload or {})
+    if not data:
+        return None
+
+    summary_rows = data.get("summary_rows") or []
+    first_summary = summary_rows[0] if summary_rows else {}
+    ranking = _serialize(data.get("ranking_result") or {})
+    return {
+        "mode": data.get("mode"),
+        "company_name": data.get("company_name") or first_summary.get("company_name"),
+        "startup_slug": data.get("startup_slug") or first_summary.get("startup_slug"),
+        "summary_count": len(summary_rows),
+        "decision": data.get("decision") or first_summary.get("decision"),
+        "total_score": data.get("total_score") if data.get("total_score") is not None else first_summary.get("total_score"),
+        "composite_score": ranking.get("composite_score") if ranking.get("composite_score") is not None else first_summary.get("composite_score"),
+        "bucket": ranking.get("bucket") or first_summary.get("bucket"),
+    }
 
 
 def _sorted_completed_company_payloads(
@@ -546,6 +577,7 @@ def _persist_company_analysis_row(
             "mode": run_config.get("input_mode", "pitchdeck"),
             "run_created_at": datetime.now(timezone.utc).isoformat(),
             "result_payload": _serialize(company_payload),
+            **_extract_started_by_fields(run_config),
         },
         on_conflict="job_id_legacy,company_key",
     ).execute()
@@ -756,6 +788,7 @@ def upsert_job(
 
     rc = _merge_worker_state(run_config or {}, worker_state)
     vv = versions or {}
+    started_by = _extract_started_by_fields(rc)
     payload = {
         "job_id_legacy": job_id_legacy,
         "input_mode": rc.get("input_mode", "pitchdeck"),
@@ -767,6 +800,7 @@ def upsert_job(
         "prompt_version": vv.get("prompt_version"),
         "pipeline_version": vv.get("pipeline_version"),
         "schema_version": vv.get("schema_version"),
+        **started_by,
     }
 
     try:
@@ -804,6 +838,24 @@ def ensure_source_files_bucket() -> None:
         )
     except Exception as exc:
         _log_supabase_error("ensure_source_files_bucket", "storage", exc)
+
+
+def get_authenticated_supabase_user(jwt: str) -> dict[str, Any] | None:
+    client = _get_client()
+    if not client or not jwt:
+        return None
+    try:
+        response = client.auth.get_user(jwt)
+        user = getattr(response, "user", None)
+        if user is None:
+            return None
+        if hasattr(user, "model_dump"):
+            return user.model_dump()
+        if isinstance(user, dict):
+            return user
+    except Exception as exc:
+        _log_supabase_error("get_authenticated_supabase_user", "auth", exc)
+    return None
 
 
 def upload_source_file(
@@ -1288,6 +1340,7 @@ def upsert_person_profile_job(
         "request_payload": _serialize(request_payload or {}),
         "result_payload": _serialize(result_payload) if result_payload is not None else None,
         "error": error,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
         client.table("person_profile_jobs").upsert(payload, on_conflict="person_job_id").execute()
@@ -1313,6 +1366,63 @@ def load_person_profile_job(person_job_id: str) -> dict[str, Any] | None:
     except Exception as exc:
         _log_supabase_error("load_person_profile_job", "person_profile_jobs", exc)
         return None
+
+
+def load_latest_person_profile_job(company_slug: str, person_key: str) -> dict[str, Any] | None:
+    client = _get_client()
+    if not client:
+        return None
+
+    normalized_slug = (company_slug or "").strip()
+    normalized_person_key = (person_key or "").strip()
+    if not normalized_slug or not normalized_person_key:
+        return None
+
+    try:
+        row = (
+            client.table("person_profile_jobs")
+            .select(
+                "person_job_id, company_slug, person_key, status, progress, request_payload, "
+                "result_payload, error, created_at, updated_at"
+            )
+            .eq("company_slug", normalized_slug)
+            .eq("person_key", normalized_person_key)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not row.data:
+            return None
+        return row.data[0]
+    except Exception as exc:
+        _log_supabase_error("load_latest_person_profile_job", "person_profile_jobs", exc)
+        return None
+
+
+def prune_person_profile_jobs(company_slug: str, person_key: str, keep_person_job_id: str) -> bool:
+    client = _get_client()
+    if not client:
+        return False
+
+    normalized_slug = (company_slug or "").strip()
+    normalized_person_key = (person_key or "").strip()
+    normalized_keep_id = (keep_person_job_id or "").strip()
+    if not normalized_slug or not normalized_person_key or not normalized_keep_id:
+        return False
+
+    try:
+        (
+            client.table("person_profile_jobs")
+            .delete()
+            .eq("company_slug", normalized_slug)
+            .eq("person_key", normalized_person_key)
+            .neq("person_job_id", normalized_keep_id)
+            .execute()
+        )
+        return True
+    except Exception as exc:
+        _log_supabase_error("prune_person_profile_jobs", "person_profile_jobs", exc)
+        return False
 
 
 def persist_analysis(
@@ -2027,7 +2137,10 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
     try:
         jobs_resp = (
             client.table("jobs")
-            .select("job_id_legacy, input_mode, use_web_search, created_at, run_config")
+            .select(
+                "job_id_legacy, input_mode, use_web_search, created_at, run_config, "
+                "started_by_user_id, started_by_email, started_by_display_name, started_by_label"
+            )
             .order("created_at", desc=True)
             .limit(limit)
             .execute()
@@ -2175,6 +2288,7 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
                 or reconstructable_probe_by_job.get(jid) is True
             )
 
+
             out.append(
                 {
                     "job_id": jid,
@@ -2184,6 +2298,10 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
                     "input_mode": row.get("input_mode"),
                     "use_web_search": row.get("use_web_search"),
                     "run_name": run_config.get("run_name") if isinstance(run_config, dict) else None,
+                    "started_by_user_id": row.get("started_by_user_id") or run_config.get("started_by_user_id"),
+                    "started_by_email": row.get("started_by_email") or run_config.get("started_by_email"),
+                    "started_by_display_name": row.get("started_by_display_name") or run_config.get("started_by_display_name"),
+                    "started_by_label": row.get("started_by_label") or run_config.get("started_by_label"),
                     "run_config": run_config,
                     "results": None,
                     "has_results": has_results,
@@ -2198,17 +2316,91 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
 
 
 def _fetch_company_run_rows(client: Client, limit_runs: int) -> list[dict[str, Any]]:
-    rows = (
-        client.table("company_runs")
-        .select(
-            "company_key, company_name, startup_slug, job_id_legacy, decision, total_score, "
-            "composite_score, bucket, mode, input_order, run_created_at, created_at, result_payload"
-        )
-        .order("run_created_at", desc=True)
-        .limit(limit_runs)
-        .execute()
+    select_clause = (
+        "company_key, company_name, startup_slug, job_id_legacy, decision, total_score, "
+        "composite_score, bucket, mode, input_order, run_created_at, created_at, result_payload, "
+        "started_by_user_id, started_by_email, started_by_display_name, started_by_label"
     )
-    return rows.data or []
+    limits_to_try: list[int] = []
+    for candidate in (limit_runs, min(limit_runs, 250), min(limit_runs, 100), 50):
+        if candidate > 0 and candidate not in limits_to_try:
+            limits_to_try.append(candidate)
+
+    last_error: Exception | None = None
+    for current_limit in limits_to_try:
+        try:
+            rows = (
+                client.table("company_runs")
+                .select(select_clause)
+                .order("run_created_at", desc=True)
+                .limit(current_limit)
+                .execute()
+            )
+            return rows.data or []
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    if last_error:
+        raise last_error
+    return []
+
+
+def _fetch_chat_company_run_rows(client: Client, limit_runs: int = 2000) -> list[dict[str, Any]]:
+    try:
+        rows = (
+            client.table("company_runs")
+            .select(
+                "company_id, company_key, company_name, startup_slug, job_id_legacy, decision, "
+                "total_score, composite_score, bucket, mode, input_order, run_created_at, created_at, result_payload"
+            )
+            .order("run_created_at", desc=True)
+            .limit(limit_runs)
+            .execute()
+        )
+        return rows.data or []
+    except Exception:
+        return []
+
+
+def _fetch_analyses_for_company_ids(
+    client: Client,
+    company_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not company_ids:
+        return []
+    try:
+        rows = (
+            client.table("analyses")
+            .select("company_id, pitch_deck_id, job_id_legacy, created_at")
+            .in_("company_id", company_ids)
+            .order("created_at", desc=True)
+            .limit(2000)
+            .execute()
+        )
+        return rows.data or []
+    except Exception:
+        return []
+
+
+def _fetch_chunks_for_pitch_deck_ids(
+    client: Client,
+    pitch_deck_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not pitch_deck_ids:
+        return []
+    try:
+        rows = (
+            client.table("chunks")
+            .select("pitch_deck_id, chunk_id, text, source_file, page_or_slide, sort_order, created_at")
+            .in_("pitch_deck_id", pitch_deck_ids)
+            .order("sort_order")
+            .limit(10000)
+            .execute()
+        )
+        return rows.data or []
+    except Exception:
+        return []
 
 
 def _reconcile_missing_company_runs(
@@ -2244,12 +2436,19 @@ def _reconcile_missing_company_runs(
         missing_job_ids = [row.get("job_id_legacy") for row in missing_analyses if row.get("job_id_legacy")]
         jobs = (
             client.table("jobs")
-            .select("job_id_legacy, input_mode")
+            .select(
+                "job_id_legacy, input_mode, started_by_user_id, started_by_email, "
+                "started_by_display_name, started_by_label"
+            )
             .in_("job_id_legacy", missing_job_ids)
             .limit(len(missing_job_ids))
             .execute()
         )
-        mode_by_job = {row.get("job_id_legacy"): row.get("input_mode") for row in (jobs.data or [])}
+        job_meta_by_job_id = {
+            row.get("job_id_legacy"): row
+            for row in (jobs.data or [])
+            if row.get("job_id_legacy")
+        }
 
         for row in missing_analyses:
             job_id_legacy = row.get("job_id_legacy")
@@ -2260,7 +2459,8 @@ def _reconcile_missing_company_runs(
                 job_id_legacy,
                 payload,
                 created_at=row.get("created_at"),
-                mode=mode_by_job.get(job_id_legacy),
+                mode=(job_meta_by_job_id.get(job_id_legacy) or {}).get("input_mode"),
+                started_by=job_meta_by_job_id.get(job_id_legacy),
             ):
                 try:
                     client.table("company_runs").upsert(
@@ -2324,12 +2524,17 @@ def list_company_histories(
                 "mode": row.get("mode"),
                 "input_order": row.get("input_order"),
                 "created_at": row.get("run_created_at") or row.get("created_at"),
+                "started_by_user_id": row.get("started_by_user_id"),
+                "started_by_email": row.get("started_by_email"),
+                "started_by_display_name": row.get("started_by_display_name"),
+                "started_by_label": row.get("started_by_label"),
                 "results": _compact_company_run_payload(row.get("result_payload")),
             }
             entry = grouped.setdefault(
                 group_key,
                 {
                     "company_key": company_key,
+                    "company_lookup_key": group_key,
                     "company_name": row.get("company_name") or row.get("startup_slug") or company_key,
                     "latest_score": row.get("composite_score"),
                     "latest_total_score": row.get("total_score"),
@@ -2420,15 +2625,250 @@ def _compact_company_run_payload(payload: dict[str, Any] | None) -> dict[str, An
     }
 
 
+def load_company_chat_context(company_lookup_key: str) -> dict[str, Any] | None:
+    """Load all persisted runs and evidence for one grouped company identity."""
+    client = _get_client()
+    if not client:
+        return None
+
+    normalized_lookup_key = (company_lookup_key or "").strip().lower()
+    if not normalized_lookup_key:
+        return None
+
+    rows = _fetch_chat_company_run_rows(client, limit_runs=2000)
+    matching_rows = [
+        row for row in rows
+        if _company_history_group_key(row) == normalized_lookup_key
+    ]
+    if not matching_rows:
+        return None
+
+    company_ids = list({
+        row.get("company_id")
+        for row in matching_rows
+        if row.get("company_id")
+    })
+    analyses = _fetch_analyses_for_company_ids(client, company_ids)
+    pitch_deck_ids = list({
+        row.get("pitch_deck_id")
+        for row in analyses
+        if row.get("pitch_deck_id")
+    })
+    chunks = _fetch_chunks_for_pitch_deck_ids(client, pitch_deck_ids)
+
+    analyses_by_pitch_deck: dict[str, dict[str, Any]] = {}
+    for row in analyses:
+        pitch_deck_id = row.get("pitch_deck_id")
+        if not pitch_deck_id:
+            continue
+        existing = analyses_by_pitch_deck.get(pitch_deck_id)
+        current_ts = str(row.get("created_at") or "")
+        if existing and str(existing.get("created_at") or "") >= current_ts:
+            continue
+        analyses_by_pitch_deck[pitch_deck_id] = row
+
+    chunks_by_job: dict[str, list[dict[str, Any]]] = {}
+    for chunk in chunks:
+        analysis_row = analyses_by_pitch_deck.get(chunk.get("pitch_deck_id"))
+        if not analysis_row:
+            continue
+        job_id = analysis_row.get("job_id_legacy")
+        if not job_id:
+            continue
+        row_payload = {
+            "chunk_id": chunk.get("chunk_id"),
+            "text": chunk.get("text"),
+            "source_file": chunk.get("source_file"),
+            "page_or_slide": chunk.get("page_or_slide"),
+            "pitch_deck_id": chunk.get("pitch_deck_id"),
+        }
+        chunks_by_job.setdefault(job_id, []).append(row_payload)
+
+    runs: list[dict[str, Any]] = []
+    latest_name = None
+    for row in sorted(
+        matching_rows,
+        key=lambda item: str(item.get("run_created_at") or item.get("created_at") or ""),
+        reverse=True,
+    ):
+        result_payload = _serialize(row.get("result_payload") or {})
+        latest_name = latest_name or row.get("company_name") or result_payload.get("company_name")
+        runs.append(
+            {
+                "job_id": row.get("job_id_legacy"),
+                "company_id": row.get("company_id"),
+                "company_name": row.get("company_name") or result_payload.get("company_name"),
+                "startup_slug": row.get("startup_slug") or result_payload.get("startup_slug"),
+                "decision": row.get("decision"),
+                "created_at": row.get("run_created_at") or row.get("created_at"),
+                "results": result_payload,
+                "chunks": chunks_by_job.get(row.get("job_id_legacy"), []),
+            }
+        )
+
+    latest_result = (runs[0].get("results") if runs else {}) or {}
+    return {
+        "company_lookup_key": normalized_lookup_key,
+        "company_name": latest_name or "Unknown company",
+        "domain": latest_result.get("domain"),
+        "runs": runs,
+    }
+
+
+def load_company_chat_session(company_lookup_key: str) -> dict[str, Any] | None:
+    """Load the shared persisted chat session for a company."""
+    client = _get_client()
+    if not client:
+        return None
+
+    normalized_lookup_key = (company_lookup_key or "").strip().lower()
+    if not normalized_lookup_key:
+        return None
+
+    try:
+        rows = (
+            client.table("company_chat_sessions")
+            .select("company_key, company_name, selection, summary, transcript, model_executions, created_at, updated_at")
+            .eq("company_key", normalized_lookup_key)
+            .limit(1)
+            .execute()
+        )
+        if not rows.data:
+            return None
+        row = rows.data[0] or {}
+        return {
+            "company_lookup_key": row.get("company_key") or normalized_lookup_key,
+            "company_name": row.get("company_name"),
+            "selection": _serialize(row.get("selection") or {}),
+            "summary": str(row.get("summary") or ""),
+            "transcript": _serialize(row.get("transcript") or []),
+            "model_executions": _serialize(row.get("model_executions") or []),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+    except Exception as exc:
+        _log_supabase_error("load_company_chat_session", "company_chat_sessions", exc)
+        return None
+
+
+def persist_company_chat_session(
+    *,
+    company_lookup_key: str,
+    company_name: str | None,
+    selection: dict[str, Any] | None,
+    summary: str,
+    transcript: list[dict[str, Any]],
+    model_executions: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Persist the shared chat transcript for a company."""
+    client = _get_client()
+    if not client:
+        return False
+
+    normalized_lookup_key = (company_lookup_key or "").strip().lower()
+    if not normalized_lookup_key:
+        return False
+
+    try:
+        client.table("company_chat_sessions").upsert(
+            {
+                "company_key": normalized_lookup_key,
+                "company_name": company_name or normalized_lookup_key,
+                "selection": _serialize(selection or {}),
+                "summary": str(summary or ""),
+                "transcript": _serialize(transcript or []),
+                "model_executions": _serialize(model_executions or []),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="company_key",
+        ).execute()
+        return True
+    except Exception as exc:
+        _log_supabase_error("persist_company_chat_session", "company_chat_sessions", exc)
+        return False
+
+
+def delete_company_chat_session(company_lookup_key: str) -> bool:
+    """Delete the shared persisted chat transcript for a company."""
+    client = _get_client()
+    if not client:
+        return False
+
+    normalized_lookup_key = (company_lookup_key or "").strip().lower()
+    if not normalized_lookup_key:
+        return False
+
+    try:
+        client.table("company_chat_sessions").delete().eq("company_key", normalized_lookup_key).execute()
+        return True
+    except Exception as exc:
+        _log_supabase_error("delete_company_chat_session", "company_chat_sessions", exc)
+        return False
+
+
+def load_app_setting(key: str) -> str | None:
+    """Load a shared app setting value by key."""
+    client = _get_client()
+    if not client:
+        return None
+
+    normalized_key = (key or "").strip()
+    if not normalized_key:
+        return None
+
+    try:
+        rows = (
+            client.table("app_settings")
+            .select("setting_key, value_text")
+            .eq("setting_key", normalized_key)
+            .limit(1)
+            .execute()
+        )
+        if not rows.data:
+            return ""
+        row = rows.data[0] or {}
+        return str(row.get("value_text") or "")
+    except Exception as exc:
+        _log_supabase_error("load_app_setting", "app_settings", exc)
+        return None
+
+
+def save_app_setting(key: str, value: str | None) -> bool:
+    """Persist a shared app setting value by key."""
+    client = _get_client()
+    if not client:
+        return False
+
+    normalized_key = (key or "").strip()
+    if not normalized_key:
+        return False
+
+    try:
+        client.table("app_settings").upsert(
+            {
+                "setting_key": normalized_key,
+                "value_text": str(value or ""),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="setting_key",
+        ).execute()
+        return True
+    except Exception as exc:
+        _log_supabase_error("save_app_setting", "app_settings", exc)
+        return False
+
+
 def _extract_company_runs_from_payload(
     job_id_legacy: str,
     payload: dict[str, Any],
     *,
     created_at: str | None,
     mode: str | None,
+    started_by: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     serialized = _serialize(payload or {})
     payload_mode = serialized.get("mode")
+    started_by_fields = _extract_started_by_fields(started_by)
     if payload_mode == "single":
         company_name = serialized.get("company_name") or serialized.get("startup_slug") or job_id_legacy
         company_key = _normalize_company_key(company_name, None, serialized.get("startup_slug"))
@@ -2446,6 +2886,7 @@ def _extract_company_runs_from_payload(
             "mode": mode or payload_mode,
             "run_created_at": created_at,
             "result_payload": _compact_company_run_payload(serialized),
+            **started_by_fields,
         }]
 
     rows: list[dict[str, Any]] = []
@@ -2495,6 +2936,7 @@ def _extract_company_runs_from_payload(
             "mode": mode or payload_mode,
             "run_created_at": created_at,
             "result_payload": row_payload,
+            **started_by_fields,
         })
     return rows
 
@@ -2528,11 +2970,18 @@ def backfill_company_runs_from_analyses(limit_jobs: int = 500) -> int:
         )
         jobs = (
             client.table("jobs")
-            .select("job_id_legacy, input_mode")
+            .select(
+                "job_id_legacy, input_mode, started_by_user_id, started_by_email, "
+                "started_by_display_name, started_by_label"
+            )
             .limit(limit_jobs)
             .execute()
         )
-        mode_by_job = {row.get("job_id_legacy"): row.get("input_mode") for row in (jobs.data or [])}
+        job_meta_by_job_id = {
+            row.get("job_id_legacy"): row
+            for row in (jobs.data or [])
+            if row.get("job_id_legacy")
+        }
         seen_jobs: set[str] = set()
         for row in analyses.data or []:
             job_id_legacy = row.get("job_id_legacy")
@@ -2544,7 +2993,8 @@ def backfill_company_runs_from_analyses(limit_jobs: int = 500) -> int:
                 job_id_legacy,
                 payload,
                 created_at=row.get("created_at"),
-                mode=mode_by_job.get(job_id_legacy),
+                mode=(job_meta_by_job_id.get(job_id_legacy) or {}).get("input_mode"),
+                started_by=job_meta_by_job_id.get(job_id_legacy),
             ):
                 try:
                     client.table("company_runs").upsert(
@@ -2583,11 +3033,18 @@ def backfill_all_company_runs_from_analyses(limit_jobs: int = 500) -> int:
         )
         jobs = (
             client.table("jobs")
-            .select("job_id_legacy, input_mode")
+            .select(
+                "job_id_legacy, input_mode, started_by_user_id, started_by_email, "
+                "started_by_display_name, started_by_label"
+            )
             .limit(limit_jobs)
             .execute()
         )
-        mode_by_job = {row.get("job_id_legacy"): row.get("input_mode") for row in (jobs.data or [])}
+        job_meta_by_job_id = {
+            row.get("job_id_legacy"): row
+            for row in (jobs.data or [])
+            if row.get("job_id_legacy")
+        }
         seen_jobs: set[str] = set()
         for row in analyses.data or []:
             job_id_legacy = row.get("job_id_legacy")
@@ -2599,7 +3056,8 @@ def backfill_all_company_runs_from_analyses(limit_jobs: int = 500) -> int:
                 job_id_legacy,
                 payload,
                 created_at=row.get("created_at"),
-                mode=mode_by_job.get(job_id_legacy),
+                mode=(job_meta_by_job_id.get(job_id_legacy) or {}).get("input_mode"),
+                started_by=job_meta_by_job_id.get(job_id_legacy),
             ):
                 try:
                     client.table("company_runs").upsert(
