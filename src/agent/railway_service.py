@@ -11,6 +11,8 @@ import os
 import runpy
 import threading
 
+from agent.runtime_env import validate_runtime_environment
+
 
 class _WorkerHealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
@@ -46,6 +48,7 @@ def _start_worker_health_server() -> ThreadingHTTPServer:
 
 def main() -> int:
     role = os.getenv("SERVICE_ROLE", "web").strip().lower()
+    validate_runtime_environment(service_role=role)
     if role == "worker":
         from agent import specter_batch_worker
 

@@ -12,7 +12,7 @@
 
 ## Overview
 
-Rockaway Deal Intelligence helps investment teams evaluate and prioritize deal flow. Upload pitch decks, metrics, or Specter CSVs; optionally enable web search for extra context; and get structured scores, executive summaries, key points, red flags, and Excel exports.
+Rockaway Deal Intelligence helps investment teams evaluate and prioritize deal flow. Upload pitch decks, metrics, or Specter CSVs; optionally enable web search for extra context; and get structured scores, executive summaries, key points, and red flags.
 
 **Pipeline stages:**
 
@@ -35,6 +35,14 @@ cp .env.example .env
 
 Add your API keys to `.env` (see [Configuration](#configuration)).
 
+Use separate infrastructure for non-production and production deployments. The recommended layout is:
+
+- local `.env` for development
+- one shared Railway + Supabase stack for staging/testing
+- one separate Railway + Supabase stack for production
+
+See [`docs/environments.md`](./docs/environments.md) for the deployment checklist and environment matrix.
+
 ### Run the Web App (recommended)
 
 ```bash
@@ -46,7 +54,7 @@ Then open **http://localhost:8000** in your browser. Set `APP_PASSWORD` in `.env
 - **Upload** PDF, PPTX, Word, Excel, or CSV files
 - Choose **Pitch Deck** (each file = one company), **Specter** (company + people CSVs), or **Multi-file** (all files = one company)
 - Optionally enable **web search** for richer evidence
-- Get ranked results with executive summaries, key points, red flags, and Excel export
+- Get ranked results with executive summaries, key points, red flags, and saved analysis history
 
 ### Run Batch Mode (CLI)
 
@@ -101,7 +109,7 @@ Open a pull request, review, merge, then sync `main` again before starting the n
 
 ## Web App
 
-The web UI lets you upload files, run analyses, and download results without touching the CLI.
+The web UI lets you upload files, run analyses, and review saved results without touching the CLI.
 
 | Feature | Description |
 |---------|-------------|
@@ -109,7 +117,7 @@ The web UI lets you upload files, run analyses, and download results without tou
 | **Input modes** | Pitch Deck (1 file per company), Specter (2 CSVs), Multi-file (all files = 1 company) |
 | **Web search** | Optional Perplexity/Brave search for extra evidence |
 | **VC strategy** | Optional investment thesis for tailored scoring |
-| **Results** | Summary table, executive summaries, key points, red flags, pro/contra arguments, Excel download |
+| **Results** | Summary table, executive summaries, key points, red flags, pro/contra arguments |
 
 ### Local run
 
@@ -146,18 +154,20 @@ The worker polls the queue on a configurable interval via
 Railway production worker overrides this to `10` seconds to reduce idle polling
 noise and network chatter.
 
-### Railway production layout
+### Railway deployment layout
 
 Railway runs the same image in two service roles:
 
 - `startup-ranker-web` starts `python -m agent.railway_service` with `SERVICE_ROLE=web`
 - `startup-ranker-worker` starts `python -m agent.railway_service` with `SERVICE_ROLE=worker`
 
-Current production behavior:
+Recommended shared staging / production behavior:
 
 - `ENABLE_SPECTER_WORKER_SERVICE=true` on web, so Specter runs queue to the dedicated worker
 - `RESTART_ON_IDLE_AFTER_ANALYSIS=true` on web, so the web process can recycle after completed analyses and reclaim idle memory
 - `SPECTER_WORKER_POLL_SECONDS=10` on worker, to reduce idle queue polling overhead
+
+Use separate Railway projects and separate Supabase projects for staging and production. Do not point production at the current shared non-production backend.
 
 Worker-backed runs only expose saved results once the terminal batch snapshot has
 been persisted. While a run is still active, `/api/analyses/<job_id>` returns
@@ -244,7 +254,9 @@ Copy `.env.example` to `.env` and set:
 | `OPENROUTER_API_KEY` | if OpenRouter | For `LLM_PROVIDER=openrouter` |
 | `OPENROUTER_BASE_URL` | optional | Defaults to `https://openrouter.ai/api/v1` |
 | `ANTHROPIC_API_KEY` | if Anthropic | For `LLM_PROVIDER=anthropic` |
-| `APP_PASSWORD` | optional | Web app login |
+| `APP_ENV` | optional | `development` (default), `staging`, or `production` |
+| `APP_PASSWORD` | optional locally, required in production web | Web app login |
+| `SESSION_SECRET` | optional locally, required in production web | Cookie/session signing secret |
 | `PPLX_API_KEY` | optional | Perplexity for web search |
 | `BRAVE_SEARCH_API_KEY` | optional | Brave Search alternative |
 | `WEB_SEARCH_PROVIDER` | optional | `sonar` (Perplexity) or `brave` |
@@ -254,6 +266,8 @@ Copy `.env.example` to `.env` and set:
 | `LLM_MAX_RETRIES` | optional | Max retries on transient LLM failures (default: `2`) |
 | `SUPABASE_URL` | optional | Supabase project URL for persistent storage |
 | `SUPABASE_SERVICE_ROLE_KEY` | optional | Supabase service-role key |
+| `SUPABASE_SOURCE_FILES_BUCKET` | optional | Shared storage bucket for uploaded source files (default: `analysis-inputs`) |
+| `SERVICE_ROLE` | Railway only | `web` or `worker`; selects service behavior inside the shared image |
 | `ENABLE_SPECTER_WORKER_SERVICE` | optional | Queue Specter runs for the dedicated worker service instead of executing them in the web process |
 | `SPECTER_WORKER_POLL_SECONDS` | optional | Poll interval for the dedicated Specter worker (code default: `5`; current Railway production override: `10`) |
 | `RESTART_ON_IDLE_AFTER_ANALYSIS` | optional | When `true`, the web service can restart after completed analyses have been persisted/served so idle memory is reclaimed |
@@ -281,11 +295,11 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 
 ```
 LLM_PROVIDER=openai
-MODEL_NAME=gpt-5-mini
+MODEL_NAME=gpt-5.4-mini
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
-Available OpenAI models in the UI: `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-4.1-mini`, `o4-mini`, `gpt-5.2`, `gpt-5.4`
+Available OpenAI models in the UI: `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5`, `gpt-4.1-mini`, `o4-mini`, `gpt-5.2`, `gpt-5.4`
 
 **Example for OpenRouter:**
 
@@ -302,11 +316,11 @@ Available OpenRouter models in the UI: `openrouter/hunter-alpha`
 
 ## Supabase (Optional)
 
-When configured, the app persists completed analyses to Supabase so results survive restarts and Excel files can be downloaded even after the temp directory is cleaned up.
+When configured, the app persists completed analyses to Supabase so results survive restarts and worker services can share uploaded source files through Supabase Storage.
 
 1. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env`
 2. Apply migrations from `supabase/migrations/` in order
-3. The app auto-creates the `analysis-exports` storage bucket on first use
+3. The app auto-creates the `analysis-inputs` storage bucket on first source-file upload unless you override `SUPABASE_SOURCE_FILES_BUCKET`
 
 See [`supabase/README.md`](./supabase/README.md) for full setup details.
 

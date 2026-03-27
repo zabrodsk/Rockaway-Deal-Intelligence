@@ -165,6 +165,7 @@ def _company_payload_from_result(
             "potential_summary": summary_row.get("potential_summary"),
             "key_points": summary_row.get("key_points"),
             "red_flags": summary_row.get("red_flags"),
+            "dimension_scores": _serialize(summary_row.get("dimension_scores") or []),
         } if summary_row else None,
     }
 
@@ -286,6 +287,7 @@ def _compose_results_payload_from_company_runs(
             "strategy_fit_summary",
             "team_summary",
             "potential_summary",
+            "dimension_scores",
         ):
             if key in ranking:
                 summary_row[key] = _serialize(ranking.get(key))
@@ -1300,7 +1302,7 @@ def load_person_profile_job(person_job_id: str) -> dict[str, Any] | None:
     try:
         row = (
             client.table("person_profile_jobs")
-            .select("person_job_id, status, progress, result_payload, error")
+            .select("person_job_id, status, progress, request_payload, result_payload, error")
             .eq("person_job_id", person_job_id)
             .limit(1)
             .execute()
@@ -2413,6 +2415,7 @@ def _compact_company_run_payload(payload: dict[str, Any] | None) -> dict[str, An
             "potential_summary": ranking.get("potential_summary") or summary_row.get("potential_summary"),
             "key_points": ranking.get("key_points") or summary_row.get("key_points"),
             "red_flags": ranking.get("red_flags") or summary_row.get("red_flags"),
+            "dimension_scores": _serialize(ranking.get("dimension_scores") or summary_row.get("dimension_scores") or []),
         },
     }
 

@@ -120,6 +120,25 @@ without changing the existing default routing behavior.
 - Updated README model lists and catalog validation tests to match the new
   production options
 
+## GPT-5.4 Mini/Nano Pipeline Defaults (2026-03-17)
+
+The New Analysis pipeline defaults now prefer GPT-5.4 mini/nano models with
+phase-aware OpenAI sampling.
+
+- Added selectable OpenAI models: `gpt-5.4-mini`, `gpt-5.4-nano`
+- Replaced selectable `gpt-5-mini` / `gpt-5-nano` entries for new runs while
+  keeping legacy label/cost compatibility for historical rows
+- New per-phase defaults:
+  - decomposition -> `gpt-5.4-mini`
+  - answering -> `gpt-5.4-nano`
+  - generation -> `gpt-5.4-mini`
+  - evaluation -> `gpt-5.4-mini`
+  - ranking -> `gpt-5.4-mini`
+- OpenAI requests now support mixed `temperature` + `reasoning.effort`
+  depending on phase
+- Added a narrow `gpt-5.4-nano` fallback that retries in temperature-only mode
+  if the API rejects the reasoning parameter
+
 ---
 
 ## Files Changed (v0.0.6)

@@ -60,6 +60,7 @@ from agent.llm_policy import (
     resolve_effective_phase_choices,
     resolve_effective_phase_models,
 )
+from agent.runtime_env import validate_runtime_environment
 from agent.run_context import (
     RunTelemetryCollector,
     build_run_costs_from_model_executions,
@@ -75,6 +76,7 @@ from agent.person_intel.models import (
     PersonProfileJobRequest,
 )
 from agent.person_intel.service import PersonIntelService
+from web.agent_api import create_agent_router
 
 app = FastAPI(title="Rockaway Deal Intelligence", docs_url=None, redoc_url=None)
 
@@ -162,6 +164,11 @@ SPECTER_COMPANY_EVENT_PREFIX = "__SPECTER_COMPANY_EVENT__"
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.on_event("startup")
+async def _validate_runtime_environment_on_startup() -> None:
+    validate_runtime_environment(service_role=os.getenv("SERVICE_ROLE", "web"))
 
 
 def _lazy_import_pandas():
@@ -850,6 +857,7 @@ class PersonProfileJobStatus(BaseModel):
 PersonProfileJobStatus.model_rebuild()
 
 _person_jobs: dict[str, PersonProfileJobStatus] = {}
+_person_job_tasks: dict[str, asyncio.Task[Any]] = {}
 _person_service = PersonIntelService()
 
 
@@ -1125,6 +1133,63 @@ def _persist_person_job(job_id: str, request_payload: dict[str, Any] | None = No
         company_slug=(request_payload or {}).get("company_slug"),
         person_key=(request_payload or {}).get("person_key"),
     )
+
+
+def _register_person_job_task(job_id: str, task: asyncio.Task[Any]) -> None:
+    _person_job_tasks[job_id] = task
+
+    def _cleanup(completed_task: asyncio.Task[Any]) -> None:
+        if _person_job_tasks.get(job_id) is completed_task:
+            _person_job_tasks.pop(job_id, None)
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            completed_task.result()
+
+    task.add_done_callback(_cleanup)
+
+
+def _schedule_person_profile_job(job_id: str, req: PersonProfileJobRequest) -> None:
+    task = _person_job_tasks.get(job_id)
+    if task and not task.done():
+        return
+    _register_person_job_task(job_id, asyncio.create_task(_run_person_profile_job(job_id, req)))
+
+
+def _resume_person_profile_job_if_needed(
+    job_id: str,
+    loaded: dict[str, Any] | None = None,
+) -> None:
+    task = _person_job_tasks.get(job_id)
+    if task and not task.done():
+        return
+
+    job = _person_jobs.get(job_id)
+    if not job or job.status not in {"pending", "running"}:
+        return
+
+    loaded = loaded or (db.load_person_profile_job(job_id) if db and db.is_configured() else None)
+    request_payload = (loaded or {}).get("request_payload") or {}
+    if not isinstance(request_payload, dict) or not request_payload:
+        job.status = "error"
+        job.progress = "Profile generation failed"
+        job.error = "Job payload missing; unable to resume person profile job."
+        _persist_person_job(job_id)
+        return
+
+    try:
+        req = PersonProfileJobRequest.model_validate(request_payload)
+    except Exception as exc:
+        job.status = "error"
+        job.progress = "Profile generation failed"
+        job.error = f"Invalid persisted person profile payload: {exc}"
+        _persist_person_job(job_id, request_payload)
+        return
+
+    job.status = "pending"
+    job.progress = "Resuming after restart..."
+    job.error = None
+    _persist_person_job(job_id, request_payload)
+    print(f"Resuming persisted person profile job {job_id}.")
+    _schedule_person_profile_job(job_id, req)
 
 
 def _is_stop_requested(job_id: str) -> bool:
@@ -1441,6 +1506,593 @@ def _parse_max_startups_from_instructions(instructions: str | None) -> int | Non
     return None
 
 
+async def _upload_files_payload(files: list[UploadFile]) -> dict[str, Any]:
+    job_id = str(uuid.uuid4())[:8]
+    upload_dir = Path(tempfile.mkdtemp()) / job_id
+    upload_dir.mkdir(parents=True)
+
+    saved = []
+    for f in files:
+        dest = upload_dir / f.filename
+        with open(dest, "wb") as buf:
+            shutil.copyfileobj(f.file, buf)
+        saved.append(
+            {
+                "name": f.filename,
+                "size": dest.stat().st_size,
+                "mime_type": f.content_type or "",
+                "sha256": _sha256_file(dest),
+                "local_path": str(dest),
+            }
+        )
+
+    specter = _detect_specter_csvs(upload_dir, [f["name"] for f in saved])
+
+    _jobs[job_id] = AnalysisStatus(
+        job_id=job_id, status="pending", progress="Files uploaded"
+    )
+    _results_cache[job_id] = {
+        "upload_dir": str(upload_dir),
+        "files": saved,
+        "specter": specter,
+    }
+    if db and db.is_configured():
+        db.insert_analysis_event(
+            job_id,
+            message="Files uploaded",
+            event_type="upload",
+            payload={"num_files": len(saved)},
+        )
+        db.insert_job_status_history(
+            job_id,
+            status="pending",
+            progress="Files uploaded",
+            source="upload",
+        )
+
+    return {
+        "job_id": job_id,
+        "files": saved,
+        "mode": "specter" if specter else "documents",
+    }
+
+
+async def _start_analysis_payload(job_id: str, req: AnalyzeRequest) -> dict[str, Any]:
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    _cancel_scheduled_restart()
+
+    quality_tier = normalize_quality_tier(req.quality_tier)
+    pipeline_policy = None
+    phase_models = normalize_phase_models(req.phase_models) if req.phase_models is not None else None
+    premium_phase_models = normalize_premium_phase_models(req.premium_phase_models)
+    if req.phase_models:
+        try:
+            pipeline_policy = build_phase_model_policy(phase_models)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = dict(pipeline_policy.answering)
+        effective_phase_models = resolve_effective_phase_models(pipeline_policy)
+        llm_display = build_phase_policy_display_label(effective_phase_models)
+        quality_tier = None
+        premium_phase_models = None
+    elif quality_tier:
+        try:
+            pipeline_policy = build_pipeline_policy(
+                quality_tier,
+                premium_phase_models if quality_tier == "premium" else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = dict(pipeline_policy.answering)
+        effective_phase_models = resolve_effective_phase_choices(pipeline_policy)
+        llm_display = build_tier_display_label(
+            quality_tier,
+            effective_phase_models=effective_phase_models,
+        )
+    else:
+        try:
+            selected_entry = validate_requested_selection(req.llm_provider, req.llm_model)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        llm_selection = serialize_selection(
+            (selected_entry.provider if selected_entry else None),
+            (selected_entry.model if selected_entry else None),
+        )
+        effective_phase_models = None
+        llm_display = llm_selection["label"]
+
+    _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
+    _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
+    cache = _results_cache[job_id]
+    cache["input_mode"] = req.input_mode
+    cache["run_name"] = req.run_name
+    cache["vc_investment_strategy"] = req.vc_investment_strategy
+    cache["use_web_search"] = req.use_web_search
+    cache["instructions"] = req.instructions
+    cache["llm_selection"] = llm_selection
+    cache["phase_models"] = phase_models if req.phase_models else None
+    cache["quality_tier"] = quality_tier
+    cache["premium_phase_models"] = (
+        premium_phase_models if quality_tier == "premium" else None
+    )
+    cache["effective_phase_models"] = effective_phase_models
+    cache["run_config"] = {
+        "input_mode": req.input_mode,
+        "run_name": req.run_name,
+        "vc_investment_strategy": req.vc_investment_strategy,
+        "instructions": req.instructions,
+        "use_web_search": req.use_web_search,
+        "phase_models": phase_models if req.phase_models else None,
+        "quality_tier": quality_tier,
+        "premium_phase_models": premium_phase_models if quality_tier == "premium" else None,
+        "effective_phase_models": effective_phase_models,
+        "llm_provider": llm_selection["provider"],
+        "llm_model": llm_selection["model"],
+        "llm": llm_display,
+    }
+    cache["model_executions"] = []
+    cache["run_costs_aggregate"] = _empty_run_costs_summary()
+    cache["versions"] = _runtime_versions()
+
+    if db and db.is_configured():
+        run_config = dict(cache["run_config"])
+        db.upsert_job(job_id, run_config=run_config, versions=_runtime_versions())
+        db.upsert_job_control(
+            job_id,
+            pause_requested=False,
+            stop_requested=False,
+            last_action="start",
+        )
+
+    vc_str = _ensure_str(req.vc_investment_strategy).strip() or None
+    inst = _ensure_str(req.instructions).strip() or None
+    if req.input_mode == "specter" and ENABLE_SPECTER_WORKER_SERVICE:
+        queued, worker_message = _queue_worker_backed_specter_job(job_id)
+        if queued:
+            _set_job_status(job_id, "running", worker_message or "Queued for worker...", source="start_analysis")
+            _append_progress_and_log(job_id, worker_message or "Queued for worker...")
+            return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
+        queue_error = worker_message or "Unknown worker queue error."
+        _set_job_status(job_id, "error", f"Worker queue failed. {queue_error}", source="start_analysis")
+        _append_progress_and_log(job_id, f"Worker queue failed — {queue_error}")
+        raise HTTPException(status_code=503, detail=f"Specter worker queue failed: {queue_error}")
+
+    threading.Thread(
+        target=lambda: asyncio.run(
+            _run_analysis(
+                job_id,
+                use_web_search=req.use_web_search,
+                instructions=inst,
+                input_mode=req.input_mode,
+                vc_investment_strategy=vc_str,
+                llm_selection=llm_selection,
+                pipeline_policy=pipeline_policy,
+            )
+        ),
+        daemon=True,
+    ).start()
+    return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
+
+
+async def _control_analysis_job_payload(
+    job_id: str,
+    req: JobControlRequest,
+) -> dict[str, Any]:
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = _jobs[job_id]
+    if job.status in {"done", "error", "stopped"}:
+        return {"job_id": job_id, "status": job.status, "progress": job.progress}
+
+    control = _ensure_job_control(job_id)
+    action = req.action
+
+    if action == "pause":
+        control["pause_requested"] = True
+        if job.status in {"running", "pending"}:
+            _set_job_status(job_id, "paused", source="control")
+            _append_progress(job_id, "Paused by user.")
+    elif action == "resume":
+        control["pause_requested"] = False
+        if job.status in {"paused", "pending"}:
+            _set_job_status(job_id, "running", source="control")
+            _append_progress(job_id, "Resumed by user.")
+    else:
+        control["pause_requested"] = False
+        control["stop_requested"] = True
+        _append_progress(job_id, "Stopped by user.", allow_stopped=True)
+        _set_job_status(job_id, "stopped", "Stopped by user.", source="control")
+
+    if db and db.is_configured():
+        db.upsert_job_control(
+            job_id,
+            pause_requested=bool(control.get("pause_requested")),
+            stop_requested=bool(control.get("stop_requested")),
+            last_action=action,
+        )
+
+    return {"job_id": job_id, "status": job.status, "progress": job.progress}
+
+
+async def _create_person_profile_job_payload(
+    req: PersonProfileJobRequest,
+) -> dict[str, Any]:
+    _cancel_scheduled_restart()
+
+    job_id = str(uuid.uuid4())[:8]
+    _person_jobs[job_id] = PersonProfileJobStatus(
+        job_id=job_id,
+        status="pending",
+        progress="Queued",
+    )
+    _persist_person_job(job_id, req.model_dump())
+    _schedule_person_profile_job(job_id, req)
+    return {"job_id": job_id, "status": "running"}
+
+
+async def _get_person_profile_status_payload(job_id: str) -> dict[str, Any]:
+    if job_id not in _person_jobs:
+        if db and db.is_configured():
+            loaded = db.load_person_profile_job(job_id)
+            if loaded:
+                _person_jobs[job_id] = PersonProfileJobStatus(
+                    job_id=job_id,
+                    status=loaded.get("status", "pending"),
+                    progress=loaded.get("progress") or "",
+                    result=loaded.get("result_payload"),
+                    error=loaded.get("error"),
+                )
+                _resume_person_profile_job_if_needed(job_id, loaded)
+            else:
+                raise HTTPException(status_code=404, detail="Job not found")
+        else:
+            raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        _resume_person_profile_job_if_needed(job_id)
+
+    job = _person_jobs[job_id]
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "progress": job.progress,
+        "result": job.result,
+        "error": job.error,
+    }
+
+
+async def _create_bulk_founder_jobs_payload(
+    req: BulkFounderJobRequest,
+) -> dict[str, Any]:
+    _cancel_scheduled_restart()
+
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for idx, founder in enumerate(req.founders):
+        person_key = founder.person_key or f"{req.company_slug}:founder:{idx + 1}"
+        if not founder.primary_profile_url:
+            skipped.append(
+                {
+                    "person_key": person_key,
+                    "full_name": founder.full_name or f"Founder {idx + 1}",
+                    "status": "needs_input",
+                    "reason": "missing_primary_profile_url",
+                }
+            )
+            continue
+
+        profile_req = PersonProfileJobRequest(
+            primary_profile_url=founder.primary_profile_url,
+            full_name=founder.full_name,
+            location=founder.location,
+            current_company=founder.current_company,
+            role=founder.role,
+            known_aliases=founder.known_aliases,
+            user_uploaded_text=req.user_uploaded_text,
+            user_uploaded_images=req.user_uploaded_images,
+            company_slug=req.company_slug,
+            person_key=person_key,
+        )
+        job_id = str(uuid.uuid4())[:8]
+        _person_jobs[job_id] = PersonProfileJobStatus(
+            job_id=job_id,
+            status="pending",
+            progress="Queued",
+        )
+        _persist_person_job(job_id, profile_req.model_dump())
+        _schedule_person_profile_job(job_id, profile_req)
+        created.append(
+            {
+                "person_key": person_key,
+                "full_name": founder.full_name or "",
+                "job_id": job_id,
+                "status": "running",
+            }
+        )
+
+    return {
+        "company_slug": req.company_slug,
+        "jobs": created,
+        "skipped": skipped,
+    }
+
+
+def _get_config_payload() -> dict[str, Any]:
+    default_llm = current_default_selection()
+    return {
+        "llm": default_llm["label"],
+        "default_llm": default_llm,
+        "available_models": available_models_payload(),
+        "pricing_catalog": pricing_catalog_payload(),
+        "phase_model_defaults": phase_model_defaults_payload(),
+        "quality_tiers": quality_tiers_payload(),
+        "premium_phase_options": premium_phase_options_payload(),
+    }
+
+
+async def _get_status_payload(
+    job_id: str,
+    response: Response,
+) -> dict[str, Any]:
+    _set_no_store_headers(response)
+
+    if job_id in _jobs:
+        job = _jobs[job_id]
+        cache = _results_cache.get(job_id, {})
+        if _is_worker_backed_job(job_id) and db and db.is_configured():
+            persisted_status = db.load_job_status(job_id)
+            if persisted_status:
+                job.status = _normalize_worker_status(persisted_status.get("status"))
+                job.progress = persisted_status.get("progress") or job.progress
+                job.progress_log = _load_worker_progress_log(job_id)
+        results = cache.get("results")
+        if _is_compact_results_payload(results) and job.status in {"done", "error", "stopped"}:
+            results = None
+        if results is None and job.status in {"pending", "running", "paused"}:
+            results = _maybe_promote_terminal_persisted_results(job_id, cache=cache)
+            job = _jobs[job_id]
+        if results is None and job.status in {"done", "error", "stopped"}:
+            loaded = _load_persisted_job_results(
+                job_id,
+                preferred_mode=cache.get("input_mode"),
+            )
+            if loaded:
+                results = loaded.get("results")
+                _promote_results_metadata(job_id, results)
+        if results is not None and not _is_terminal_job_status(job.status):
+            results = None
+        if results is not None and not _is_compact_results_payload(results):
+            _mark_terminal_results_served(job_id)
+        return {
+            "job_id": job.job_id,
+            "status": job.status,
+            "progress": job.progress,
+            "progress_log": getattr(job, "progress_log", []) or [],
+            "results": results,
+            "llm": _resolve_job_llm_label(job_id, results=results),
+        }
+
+    if db and db.is_configured():
+        persisted_status = db.load_job_status(job_id)
+        if persisted_status:
+            loaded_status = _normalize_worker_status(persisted_status.get("status"))
+            loaded_progress = persisted_status.get("progress") or "Analysis in progress"
+            progress_log = _load_worker_progress_log(job_id)
+            worker_active = bool(persisted_status.get("worker_active"))
+            if loaded_status in {"pending", "running", "paused"} and worker_active:
+                return {
+                    "job_id": job_id,
+                    "status": loaded_status,
+                    "progress": loaded_progress,
+                    "progress_log": progress_log,
+                    "results": None,
+                    "llm": _resolve_job_llm_label(job_id, results=None),
+                }
+            if loaded_status in {"pending", "running", "paused"}:
+                return {
+                    "job_id": job_id,
+                    "status": "stopped",
+                    "progress": "Run interrupted before completion.",
+                    "progress_log": [],
+                    "results": None,
+                    "llm": _resolve_job_llm_label(job_id, results=None),
+                }
+            loaded = _load_persisted_job_results(job_id)
+            if loaded and _is_terminal_job_status(loaded_status):
+                results = loaded.get("results")
+                _jobs[job_id] = AnalysisStatus(
+                    job_id=job_id,
+                    status=loaded_status,
+                    progress=loaded_progress,
+                    progress_log=[],
+                    results=None,
+                    persistence_complete=True,
+                )
+                _results_cache[job_id] = {}
+                _promote_results_metadata(job_id, results)
+                _mark_terminal_results_served(job_id)
+                return {
+                    "job_id": job_id,
+                    "status": loaded_status,
+                    "progress": loaded_progress,
+                    "progress_log": [],
+                    "results": results,
+                    "llm": _resolve_job_llm_label(job_id, results=results),
+                }
+            return {
+                "job_id": job_id,
+                "status": loaded_status,
+                "progress": loaded_progress,
+                "progress_log": [],
+                "results": None,
+                "llm": _resolve_job_llm_label(job_id, results=None),
+            }
+        saved_job = db.load_saved_job(job_id)
+        if saved_job:
+            return {
+                "job_id": job_id,
+                "status": "stopped",
+                "progress": "Run interrupted before completion.",
+                "progress_log": [],
+                "results": None,
+                "llm": saved_job.get("llm") or _resolve_job_llm_label(job_id, results=None),
+            }
+
+    loaded = _load_persisted_job_results(job_id)
+    if loaded:
+        results = loaded.get("results")
+        loaded_status = (results or {}).get("job_status") or "done"
+        loaded_progress = (results or {}).get("job_message") or "Analysis complete"
+        _jobs[job_id] = AnalysisStatus(
+            job_id=job_id,
+            status=loaded_status,
+            progress=loaded_progress,
+            progress_log=[],
+            results=None,
+            persistence_complete=True,
+        )
+        _results_cache[job_id] = {}
+        _promote_results_metadata(job_id, results)
+        _mark_terminal_results_served(job_id)
+        return {
+            "job_id": job_id,
+            "status": loaded_status,
+            "progress": loaded_progress,
+            "progress_log": [],
+            "results": results,
+            "llm": _resolve_job_llm_label(job_id, results=results),
+        }
+
+    raise HTTPException(status_code=404, detail="Job not found")
+
+
+async def _get_job_log_payload(
+    job_id: str,
+    response: Response,
+) -> dict[str, Any]:
+    _set_no_store_headers(response)
+
+    job = _jobs.get(job_id)
+    if job and job.status in {"pending", "running", "paused"}:
+        if _is_worker_backed_job(job_id) and db and db.is_configured():
+            persisted_status = db.load_job_status(job_id)
+            if persisted_status:
+                job.status = _normalize_worker_status(persisted_status.get("status"))
+                job.progress = persisted_status.get("progress") or job.progress
+                job.progress_log = _load_worker_progress_log(job_id)
+        return {
+            "job_id": job_id,
+            "status": job.status,
+            "progress": job.progress,
+            "progress_log": getattr(job, "progress_log", []) or [],
+        }
+
+    if db and db.is_configured():
+        persisted_status = db.load_job_status(job_id)
+        progress_log = _load_worker_progress_log(job_id) if persisted_status else []
+        if (
+            persisted_status
+            and persisted_status.get("status") in {"pending", "running", "paused"}
+            and progress_log
+        ):
+            return {
+                "job_id": job_id,
+                "status": _normalize_worker_status(persisted_status.get("status")),
+                "progress": persisted_status.get("progress") or "Analysis in progress",
+                "progress_log": progress_log,
+            }
+
+    raise HTTPException(status_code=409, detail="Run is no longer active.")
+
+
+async def _get_analysis_payload(
+    job_id: str,
+    response: Response,
+) -> dict[str, Any]:
+    _set_no_store_headers(response)
+
+    cache = _results_cache.get(job_id, {})
+    results = cache.get("results")
+    if results and not _is_compact_results_payload(results):
+        _mark_terminal_results_served(job_id)
+        return {"job_id": job_id, "results": results}
+
+    saved_job = None
+    if db and db.is_configured():
+        load_saved_job = getattr(db, "load_saved_job", None)
+        load_job_status = getattr(db, "load_job_status", None)
+        if callable(load_saved_job):
+            saved_job = load_saved_job(job_id)
+        if saved_job:
+            saved_status = _normalize_worker_status(saved_job.get("status"))
+            if not _is_terminal_job_status(saved_status):
+                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+            if job_id in _jobs:
+                _jobs[job_id].status = saved_status
+                _jobs[job_id].progress = saved_job.get("progress") or _jobs[job_id].progress
+            else:
+                _jobs[job_id] = AnalysisStatus(
+                    job_id=job_id,
+                    status=saved_status,
+                    progress=saved_job.get("progress") or "Analysis complete",
+                    progress_log=[],
+                )
+        else:
+            persisted_status = load_job_status(job_id) if callable(load_job_status) else None
+            if persisted_status and not _is_terminal_job_status(persisted_status.get("status")):
+                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+            if job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
+                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+    elif job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
+        raise HTTPException(status_code=409, detail="Analysis is still in progress.")
+
+    loaded = _load_persisted_job_results(job_id, preferred_mode=cache.get("input_mode"))
+    if loaded:
+        results = loaded.get("results")
+        _promote_results_metadata(job_id, results)
+        _mark_terminal_results_served(job_id)
+        return {"job_id": job_id, "results": results}
+
+    raise HTTPException(status_code=404, detail="Analysis not found")
+
+
+def _list_jobs_payload() -> dict[str, Any]:
+    cached = _get_cached_overview_payload(_jobs_overview_cache)
+    if isinstance(cached, dict):
+        return cached
+
+    payload = {"jobs": _list_jobs_for_ui()}
+    return _set_cached_overview_payload(
+        _jobs_overview_cache,
+        payload,
+        JOBS_OVERVIEW_CACHE_SECONDS,
+    )
+
+
+def _list_company_runs_payload() -> dict[str, Any]:
+    cached = _get_cached_overview_payload(_company_runs_cache)
+    if isinstance(cached, dict):
+        return cached
+
+    payload = {"companies": _list_company_runs_for_ui()}
+    return _set_cached_overview_payload(
+        _company_runs_cache,
+        payload,
+        COMPANY_RUNS_CACHE_SECONDS,
+    )
+
+
+def _get_company_analyses_payload(company_name: str) -> dict[str, Any]:
+    if not db or not db.is_configured():
+        raise HTTPException(status_code=501, detail="Supabase not configured")
+
+    analyses = db.load_analyses_by_company(company_name)
+    return {"company_name": company_name, "analyses": analyses}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return (STATIC_DIR / "index.html").read_text()
@@ -1566,55 +2218,7 @@ async def upload_files(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    job_id = str(uuid.uuid4())[:8]
-    upload_dir = Path(tempfile.mkdtemp()) / job_id
-    upload_dir.mkdir(parents=True)
-
-    saved = []
-    for f in files:
-        dest = upload_dir / f.filename
-        with open(dest, "wb") as buf:
-            shutil.copyfileobj(f.file, buf)
-        saved.append(
-            {
-                "name": f.filename,
-                "size": dest.stat().st_size,
-                "mime_type": f.content_type or "",
-                "sha256": _sha256_file(dest),
-                "local_path": str(dest),
-            }
-        )
-
-    specter = _detect_specter_csvs(upload_dir, [f["name"] for f in saved])
-
-    _jobs[job_id] = AnalysisStatus(
-        job_id=job_id, status="pending", progress="Files uploaded"
-    )
-    _results_cache[job_id] = {
-        "upload_dir": str(upload_dir),
-        "files": saved,
-        "specter": specter,
-    }
-    if db and db.is_configured():
-        db.insert_analysis_event(
-            job_id,
-            message="Files uploaded",
-            event_type="upload",
-            payload={"num_files": len(saved)},
-        )
-        db.insert_job_status_history(
-            job_id,
-            status="pending",
-            progress="Files uploaded",
-            source="upload",
-        )
-
-    return {
-        "job_id": job_id,
-        "files": saved,
-        "mode": "specter" if specter else "documents",
-    }
+    return await _upload_files_payload(files)
 
 
 @app.post("/api/analyze/{job_id}")
@@ -1625,125 +2229,7 @@ async def start_analysis(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    if job_id not in _jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    _cancel_scheduled_restart()
-
-    quality_tier = normalize_quality_tier(req.quality_tier)
-    pipeline_policy = None
-    phase_models = normalize_phase_models(req.phase_models) if req.phase_models is not None else None
-    premium_phase_models = normalize_premium_phase_models(req.premium_phase_models)
-    if req.phase_models:
-        try:
-            pipeline_policy = build_phase_model_policy(phase_models)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        llm_selection = dict(pipeline_policy.answering)
-        effective_phase_models = resolve_effective_phase_models(pipeline_policy)
-        llm_display = build_phase_policy_display_label(effective_phase_models)
-        quality_tier = None
-        premium_phase_models = None
-    elif quality_tier:
-        try:
-            pipeline_policy = build_pipeline_policy(
-                quality_tier,
-                premium_phase_models if quality_tier == "premium" else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        llm_selection = dict(pipeline_policy.answering)
-        effective_phase_models = resolve_effective_phase_choices(pipeline_policy)
-        llm_display = build_tier_display_label(
-            quality_tier,
-            effective_phase_models=effective_phase_models,
-        )
-    else:
-        try:
-            selected_entry = validate_requested_selection(req.llm_provider, req.llm_model)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        llm_selection = serialize_selection(
-            (selected_entry.provider if selected_entry else None),
-            (selected_entry.model if selected_entry else None),
-        )
-        effective_phase_models = None
-        llm_display = llm_selection["label"]
-
-    _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
-    _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
-    cache = _results_cache[job_id]
-    cache["input_mode"] = req.input_mode
-    cache["run_name"] = req.run_name
-    cache["vc_investment_strategy"] = req.vc_investment_strategy
-    cache["use_web_search"] = req.use_web_search
-    cache["instructions"] = req.instructions
-    cache["llm_selection"] = llm_selection
-    cache["phase_models"] = phase_models if req.phase_models else None
-    cache["quality_tier"] = quality_tier
-    cache["premium_phase_models"] = (
-        premium_phase_models if quality_tier == "premium" else None
-    )
-    cache["effective_phase_models"] = effective_phase_models
-    cache["run_config"] = {
-        "input_mode": req.input_mode,
-        "run_name": req.run_name,
-        "vc_investment_strategy": req.vc_investment_strategy,
-        "instructions": req.instructions,
-        "use_web_search": req.use_web_search,
-        "phase_models": phase_models if req.phase_models else None,
-        "quality_tier": quality_tier,
-        "premium_phase_models": premium_phase_models if quality_tier == "premium" else None,
-        "effective_phase_models": effective_phase_models,
-        "llm_provider": llm_selection["provider"],
-        "llm_model": llm_selection["model"],
-        "llm": llm_display,
-    }
-    cache["model_executions"] = []
-    cache["run_costs_aggregate"] = _empty_run_costs_summary()
-    cache["versions"] = _runtime_versions()
-
-    if db and db.is_configured():
-        run_config = dict(cache["run_config"])
-        db.upsert_job(job_id, run_config=run_config, versions=_runtime_versions())
-        db.upsert_job_control(
-            job_id,
-            pause_requested=False,
-            stop_requested=False,
-            last_action="start",
-        )
-
-    vc_str = _ensure_str(req.vc_investment_strategy).strip() or None
-    inst = _ensure_str(req.instructions).strip() or None
-    if req.input_mode == "specter" and ENABLE_SPECTER_WORKER_SERVICE:
-        queued, worker_message = _queue_worker_backed_specter_job(job_id)
-        if queued:
-            _set_job_status(job_id, "running", worker_message or "Queued for worker...", source="start_analysis")
-            _append_progress_and_log(job_id, worker_message or "Queued for worker...")
-            return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
-        queue_error = worker_message or "Unknown worker queue error."
-        _set_job_status(job_id, "error", f"Worker queue failed. {queue_error}", source="start_analysis")
-        _append_progress_and_log(job_id, f"Worker queue failed — {queue_error}")
-        raise HTTPException(status_code=503, detail=f"Specter worker queue failed: {queue_error}")
-
-    # Run the analysis loop in a dedicated thread/event-loop to keep
-    # the main FastAPI loop responsive for pause/resume/stop controls.
-    threading.Thread(
-        target=lambda: asyncio.run(
-            _run_analysis(
-                job_id,
-                use_web_search=req.use_web_search,
-                instructions=inst,
-                input_mode=req.input_mode,
-                vc_investment_strategy=vc_str,
-                llm_selection=llm_selection,
-                pipeline_policy=pipeline_policy,
-            )
-        ),
-        daemon=True,
-    ).start()
-    return {"status": "running", "use_web_search": req.use_web_search, "llm": llm_display}
+    return await _start_analysis_payload(job_id, req)
 
 
 @app.post("/api/jobs/{job_id}/control")
@@ -1754,41 +2240,7 @@ async def control_analysis_job(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if job_id not in _jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    job = _jobs[job_id]
-    if job.status in {"done", "error", "stopped"}:
-        return {"job_id": job_id, "status": job.status, "progress": job.progress}
-
-    control = _ensure_job_control(job_id)
-    action = req.action
-
-    if action == "pause":
-        control["pause_requested"] = True
-        if job.status in {"running", "pending"}:
-            _set_job_status(job_id, "paused", source="control")
-            _append_progress(job_id, "Paused by user.")
-    elif action == "resume":
-        control["pause_requested"] = False
-        if job.status in {"paused", "pending"}:
-            _set_job_status(job_id, "running", source="control")
-            _append_progress(job_id, "Resumed by user.")
-    else:  # stop
-        control["pause_requested"] = False
-        control["stop_requested"] = True
-        _append_progress(job_id, "Stopped by user.", allow_stopped=True)
-        _set_job_status(job_id, "stopped", "Stopped by user.", source="control")
-
-    if db and db.is_configured():
-        db.upsert_job_control(
-            job_id,
-            pause_requested=bool(control.get("pause_requested")),
-            stop_requested=bool(control.get("stop_requested")),
-            last_action=action,
-        )
-
-    return {"job_id": job_id, "status": job.status, "progress": job.progress}
+    return await _control_analysis_job_payload(job_id, req)
 
 
 def _build_results_payload(
@@ -3292,18 +3744,7 @@ async def create_person_profile_job(
     """Create one person intelligence job."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    _cancel_scheduled_restart()
-
-    job_id = str(uuid.uuid4())[:8]
-    _person_jobs[job_id] = PersonProfileJobStatus(
-        job_id=job_id,
-        status="pending",
-        progress="Queued",
-    )
-    _persist_person_job(job_id, req.model_dump())
-    asyncio.create_task(_run_person_profile_job(job_id, req))
-    return {"job_id": job_id, "status": "running"}
+    return await _create_person_profile_job_payload(req)
 
 
 @app.get("/api/person-profile/status/{job_id}")
@@ -3314,30 +3755,7 @@ async def get_person_profile_status(
     """Fetch person intelligence job state/result."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if job_id not in _person_jobs:
-        if db and db.is_configured():
-            loaded = db.load_person_profile_job(job_id)
-            if loaded:
-                _person_jobs[job_id] = PersonProfileJobStatus(
-                    job_id=job_id,
-                    status=loaded.get("status", "pending"),
-                    progress=loaded.get("progress") or "",
-                    result=loaded.get("result_payload"),
-                    error=loaded.get("error"),
-                )
-            else:
-                raise HTTPException(status_code=404, detail="Job not found")
-        else:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-    job = _person_jobs[job_id]
-    return {
-        "job_id": job.job_id,
-        "status": job.status,
-        "progress": job.progress,
-        "result": job.result,
-        "error": job.error,
-    }
+    return await _get_person_profile_status_payload(job_id)
 
 
 @app.post("/api/person-profile/jobs/bulk-founders")
@@ -3348,59 +3766,7 @@ async def create_bulk_founder_jobs(
     """Create one enrichment job per founder candidate."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    _cancel_scheduled_restart()
-
-    created: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-
-    for idx, founder in enumerate(req.founders):
-        person_key = founder.person_key or f"{req.company_slug}:founder:{idx + 1}"
-        if not founder.primary_profile_url:
-            skipped.append(
-                {
-                    "person_key": person_key,
-                    "full_name": founder.full_name or f"Founder {idx + 1}",
-                    "status": "needs_input",
-                    "reason": "missing_primary_profile_url",
-                }
-            )
-            continue
-
-        profile_req = PersonProfileJobRequest(
-            primary_profile_url=founder.primary_profile_url,
-            full_name=founder.full_name,
-            location=founder.location,
-            current_company=founder.current_company,
-            role=founder.role,
-            known_aliases=founder.known_aliases,
-            user_uploaded_text=req.user_uploaded_text,
-            user_uploaded_images=req.user_uploaded_images,
-            company_slug=req.company_slug,
-            person_key=person_key,
-        )
-        job_id = str(uuid.uuid4())[:8]
-        _person_jobs[job_id] = PersonProfileJobStatus(
-            job_id=job_id,
-            status="pending",
-            progress="Queued",
-        )
-        _persist_person_job(job_id, profile_req.model_dump())
-        asyncio.create_task(_run_person_profile_job(job_id, profile_req))
-        created.append(
-            {
-                "person_key": person_key,
-                "full_name": founder.full_name or "",
-                "job_id": job_id,
-                "status": "running",
-            }
-        )
-
-    return {
-        "company_slug": req.company_slug,
-        "jobs": created,
-        "skipped": skipped,
-    }
+    return await _create_bulk_founder_jobs_payload(req)
 
 
 @app.get("/api/config")
@@ -3408,16 +3774,7 @@ async def get_config(session_id: str | None = Cookie(default=None)):
     """Return current app config (e.g. LLM) for backfilling past runs."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    default_llm = current_default_selection()
-    return {
-        "llm": default_llm["label"],
-        "default_llm": default_llm,
-        "available_models": available_models_payload(),
-        "pricing_catalog": pricing_catalog_payload(),
-        "phase_model_defaults": phase_model_defaults_payload(),
-        "quality_tiers": quality_tiers_payload(),
-        "premium_phase_options": premium_phase_options_payload(),
-    }
+    return _get_config_payload()
 
 
 @app.get("/api/status/{job_id}")
@@ -3428,136 +3785,7 @@ async def get_status(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    _set_no_store_headers(response)
-
-    if job_id in _jobs:
-        job = _jobs[job_id]
-        cache = _results_cache.get(job_id, {})
-        if _is_worker_backed_job(job_id) and db and db.is_configured():
-            persisted_status = db.load_job_status(job_id)
-            if persisted_status:
-                job.status = _normalize_worker_status(persisted_status.get("status"))
-                job.progress = persisted_status.get("progress") or job.progress
-                job.progress_log = _load_worker_progress_log(job_id)
-        results = cache.get("results")
-        if _is_compact_results_payload(results) and job.status in {"done", "error", "stopped"}:
-            results = None
-        if results is None and job.status in {"pending", "running", "paused"}:
-            results = _maybe_promote_terminal_persisted_results(job_id, cache=cache)
-            job = _jobs[job_id]
-        if results is None and job.status in {"done", "error", "stopped"}:
-            loaded = _load_persisted_job_results(
-                job_id,
-                preferred_mode=cache.get("input_mode"),
-            )
-            if loaded:
-                results = loaded.get("results")
-                _promote_results_metadata(job_id, results)
-        if results is not None and not _is_terminal_job_status(job.status):
-            results = None
-        if results is not None and not _is_compact_results_payload(results):
-            _mark_terminal_results_served(job_id)
-        return {
-            "job_id": job.job_id,
-            "status": job.status,
-            "progress": job.progress,
-            "progress_log": getattr(job, "progress_log", []) or [],
-            "results": results,
-            "llm": _resolve_job_llm_label(job_id, results=results),
-        }
-
-    if db and db.is_configured():
-        persisted_status = db.load_job_status(job_id)
-        if persisted_status:
-            loaded_status = _normalize_worker_status(persisted_status.get("status"))
-            loaded_progress = persisted_status.get("progress") or "Analysis in progress"
-            progress_log = _load_worker_progress_log(job_id)
-            worker_active = bool(persisted_status.get("worker_active"))
-            if loaded_status in {"pending", "running", "paused"} and worker_active:
-                return {
-                    "job_id": job_id,
-                    "status": loaded_status,
-                    "progress": loaded_progress,
-                    "progress_log": progress_log,
-                    "results": None,
-                    "llm": _resolve_job_llm_label(job_id, results=None),
-                }
-            if loaded_status in {"pending", "running", "paused"}:
-                return {
-                    "job_id": job_id,
-                    "status": "stopped",
-                    "progress": "Run interrupted before completion.",
-                    "progress_log": [],
-                    "results": None,
-                    "llm": _resolve_job_llm_label(job_id, results=None),
-                }
-            loaded = _load_persisted_job_results(job_id)
-            if loaded and _is_terminal_job_status(loaded_status):
-                results = loaded.get("results")
-                _jobs[job_id] = AnalysisStatus(
-                    job_id=job_id,
-                    status=loaded_status,
-                    progress=loaded_progress,
-                    progress_log=[],
-                    results=None,
-                    persistence_complete=True,
-                )
-                _results_cache[job_id] = {}
-                _promote_results_metadata(job_id, results)
-                _mark_terminal_results_served(job_id)
-                return {
-                    "job_id": job_id,
-                    "status": loaded_status,
-                    "progress": loaded_progress,
-                    "progress_log": [],
-                    "results": results,
-                    "llm": _resolve_job_llm_label(job_id, results=results),
-                }
-            return {
-                "job_id": job_id,
-                "status": loaded_status,
-                "progress": loaded_progress,
-                "progress_log": [],
-                "results": None,
-                "llm": _resolve_job_llm_label(job_id, results=None),
-            }
-        saved_job = db.load_saved_job(job_id)
-        if saved_job:
-            return {
-                "job_id": job_id,
-                "status": "stopped",
-                "progress": "Run interrupted before completion.",
-                "progress_log": [],
-                "results": None,
-                "llm": saved_job.get("llm") or _resolve_job_llm_label(job_id, results=None),
-            }
-
-    loaded = _load_persisted_job_results(job_id)
-    if loaded:
-        results = loaded.get("results")
-        loaded_status = (results or {}).get("job_status") or "done"
-        loaded_progress = (results or {}).get("job_message") or "Analysis complete"
-        _jobs[job_id] = AnalysisStatus(
-            job_id=job_id,
-            status=loaded_status,
-            progress=loaded_progress,
-            progress_log=[],
-            results=None,
-            persistence_complete=True,
-        )
-        _results_cache[job_id] = {}
-        _promote_results_metadata(job_id, results)
-        _mark_terminal_results_served(job_id)
-        return {
-            "job_id": job_id,
-            "status": loaded_status,
-            "progress": loaded_progress,
-            "progress_log": [],
-            "results": results,
-            "llm": _resolve_job_llm_label(job_id, results=results),
-        }
-
-    raise HTTPException(status_code=404, detail="Job not found")
+    return await _get_status_payload(job_id, response)
 
 
 @app.get("/api/jobs/{job_id}/log")
@@ -3568,39 +3796,7 @@ async def get_job_log(
 ):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    _set_no_store_headers(response)
-
-    job = _jobs.get(job_id)
-    if job and job.status in {"pending", "running", "paused"}:
-        if _is_worker_backed_job(job_id) and db and db.is_configured():
-            persisted_status = db.load_job_status(job_id)
-            if persisted_status:
-                job.status = _normalize_worker_status(persisted_status.get("status"))
-                job.progress = persisted_status.get("progress") or job.progress
-                job.progress_log = _load_worker_progress_log(job_id)
-        return {
-            "job_id": job_id,
-            "status": job.status,
-            "progress": job.progress,
-            "progress_log": getattr(job, "progress_log", []) or [],
-        }
-
-    if db and db.is_configured():
-        persisted_status = db.load_job_status(job_id)
-        progress_log = _load_worker_progress_log(job_id) if persisted_status else []
-        if (
-            persisted_status
-            and persisted_status.get("status") in {"pending", "running", "paused"}
-            and progress_log
-        ):
-            return {
-                "job_id": job_id,
-                "status": _normalize_worker_status(persisted_status.get("status")),
-                "progress": persisted_status.get("progress") or "Analysis in progress",
-                "progress_log": progress_log,
-            }
-
-    raise HTTPException(status_code=409, detail="Run is no longer active.")
+    return await _get_job_log_payload(job_id, response)
 
 
 @app.get("/api/download/{job_id}")
@@ -3619,85 +3815,21 @@ async def get_analysis(
     """Return analysis results for a completed job. Uses in-memory cache or Supabase."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    _set_no_store_headers(response)
-
-    cache = _results_cache.get(job_id, {})
-    results = cache.get("results")
-    if results and not _is_compact_results_payload(results):
-        _mark_terminal_results_served(job_id)
-        return {"job_id": job_id, "results": results}
-
-    saved_job = None
-    if db and db.is_configured():
-        load_saved_job = getattr(db, "load_saved_job", None)
-        load_job_status = getattr(db, "load_job_status", None)
-        if callable(load_saved_job):
-            saved_job = load_saved_job(job_id)
-        if saved_job:
-            saved_status = _normalize_worker_status(saved_job.get("status"))
-            if not _is_terminal_job_status(saved_status):
-                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
-            if job_id in _jobs:
-                _jobs[job_id].status = saved_status
-                _jobs[job_id].progress = saved_job.get("progress") or _jobs[job_id].progress
-            else:
-                _jobs[job_id] = AnalysisStatus(
-                    job_id=job_id,
-                    status=saved_status,
-                    progress=saved_job.get("progress") or "Analysis complete",
-                    progress_log=[],
-                )
-        else:
-            persisted_status = load_job_status(job_id) if callable(load_job_status) else None
-            if persisted_status and not _is_terminal_job_status(persisted_status.get("status")):
-                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
-            if job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
-                raise HTTPException(status_code=409, detail="Analysis is still in progress.")
-    elif job_id in _jobs and not _is_terminal_job_status(_jobs[job_id].status):
-        raise HTTPException(status_code=409, detail="Analysis is still in progress.")
-
-    loaded = _load_persisted_job_results(job_id, preferred_mode=cache.get("input_mode"))
-    if loaded:
-        results = loaded.get("results")
-        _promote_results_metadata(job_id, results)
-        _mark_terminal_results_served(job_id)
-        return {"job_id": job_id, "results": results}
-
-    raise HTTPException(status_code=404, detail="Analysis not found")
+    return await _get_analysis_payload(job_id, response)
 
 
 @app.get("/api/jobs")
 async def list_jobs(session_id: str | None = Cookie(default=None)):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    cached = _get_cached_overview_payload(_jobs_overview_cache)
-    if isinstance(cached, dict):
-        return cached
-
-    payload = {"jobs": _list_jobs_for_ui()}
-    return _set_cached_overview_payload(
-        _jobs_overview_cache,
-        payload,
-        JOBS_OVERVIEW_CACHE_SECONDS,
-    )
+    return _list_jobs_payload()
 
 
 @app.get("/api/company-runs")
 async def list_company_runs(session_id: str | None = Cookie(default=None)):
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
-
-    cached = _get_cached_overview_payload(_company_runs_cache)
-    if isinstance(cached, dict):
-        return cached
-
-    payload = {"companies": _list_company_runs_for_ui()}
-    return _set_cached_overview_payload(
-        _company_runs_cache,
-        payload,
-        COMPANY_RUNS_CACHE_SECONDS,
-    )
+    return _list_company_runs_payload()
 
 
 @app.get("/api/companies/{company_name}/analyses")
@@ -3708,12 +3840,27 @@ async def get_company_analyses(
     """Return analyses for a company by name. Requires Supabase."""
     if not _check_session(session_id):
         raise HTTPException(status_code=401, detail="Not authenticated")
+    return _get_company_analyses_payload(company_name)
 
-    if not db or not db.is_configured():
-        raise HTTPException(status_code=501, detail="Supabase not configured")
 
-    analyses = db.load_analyses_by_company(company_name)
-    return {"company_name": company_name, "analyses": analyses}
+app.include_router(
+    create_agent_router(
+        app=app,
+        upload_files_handler=_upload_files_payload,
+        start_analysis_handler=_start_analysis_payload,
+        get_status_handler=_get_status_payload,
+        get_job_log_handler=_get_job_log_payload,
+        get_analysis_handler=_get_analysis_payload,
+        control_analysis_handler=_control_analysis_job_payload,
+        get_config_handler=_get_config_payload,
+        list_jobs_handler=_list_jobs_payload,
+        list_company_runs_handler=_list_company_runs_payload,
+        get_company_analyses_handler=_get_company_analyses_payload,
+        create_person_profile_handler=_create_person_profile_job_payload,
+        get_person_profile_status_handler=_get_person_profile_status_payload,
+        create_bulk_founder_jobs_handler=_create_bulk_founder_jobs_payload,
+    )
+)
 
 
 if __name__ == "__main__":

@@ -157,6 +157,33 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
             "company_key": "slug:apaleo",
             "company_name": "Apaleo",
             "startup_slug": "apaleo",
+            "job_id_legacy": "job-12",
+            "decision": "watch",
+            "total_score": 51.2,
+            "composite_score": 51.2,
+            "bucket": "low_priority",
+            "mode": "specter",
+            "input_order": 1,
+            "run_created_at": "2026-03-10T18:00:00Z",
+            "created_at": "2026-03-10T18:00:00Z",
+            "result_payload": {
+                "mode": "single",
+                "startup_slug": "apaleo",
+                "company_name": "Apaleo",
+                "decision": "watch",
+                "total_score": 51.2,
+                "summary_rows": [{
+                    "startup_slug": "apaleo",
+                    "company_name": "Apaleo",
+                    "decision": "watch",
+                    "total_score": 51.2,
+                }],
+            },
+        },
+        {
+            "company_key": "slug:apaleo",
+            "company_name": "Apaleo",
+            "startup_slug": "apaleo",
             "job_id_legacy": "job-28",
             "decision": "invest",
             "total_score": 60.1,
@@ -179,9 +206,29 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
                     "company_name": "Apaleo",
                     "decision": "invest",
                     "total_score": 60.1,
+                    "dimension_scores": [
+                        {
+                            "dimension": "strategy_fit",
+                            "adjusted_score": 81.0,
+                            "confidence": 0.7,
+                            "critical_gaps": [],
+                        }
+                    ],
                 }],
+                "ranking_result": {
+                    "dimension_scores": [
+                        {
+                            "dimension": "strategy_fit",
+                            "adjusted_score": 81.0,
+                            "confidence": 0.7,
+                            "critical_gaps": [],
+                        }
+                    ]
+                },
                 "qa_provenance_rows": [{
                     "startup_slug": "apaleo",
+                    "aspect": "general_company",
+                    "dimension": "strategy_fit",
                     "question": "Why now?",
                     "answer": "Momentum and integrations.",
                 }],
@@ -190,6 +237,7 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
                     "type": "pro",
                     "score": 9,
                     "argument_text": "Strong API-first product wedge.",
+                    "dimensions": ["strategy_fit"],
                 }],
             },
         }
@@ -202,9 +250,13 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
 
     histories = web_db.list_company_histories(limit_runs=50)
 
+    assert histories[0]["latest_run_at"] == "2026-03-15T22:58:47Z"
+    assert [run["job_id"] for run in histories[0]["runs"]] == ["job-28", "job-12"]
     run_results = histories[0]["runs"][0]["results"]
     assert run_results["qa_provenance_rows"] == [{
         "startup_slug": "apaleo",
+        "aspect": "general_company",
+        "dimension": "strategy_fit",
         "question": "Why now?",
         "answer": "Momentum and integrations.",
     }]
@@ -213,7 +265,16 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
         "type": "pro",
         "score": 9,
         "argument_text": "Strong API-first product wedge.",
+        "dimensions": ["strategy_fit"],
     }]
+    assert run_results["ranking_result"]["dimension_scores"] == [
+        {
+            "dimension": "strategy_fit",
+            "adjusted_score": 81.0,
+            "confidence": 0.7,
+            "critical_gaps": [],
+        }
+    ]
 
 
 def test_compose_results_payload_from_company_runs_rebuilds_batch_ranking() -> None:
@@ -290,6 +351,10 @@ def test_compose_results_payload_from_company_runs_rebuilds_batch_ranking() -> N
     assert payload["mode"] == "batch"
     assert [row["startup_slug"] for row in payload["summary_rows"]] == ["alpha", "beta"]
     assert [row["rank"] for row in payload["summary_rows"]] == [1, 2]
+    assert payload["summary_rows"][0]["dimension_scores"] == [
+        {"dimension": "strategy_fit", "adjusted_score": 80.0, "confidence": 0.8, "critical_gaps": []},
+        {"dimension": "team", "adjusted_score": 79.0, "confidence": 0.7, "critical_gaps": []},
+    ]
     assert payload["founders_by_slug"]["alpha"] == [{"full_name": "Alice"}]
     assert payload["argument_rows"] == [
         {"startup_slug": "alpha", "argument_text": "Alpha arg"},

@@ -254,8 +254,11 @@ def test_pipeline_stages_set_stage_context_for_critical_llm_calls(monkeypatch):
 
     seen = {
         "decomposition": [],
+        "answering": [],
         "generation": [],
+        "critique": [],
         "evaluation": [],
+        "refinement": [],
         "ranking": [],
     }
 
@@ -268,6 +271,26 @@ def test_pipeline_stages_set_stage_context_for_critical_llm_calls(monkeypatch):
         ),
     )
     monkeypatch.setattr(
+        evidence_answering,
+        "create_llm",
+        lambda temperature=0.0, reasoning_effort=None: _StageTrackingRunnable(
+            type("Resp", (), {"content": "Grounded answer"})(),
+            seen["answering"],
+        ),
+    )
+    monkeypatch.setattr(
+        evidence_answering,
+        "retrieve_chunks",
+        lambda question, store, k=8: [
+            Chunk(
+                chunk_id="chunk_1",
+                text="Evidence text",
+                source_file="deck.txt",
+                page_or_slide="1",
+            )
+        ],
+    )
+    monkeypatch.setattr(
         generation,
         "get_llm",
         lambda temperature=0.0: _StageTrackingRunnable(
@@ -276,11 +299,27 @@ def test_pipeline_stages_set_stage_context_for_critical_llm_calls(monkeypatch):
         ),
     )
     monkeypatch.setattr(
+        critique,
+        "get_llm",
+        lambda temperature=0.0, reasoning_effort=None: _StageTrackingRunnable(
+            ArgumentCritique(critique="Counterpoint"),
+            seen["critique"],
+        ),
+    )
+    monkeypatch.setattr(
         evaluation,
         "get_llm",
         lambda temperature=0.0: _StageTrackingRunnable(
             SingleArgumentScore(scores=[CriterionScore(score=1, reasoning="ok") for _ in range(14)]),
             seen["evaluation"],
+        ),
+    )
+    monkeypatch.setattr(
+        refinement,
+        "get_llm",
+        lambda temperature=0.0, reasoning_effort=None: _StageTrackingRunnable(
+            IndividualRefinedArgumentOutput(content="Refined", qa_indices=[0]),
+            seen["refinement"],
         ),
     )
     monkeypatch.setattr(
@@ -308,7 +347,21 @@ def test_pipeline_stages_set_stage_context_for_critical_llm_calls(monkeypatch):
         decomposition.decompose_question(
             DecompositionInput(question="Root?", industry="Fintech", aspect="general_company")
         )
+        asyncio.run(
+            evidence_answering.answer_question_from_evidence(
+                "What is traction?",
+                company,
+                EvidenceStore(startup_slug="acme", chunks=[]),
+                use_web_search=False,
+            )
+        )
         generation.generate_pro_arguments(state)
+        asyncio.run(
+            critique._apply_devils_advocate_to_pro_argument(
+                Argument(content="Argument", argument_type="pro", qa_indices=[0]),
+                "Q/A",
+            )
+        )
         asyncio.run(
             evaluation.score_single_argument(
                 Argument(
@@ -319,13 +372,27 @@ def test_pipeline_stages_set_stage_context_for_critical_llm_calls(monkeypatch):
                 )
             )
         )
+        asyncio.run(
+            refinement._refine_individual_pro_argument(
+                Argument(
+                    content="Argument",
+                    argument_type="pro",
+                    qa_indices=[0],
+                    argument_feedback="Feedback",
+                ),
+                "Q/A",
+            )
+        )
         ranked = ranking.score_company_dimensions(state)["ranking_result"]
         state.ranking_result = ranked
         ranking.generate_executive_summary(state)
 
     assert seen["decomposition"] == ["decomposition"]
+    assert seen["answering"] == ["answering"]
     assert seen["generation"] == ["generation_pro"]
+    assert seen["critique"] == ["critique"]
     assert seen["evaluation"] == ["evaluation"]
+    assert seen["refinement"] == ["refinement"]
     assert seen["ranking"] == [
         "ranking_dimension_score",
         "ranking_dimension_score",
@@ -467,7 +534,7 @@ def test_pipeline_policy_can_route_five_user_selected_models(monkeypatch):
             "decomposition": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
             "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
             "generation": {"provider": "openai", "model": "gpt-5"},
-            "evaluation": {"provider": "openai", "model": "gpt-5-mini"},
+            "evaluation": {"provider": "openai", "model": "gpt-5.4-mini"},
             "ranking": {"provider": "openai", "model": "gpt-4.1-mini"},
         }
     )
@@ -477,5 +544,5 @@ def test_pipeline_policy_can_route_five_user_selected_models(monkeypatch):
     assert policy.critique["model"] == "gemini-3.1-flash-lite-preview"
     assert policy.refinement["model"] == "gemini-3.1-flash-lite-preview"
     assert policy.generation["model"] == "gpt-5"
-    assert policy.evaluation["model"] == "gpt-5-mini"
+    assert policy.evaluation["model"] == "gpt-5.4-mini"
     assert policy.ranking["model"] == "gpt-4.1-mini"

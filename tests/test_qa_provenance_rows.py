@@ -1,5 +1,7 @@
-from agent.batch import build_qa_provenance_rows
+from agent.batch import build_argument_rows, build_qa_provenance_rows, build_summary_rows
+from agent.dataclasses.argument import Argument
 from agent.dataclasses.company import Company
+from agent.dataclasses.ranking import CompanyRankingResult, DimensionScore
 
 
 def test_build_qa_provenance_rows_includes_web_search_decision() -> None:
@@ -13,6 +15,7 @@ def test_build_qa_provenance_rows_includes_web_search_decision() -> None:
                     {
                         "question": "What integrations does Apify support?",
                         "answer": "Unknown from provided documents.",
+                        "aspect": "general_company",
                         "chunk_ids": ["chunk_1", "chunk_3"],
                         "chunks_preview": "[chunk_1]: ...",
                         "web_search_query": "\"Apify\" integrations",
@@ -27,5 +30,90 @@ def test_build_qa_provenance_rows_includes_web_search_decision() -> None:
 
     rows = build_qa_provenance_rows(results)
     assert len(rows) == 1
+    assert rows[0]["aspect"] == "general_company"
+    assert rows[0]["dimension"] == "strategy_fit"
     assert rows[0]["web_search_used"] is True
     assert "relevant" in rows[0]["web_search_decision"]
+
+
+def test_argument_and_summary_rows_include_dimension_metadata() -> None:
+    ranking = CompanyRankingResult(
+        company_name="Apify",
+        slug="apify",
+        strategy_fit_score=84.0,
+        team_score=71.0,
+        upside_score=79.0,
+        composite_score=78.0,
+        bucket="priority_review",
+        dimension_scores=[
+            DimensionScore(
+                dimension="strategy_fit",
+                raw_score=90.0,
+                confidence=0.8,
+                evidence_count=3,
+                evidence_snippets=["Strong ICP match"],
+                critical_gaps=["Need deeper pricing proof"],
+            ),
+            DimensionScore(
+                dimension="team",
+                raw_score=75.0,
+                confidence=0.6,
+                evidence_count=2,
+                evidence_snippets=["Repeat founder signal"],
+                critical_gaps=[],
+            ),
+        ],
+        strategy_fit_summary="Strong fit with the target thesis.",
+        team_summary="Founder background is credible.",
+        potential_summary="Large upside if expansion continues.",
+    )
+    argument = Argument(
+        content="The company fits the fund thesis and has a credible founder base.",
+        argument_type="pro",
+        qa_indices=[0, 1],
+        qa_pairs=[
+            {"question": "Why fit?", "answer": "Clear vertical alignment.", "aspect": "general_company"},
+            {"question": "Why team?", "answer": "Founder has repeat experience.", "aspect": "team"},
+        ],
+        score=9,
+        refined_content="The company matches thesis and the founder has repeat execution signals.",
+    )
+    results = [
+        {
+            "slug": "apify",
+            "skipped": False,
+            "company": Company(name="Apify"),
+            "final_state": {
+                "all_qa_pairs": [],
+                "final_arguments": [argument],
+                "current_iteration": 2,
+                "final_decision": "invest",
+                "ranking_result": ranking,
+            },
+        }
+    ]
+
+    argument_rows = build_argument_rows(results)
+    summary_rows = build_summary_rows(results)
+
+    assert argument_rows[0]["dimensions"] == ["strategy_fit", "team"]
+    assert summary_rows[0]["dimension_scores"] == [
+        {
+            "dimension": "strategy_fit",
+            "raw_score": 90.0,
+            "adjusted_score": 84.6,
+            "confidence": 0.8,
+            "evidence_count": 3,
+            "evidence_snippets": ["Strong ICP match"],
+            "critical_gaps": ["Need deeper pricing proof"],
+        },
+        {
+            "dimension": "team",
+            "raw_score": 75.0,
+            "adjusted_score": 66.0,
+            "confidence": 0.6,
+            "evidence_count": 2,
+            "evidence_snippets": ["Repeat founder signal"],
+            "critical_gaps": [],
+        },
+    ]

@@ -977,6 +977,51 @@ def _get_top_args(
     return selected[:n]
 
 
+_DIMENSION_BY_ASPECT = {
+    "general_company": "strategy_fit",
+    "team": "team",
+    "market": "upside",
+    "product": "upside",
+}
+
+_DIMENSION_ORDER = {
+    "strategy_fit": 0,
+    "team": 1,
+    "upside": 2,
+}
+
+
+def _dimension_from_aspect(aspect: Any) -> str:
+    return _DIMENSION_BY_ASPECT.get(str(aspect or "").strip(), "")
+
+
+def _dimensions_from_qa_pairs(qa_pairs: list[dict[str, Any]] | None) -> list[str]:
+    dims = {
+        dim
+        for qa in (qa_pairs or [])
+        for dim in [_dimension_from_aspect(qa.get("aspect"))]
+        if dim
+    }
+    return sorted(dims, key=lambda dim: _DIMENSION_ORDER.get(dim, 999))
+
+
+def _serialize_dimension_scores(ranking: CompanyRankingResult | None) -> list[dict[str, Any]]:
+    if not ranking:
+        return []
+    return [
+        {
+            "dimension": d.dimension,
+            "raw_score": d.raw_score,
+            "adjusted_score": d.adjusted_score,
+            "confidence": d.confidence,
+            "evidence_count": d.evidence_count,
+            "evidence_snippets": list(d.evidence_snippets or []),
+            "critical_gaps": list(d.critical_gaps or []),
+        }
+        for d in ranking.dimension_scores
+    ]
+
+
 def build_summary_rows(results: List[Dict[str, Any]]) -> List[Dict]:
     """Build Summary sheet rows from pipeline results."""
     rows: List[Dict] = []
@@ -1037,6 +1082,7 @@ def build_summary_rows(results: List[Dict[str, Any]]) -> List[Dict]:
             row["potential_summary"] = ranking.potential_summary or ""
             row["key_points"] = "\n".join(ranking.key_points) if ranking.key_points else ""
             row["red_flags"] = "\n".join(ranking.red_flags) if ranking.red_flags else ""
+            row["dimension_scores"] = _serialize_dimension_scores(ranking)
         else:
             row["rank"] = ""
             row["percentile"] = ""
@@ -1054,6 +1100,7 @@ def build_summary_rows(results: List[Dict[str, Any]]) -> List[Dict]:
             row["potential_summary"] = ""
             row["key_points"] = ""
             row["red_flags"] = ""
+            row["dimension_scores"] = []
 
         top_pro = _get_top_args(final_args, "pro", 3)
         top_contra = _get_top_args(final_args, "contra", 3)
@@ -1111,6 +1158,7 @@ def build_argument_rows(results: List[Dict[str, Any]]) -> List[Dict]:
 
             rows.append({
                 "startup_slug": slug,
+                "company_name": r.get("company_name") or getattr(r.get("company"), "name", ""),
                 "type": arg.argument_type,
                 "score": arg.score,
                 "argument_text": arg.content,
@@ -1118,6 +1166,7 @@ def build_argument_rows(results: List[Dict[str, Any]]) -> List[Dict]:
                 "refined_text": arg.refined_content or "",
                 "argument_feedback": arg.argument_feedback or "",
                 "qa_pairs_used": qa_pairs_used,
+                "dimensions": _dimensions_from_qa_pairs(arg.qa_pairs),
                 "iteration": current_iteration,
             })
 
@@ -1143,10 +1192,14 @@ def build_qa_provenance_rows(results: List[Dict[str, Any]]) -> List[Dict]:
                 chunk_ids_str = ", ".join(str(c) for c in chunk_ids)
             else:
                 chunk_ids_str = str(chunk_ids) if chunk_ids else ""
+            aspect = str(qa.get("aspect") or "")
+            dimension = _dimension_from_aspect(aspect)
 
             rows.append({
                 "startup_slug": slug,
                 "company_name": company.name,
+                "aspect": aspect,
+                "dimension": dimension,
                 "question": qa.get("question", ""),
                 "answer": qa.get("answer", ""),
                 "chunk_ids": chunk_ids_str,

@@ -17,6 +17,5 @@ EXPOSE 8000
 
 # Railway injects PORT; app reads it via os.getenv("PORT", "8000")
 ENV PORT=8000
-ENV APP_PASSWORD=9876
 
 CMD ["python", "-m", "agent.railway_service"]
