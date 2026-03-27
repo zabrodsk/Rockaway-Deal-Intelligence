@@ -824,6 +824,10 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
+      padding: 14px;
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.02);
     }
     .premium-phase-label {
       font-size: 12px;
@@ -843,6 +847,64 @@
       font: 14px var(--font-body);
       outline: none;
       min-height: 44px;
+    }
+    .phase-creativity-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .phase-creativity-header,
+    .phase-creativity-control {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .phase-creativity-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-mid);
+    }
+    .phase-creativity-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 10px;
+      border-radius: var(--radius-full);
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      color: var(--text-light);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .phase-creativity-badge.is-auto {
+      color: var(--green);
+      border-color: var(--green-border-strong);
+      background: var(--green-surface-subtle);
+    }
+    .phase-creativity-slider {
+      flex: 1 1 auto;
+      accent-color: var(--green);
+      cursor: pointer;
+    }
+    .phase-creativity-value {
+      min-width: 74px;
+      text-align: right;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-light);
+    }
+    .phase-creativity-note {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-gray);
+    }
+    .phase-creativity-note.is-unsupported {
+      color: var(--text-mid);
     }
     .advanced-llm-section {
       margin-top: 16px;
@@ -4655,7 +4717,17 @@ const USER_PHASE_LABELS = {
   evaluation: 'Evaluation',
   ranking: 'Ranking',
 };
-let selectedPhaseModelKeys = {};
+const PHASE_AUTO_CREATIVITY = {
+  decomposition: 0.5,
+  answering: 0.0,
+  generation: 0.5,
+  evaluation: 0.0,
+  ranking: 0.3,
+};
+const CREATIVITY_MIN = 0;
+const CREATIVITY_MAX = 2;
+const CREATIVITY_STEP = 0.1;
+let selectedPhaseModelSettings = {};
 let analysisConfigLoadState = 'idle';
 let analysisFocusJobId = null;
 let analysisFocusClearTimer = null;
@@ -5081,6 +5153,51 @@ function getModelByKey(key) {
   return (analysisConfig?.available_models || []).find((item) => `${item.provider}:${item.model}` === key) || null;
 }
 
+function normalizeCreativityValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const bounded = Math.min(CREATIVITY_MAX, Math.max(CREATIVITY_MIN, numeric));
+  return Math.round(bounded * 10) / 10;
+}
+
+function supportsPhaseCreativity(model) {
+  return !!model?.supports_creativity_control;
+}
+
+function getPhaseModelSetting(phase) {
+  const raw = selectedPhaseModelSettings[phase];
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return {
+      key: typeof raw.key === 'string' ? raw.key : '',
+      creativity: normalizeCreativityValue(raw.creativity),
+    };
+  }
+  if (typeof raw === 'string') {
+    return { key: raw, creativity: null };
+  }
+  return { key: '', creativity: null };
+}
+
+function setPhaseModelSetting(phase, nextSetting) {
+  selectedPhaseModelSettings[phase] = {
+    key: String(nextSetting?.key || ''),
+    creativity: normalizeCreativityValue(nextSetting?.creativity),
+  };
+}
+
+function getPhaseSliderValue(phase, model) {
+  const setting = getPhaseModelSetting(phase);
+  if (setting.creativity !== null) return setting.creativity;
+  return normalizeCreativityValue(model?.default_creativity) ?? PHASE_AUTO_CREATIVITY[phase] ?? 0.5;
+}
+
+function formatCreativityValue(value) {
+  const numeric = normalizeCreativityValue(value);
+  if (numeric === null) return 'Auto';
+  return numeric.toFixed(1);
+}
+
 function getPipelineSelectableModels() {
   return (analysisConfig?.available_models || []).filter((item) => item.selectable && item.provider !== 'openrouter');
 }
@@ -5091,7 +5208,10 @@ function getPhaseModelDefaults() {
     return Object.fromEntries(
       USER_PHASES
         .filter((phase) => serverDefaults[phase]?.provider && serverDefaults[phase]?.model)
-        .map((phase) => [phase, `${serverDefaults[phase].provider}:${serverDefaults[phase].model}`])
+        .map((phase) => [phase, {
+          key: `${serverDefaults[phase].provider}:${serverDefaults[phase].model}`,
+          creativity: normalizeCreativityValue(serverDefaults[phase].creativity),
+        }])
     );
   }
 
@@ -5132,11 +5252,11 @@ function getPhaseModelDefaults() {
     || answeringKey;
 
   return {
-    decomposition: decompositionKey || generationKey || answeringKey,
-    answering: answeringKey,
-    generation: generationKey,
-    evaluation: evaluationKey,
-    ranking: rankingKey,
+    decomposition: { key: decompositionKey || generationKey || answeringKey, creativity: null },
+    answering: { key: answeringKey, creativity: null },
+    generation: { key: generationKey, creativity: null },
+    evaluation: { key: evaluationKey, creativity: null },
+    ranking: { key: rankingKey, creativity: null },
   };
 }
 
@@ -5146,16 +5266,17 @@ function ensurePhaseModelSelections() {
   const firstKey = available[0] ? `${available[0].provider}:${available[0].model}` : null;
 
   USER_PHASES.forEach((phase) => {
-    const current = selectedPhaseModelKeys[phase];
-    if (current && available.some((item) => `${item.provider}:${item.model}` === current)) return;
-    selectedPhaseModelKeys[phase] = defaults[phase] || firstKey || '';
+    const current = getPhaseModelSetting(phase);
+    if (current.key && available.some((item) => `${item.provider}:${item.model}` === current.key)) return;
+    const defaultSetting = defaults[phase];
+    setPhaseModelSetting(phase, defaultSetting || { key: firstKey || '', creativity: null });
   });
 }
 
 function getPhaseSelectionSummaryLabel() {
   ensurePhaseModelSelections();
   const parts = USER_PHASES.map((phase) => {
-    const model = getModelByKey(selectedPhaseModelKeys[phase]);
+    const model = getModelByKey(getPhaseModelSetting(phase).key);
     return `${USER_PHASE_LABELS[phase]} ${model?.label || 'Unknown'}`;
   });
   return `Per-phase · ${parts.join(' · ')}`;
@@ -5167,11 +5288,13 @@ function getAnalysisSelectionPayload() {
     ensurePhaseModelSelections();
     const phaseModels = {};
     USER_PHASES.forEach((phase) => {
-      const model = getModelByKey(selectedPhaseModelKeys[phase]);
+      const setting = getPhaseModelSetting(phase);
+      const model = getModelByKey(setting.key);
       if (!model) return;
       phaseModels[phase] = {
         provider: model.provider,
         model: model.model,
+        ...(supportsPhaseCreativity(model) && setting.creativity !== null ? { creativity: setting.creativity } : {}),
       };
     });
     return {
@@ -5221,7 +5344,44 @@ function renderPhaseModelSelector() {
   config.innerHTML = `
     <div class="premium-phase-grid">
       ${USER_PHASES.map((phase) => {
-        const selected = selectedPhaseModelKeys[phase] || '';
+        const setting = getPhaseModelSetting(phase);
+        const selected = setting.key || '';
+        const selectedModel = getModelByKey(selected);
+        const sliderValue = getPhaseSliderValue(phase, selectedModel);
+        const isAuto = setting.creativity === null;
+        const creativityHtml = supportsPhaseCreativity(selectedModel)
+          ? `
+            <div class="phase-creativity-block">
+              <div class="phase-creativity-header">
+                <span class="phase-creativity-title">Creativity</span>
+                <button type="button" class="phase-creativity-badge ${isAuto ? 'is-auto' : ''}" data-phase-creativity-reset="${escapeHtml(phase)}">
+                  ${isAuto ? 'Auto' : 'Reset'}
+                </button>
+              </div>
+              <div class="phase-creativity-control">
+                <input
+                  class="phase-creativity-slider"
+                  type="range"
+                  min="${CREATIVITY_MIN}"
+                  max="${CREATIVITY_MAX}"
+                  step="${CREATIVITY_STEP}"
+                  value="${sliderValue}"
+                  data-phase-creativity="${escapeHtml(phase)}"
+                >
+                <span class="phase-creativity-value" data-phase-creativity-value="${escapeHtml(phase)}">
+                  ${isAuto ? `Auto · ${formatCreativityValue(sliderValue)}` : formatCreativityValue(sliderValue)}
+                </span>
+              </div>
+              <div class="phase-creativity-note">
+                ${isAuto ? 'Uses the built-in stage default until you move the slider.' : 'Overrides the default stage sampling for this phase.'}
+              </div>
+            </div>
+          `
+          : `
+            <div class="phase-creativity-note is-unsupported">
+              This model uses fixed sampling for this stage.
+            </div>
+          `;
         return `
           <label class="premium-phase-field">
             <span class="premium-phase-label">${escapeHtml(USER_PHASE_LABELS[phase])}</span>
@@ -5231,6 +5391,7 @@ function renderPhaseModelSelector() {
                 return `<option value="${escapeHtml(key)}" ${selected === key ? 'selected' : ''}>${escapeHtml(item.label)}</option>`;
               }).join('')}
             </select>
+            ${creativityHtml}
           </label>
         `;
       }).join('')}
@@ -5239,14 +5400,43 @@ function renderPhaseModelSelector() {
 
   config.querySelectorAll('[data-phase-model]').forEach((select) => {
     select.addEventListener('change', (event) => {
-      selectedPhaseModelKeys[event.target.getAttribute('data-phase-model')] = event.target.value || '';
+      const phase = event.target.getAttribute('data-phase-model');
+      const current = getPhaseModelSetting(phase);
+      setPhaseModelSetting(phase, { key: event.target.value || '', creativity: current.creativity });
       selectedLlmKey = null;
       renderPhaseModelSelector();
       renderLlmSelector();
     });
   });
 
-  const answeringModel = getModelByKey(selectedPhaseModelKeys.answering);
+  config.querySelectorAll('[data-phase-creativity]').forEach((slider) => {
+    slider.addEventListener('input', (event) => {
+      const phase = event.target.getAttribute('data-phase-creativity');
+      const current = getPhaseModelSetting(phase);
+      const nextValue = normalizeCreativityValue(event.target.value);
+      setPhaseModelSetting(phase, { key: current.key, creativity: nextValue });
+      const valueEl = config.querySelector(`[data-phase-creativity-value="${phase}"]`);
+      if (valueEl) valueEl.textContent = formatCreativityValue(nextValue);
+    });
+    slider.addEventListener('change', () => {
+      selectedLlmKey = null;
+      renderPhaseModelSelector();
+      renderLlmSelector();
+    });
+  });
+
+  config.querySelectorAll('[data-phase-creativity-reset]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      const phase = event.currentTarget.getAttribute('data-phase-creativity-reset');
+      const current = getPhaseModelSetting(phase);
+      setPhaseModelSetting(phase, { key: current.key, creativity: null });
+      selectedLlmKey = null;
+      renderPhaseModelSelector();
+      renderLlmSelector();
+    });
+  });
+
+  const answeringModel = getModelByKey(getPhaseModelSetting('answering').key);
   const advancedSelection = getAdvancedLlmSelection();
   if (advancedSelection) {
     hint.textContent = `${advancedSelection.label || 'Advanced selection'} currently overrides the whole pipeline. Change any phase above to switch back to per-phase routing.`;

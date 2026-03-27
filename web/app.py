@@ -43,6 +43,7 @@ from agent.llm_catalog import (
     available_chat_models_payload,
     model_label,
     current_default_selection,
+    normalize_creativity,
     normalize_provider,
     pricing_catalog_payload,
     serialize_selection,
@@ -312,16 +313,20 @@ def _pipeline_meta_from_payload(payload: dict[str, Any] | None) -> dict[str, Any
     }
 
 
-def _selection_from_payload(payload: dict[str, Any] | None) -> dict[str, str] | None:
+def _selection_from_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     selection = payload.get("llm_selection")
     if isinstance(selection, dict) and selection.get("provider") and selection.get("model"):
-        return serialize_selection(selection.get("provider"), selection.get("model"))
+        return serialize_selection(
+            selection.get("provider"),
+            selection.get("model"),
+            creativity=selection.get("creativity"),
+        )
     provider = payload.get("llm_provider") or payload.get("provider")
     model = payload.get("llm_model") or payload.get("model")
     if provider and model:
-        return serialize_selection(provider, model)
+        return serialize_selection(provider, model, creativity=payload.get("creativity"))
     return None
 
 
@@ -346,7 +351,7 @@ def _llm_label_from_payload(payload: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _resolve_job_llm_selection(job_id: str, *, results: dict[str, Any] | None = None) -> dict[str, str]:
+def _resolve_job_llm_selection(job_id: str, *, results: dict[str, Any] | None = None) -> dict[str, Any]:
     cache = _results_cache.get(job_id, {})
     for candidate in (
         _selection_from_payload(results),
@@ -384,7 +389,7 @@ def _resolve_job_llm_label(job_id: str, *, results: dict[str, Any] | None = None
     return _resolve_job_llm_selection(job_id, results=results)["label"]
 
 
-def _resolve_batch_chunking_selection(job_id: str) -> dict[str, str]:
+def _resolve_batch_chunking_selection(job_id: str) -> dict[str, Any]:
     pipeline_meta = _resolve_job_pipeline_meta(job_id)
     if pipeline_meta:
         effective = pipeline_meta.get("effective_phase_models")
@@ -775,7 +780,7 @@ class AnalyzeRequest(BaseModel):
     input_mode: str = "pitchdeck"  # pitchdeck | specter | original
     run_name: str | None = None
     vc_investment_strategy: str | None = None
-    phase_models: dict[str, dict[str, str]] | None = None
+    phase_models: dict[str, dict[str, Any]] | None = None
     quality_tier: Literal["cheap", "premium"] | None = None
     premium_phase_models: dict[str, Literal["claude", "gpt5"]] | None = None
     llm_provider: str | None = None
@@ -800,17 +805,19 @@ class AnalyzeRequest(BaseModel):
 
     @field_validator("phase_models", mode="before")
     @classmethod
-    def _coerce_phase_models(cls, v: Any) -> dict[str, dict[str, str]] | None:
+    def _coerce_phase_models(cls, v: Any) -> dict[str, dict[str, Any]] | None:
         if v is None:
             return None
         normalized = coerce_phase_models_payload(v, require_all=True)
-        return {
-            phase: {
+        phase_models: dict[str, dict[str, Any]] = {}
+        for phase, selection in normalized.items():
+            creativity = normalize_creativity(selection.get("creativity"))
+            phase_models[phase] = {
                 "provider": selection["provider"],
                 "model": selection["model"],
+                **({"creativity": creativity} if creativity is not None else {}),
             }
-            for phase, selection in normalized.items()
-        }
+        return phase_models
 
     @field_validator("premium_phase_models", mode="before")
     @classmethod
@@ -3057,7 +3064,7 @@ async def _run_analysis(
     instructions: str | None = None,
     input_mode: str = "pitchdeck",
     vc_investment_strategy: str | None = None,
-    llm_selection: dict[str, str] | None = None,
+    llm_selection: dict[str, Any] | None = None,
     pipeline_policy: Any = None,
 ):
     try:

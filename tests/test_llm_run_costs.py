@@ -120,6 +120,7 @@ def test_available_models_payload_marks_availability(monkeypatch) -> None:
     assert gemini["selectable"] is True
     assert gemini["pricing_available"] is True
     assert gemini["summary"] == "Budget speed"
+    assert gemini["supports_creativity_control"] is False
     assert all(
         item["available"] is False
         for item in models
@@ -131,6 +132,7 @@ def test_available_models_payload_marks_availability(monkeypatch) -> None:
         if item["provider"] == "openrouter"
     )
     assert gemini["tier"] == "budget"
+    assert next(item for item in models if item["model"] == "gpt-5")["supports_creativity_control"] is True
 
 
 def test_validate_requested_selection_accepts_new_catalog_models(monkeypatch) -> None:
@@ -173,6 +175,30 @@ def test_build_pipeline_policy_resolves_cheap_and_premium(monkeypatch) -> None:
     assert premium.generation["model"] == "gpt-5"
     assert premium.evaluation["provider"] == "anthropic"
     assert premium.ranking["model"] == "gpt-5"
+
+
+def test_build_phase_model_policy_preserves_supported_creativity_and_drops_unsupported(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    policy = build_phase_model_policy(
+        {
+            "decomposition": {"provider": "openai", "model": "gpt-5", "creativity": 0.9},
+            "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview", "creativity": 0.7},
+            "generation": {"provider": "openai", "model": "gpt-4.1-mini", "creativity": 0.6},
+            "evaluation": {"provider": "openai", "model": "gpt-5.4-mini", "creativity": 0.8},
+            "ranking": {"provider": "openai", "model": "o4-mini", "creativity": 0.4},
+        }
+    )
+
+    assert policy.decomposition["creativity"] == 0.9
+    assert "creativity" not in policy.answering
+    assert policy.generation["creativity"] == 0.6
+    assert "creativity" not in policy.evaluation
+    assert policy.ranking["creativity"] == 0.4
+    assert "creativity" not in policy.critique
+    assert "creativity" not in policy.refinement
 
 
 def test_build_pipeline_policy_falls_back_between_claude_and_gpt5(monkeypatch) -> None:
@@ -446,6 +472,26 @@ def test_create_llm_passes_requested_temperature_for_non_gpt5_openai(monkeypatch
     assert called == {"model": "gpt-4.1-mini", "temperature": 0.3, "reasoning_effort": None}
 
 
+def test_create_llm_prefers_selection_creativity_for_supported_model(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+
+    called = {}
+
+    def fake_openai(model, temperature, timeout_s, max_retries, reasoning_effort=None):
+        called["model"] = model
+        called["temperature"] = temperature
+        called["reasoning_effort"] = reasoning_effort
+        return object()
+
+    monkeypatch.setattr(llm_module, "_create_openai", fake_openai)
+    monkeypatch.setattr(llm_module, "wrap_llm", lambda runnable, **kwargs: runnable)
+
+    with use_run_context(llm_selection={"provider": "openai", "model": "gpt-4.1-mini", "creativity": 0.8}):
+        llm_module.create_llm(temperature=0.3)
+
+    assert called == {"model": "gpt-4.1-mini", "temperature": 0.8, "reasoning_effort": None}
+
+
 def test_create_llm_passes_requested_temperature_for_o4_mini(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
 
@@ -481,6 +527,27 @@ def test_create_llm_maps_gpt54_mini_decomposition_to_temperature_plus_reasoning(
     monkeypatch.setattr(llm_module, "wrap_llm", lambda runnable, **kwargs: runnable)
 
     with use_run_context(llm_selection={"provider": "openai", "model": "gpt-5.4-mini"}):
+        with use_stage_context("decomposition"):
+            llm_module.create_llm(temperature=0.2)
+
+    assert called == {"model": "gpt-5.4-mini", "temperature": 0.5, "reasoning_effort": "none"}
+
+
+def test_create_llm_ignores_selection_creativity_for_unsupported_reasoning_model(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+
+    called = {}
+
+    def fake_openai(model, temperature, timeout_s, max_retries, reasoning_effort=None):
+        called["model"] = model
+        called["temperature"] = temperature
+        called["reasoning_effort"] = reasoning_effort
+        return object()
+
+    monkeypatch.setattr(llm_module, "_create_openai", fake_openai)
+    monkeypatch.setattr(llm_module, "wrap_llm", lambda runnable, **kwargs: runnable)
+
+    with use_run_context(llm_selection={"provider": "openai", "model": "gpt-5.4-mini", "creativity": 0.9}):
         with use_stage_context("decomposition"):
             llm_module.create_llm(temperature=0.2)
 
@@ -1111,9 +1178,9 @@ def test_start_analysis_persists_phase_model_selection(monkeypatch) -> None:
                 "phase_models": {
                     "decomposition": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
                     "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
-                    "generation": {"provider": "openai", "model": "gpt-5"},
-                    "evaluation": {"provider": "openai", "model": "gpt-5.4-mini"},
-                    "ranking": {"provider": "openai", "model": "gpt-4.1-mini"},
+                    "generation": {"provider": "openai", "model": "gpt-5", "creativity": 0.8},
+                    "evaluation": {"provider": "openai", "model": "gpt-5.4-mini", "creativity": 0.9},
+                    "ranking": {"provider": "openai", "model": "gpt-4.1-mini", "creativity": 0.4},
                 },
             },
         )
@@ -1125,8 +1192,12 @@ def test_start_analysis_persists_phase_model_selection(monkeypatch) -> None:
         assert cache["llm_selection"]["provider"] == "gemini"
         assert cache["quality_tier"] is None
         assert cache["effective_phase_models"]["critique"]["provider"] == "gemini"
+        assert cache["effective_phase_models"]["generation"]["creativity"] == 0.8
+        assert "creativity" not in cache["effective_phase_models"]["evaluation"]
+        assert cache["effective_phase_models"]["ranking"]["creativity"] == 0.4
         assert cache["effective_phase_models"]["ranking"]["model"] == "gpt-4.1-mini"
         assert cache["run_config"]["phase_models"]["generation"]["model"] == "gpt-5"
+        assert cache["run_config"]["phase_models"]["generation"]["creativity"] == 0.8
         assert cache["run_config"]["llm"] == (
             "Per-phase · D Claude Haiku 4.5 · A Gemini 3.1 Flash Lite"
             " · G GPT-5 · E GPT-5.4 mini · R GPT-4.1 mini"
@@ -1220,6 +1291,49 @@ def test_start_analysis_rejects_incomplete_phase_model_selection(monkeypatch) ->
 
     assert analyze.status_code == 422
     assert "phase_models is missing required phases" in analyze.text
+
+
+def test_start_analysis_rejects_invalid_creativity(monkeypatch) -> None:
+    from web import app as web_app_module
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "google")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic")
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            raise AssertionError("analysis thread should not start for invalid creativity")
+
+    monkeypatch.setattr(web_app_module.threading, "Thread", FakeThread)
+
+    with TestClient(app) as client:
+        _login(client)
+        upload = client.post(
+            "/api/upload",
+            files={"files": ("deck.txt", io.BytesIO(b"sample content"), "text/plain")},
+        )
+        job_id = upload.json()["job_id"]
+
+        analyze = client.post(
+            f"/api/analyze/{job_id}",
+            json={
+                "input_mode": "pitchdeck",
+                "phase_models": {
+                    "decomposition": {"provider": "openai", "model": "gpt-5", "creativity": 9},
+                    "answering": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+                    "generation": {"provider": "openai", "model": "gpt-5"},
+                    "evaluation": {"provider": "openai", "model": "gpt-5.4-mini"},
+                    "ranking": {"provider": "openai", "model": "gpt-4.1-mini"},
+                },
+            },
+        )
+
+    assert analyze.status_code == 422
+    assert "Creativity must be between 0.0 and 2.0." in analyze.text
 
 
 def test_start_analysis_normalizes_google_provider_alias(monkeypatch) -> None:
