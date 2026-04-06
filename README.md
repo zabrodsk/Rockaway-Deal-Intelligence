@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Work in Progress](https://img.shields.io/badge/status-WIP-orange.svg)](./docs/RECENT_UPDATES.md)
 
-> Built on [startup-ranker-pipeline](https://github.com/zabrodsk/startup-ranker-pipeline). Evaluates pitch decks, metrics, and optional web data to produce ranked deal lists with pro/contra arguments and invest recommendations.
+Evaluates pitch decks, metrics, and optional web data to produce ranked deal lists with pro/contra arguments and invest recommendations.
 
 ---
 
