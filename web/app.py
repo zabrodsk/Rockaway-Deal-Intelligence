@@ -2648,11 +2648,36 @@ def _get_vc_profile_or_404(user: CurrentUser) -> dict[str, Any]:
     return profile
 
 
-async def _run_matching_background(company_id: str) -> None:
-    """Background task: run matching for a company against all active VCs."""
+def _blocking_match_for_company(company_id: str) -> int:
+    """Run matching synchronously inside a dedicated thread with its own event loop.
+
+    This isolates the matching pipeline (which contains synchronous LLM .invoke()
+    calls) from the main FastAPI event loop and its shared thread pool.  Without
+    this isolation, long-running sync LLM calls saturate the default thread pool
+    and cause asyncio.to_thread() calls (e.g. Supabase auth) to queue up, making
+    login and other endpoints time-out while a matching job is running.
+    """
+    import asyncio as _aio  # noqa: PLC0415
+    from agent.matching.engine import trigger_matching_for_company  # noqa: PLC0415
+
+    loop = _aio.new_event_loop()
+    _aio.set_event_loop(loop)
     try:
-        from agent.matching.engine import trigger_matching_for_company  # noqa: PLC0415
-        count = await trigger_matching_for_company(company_id, db)
+        return loop.run_until_complete(trigger_matching_for_company(company_id, db))
+    finally:
+        loop.close()
+        _aio.set_event_loop(None)
+
+
+async def _run_matching_background(company_id: str) -> None:
+    """Background task: run matching for a company against all active VCs.
+
+    Delegates to _blocking_match_for_company() via asyncio.to_thread() so the
+    matching pipeline runs in an isolated thread, leaving the FastAPI event loop
+    free to handle other requests (login, health-checks, etc.).
+    """
+    try:
+        count = await asyncio.to_thread(_blocking_match_for_company, company_id)
         import logging  # noqa: PLC0415
         logging.getLogger(__name__).info(
             "Matching complete for company=%s: %d matches created", company_id, count
@@ -2664,36 +2689,33 @@ async def _run_matching_background(company_id: str) -> None:
         )
 
 
-async def _run_vc_rematching_background(vc_profile_id: str) -> None:
-    """Background task: re-run matching for a VC against all actively fundraising companies.
+def _blocking_rematch_for_vc(vc_profile_id: str) -> int:
+    """Run VC re-matching synchronously inside a dedicated thread with its own event loop.
 
-    Called when a VC updates their investment thesis or score thresholds.  Clears
-    all existing matches for this VC, then re-evaluates every company that currently
-    has fundraising=True so the match list reflects the latest thesis and thresholds.
+    Same isolation rationale as _blocking_match_for_company — prevents sync LLM
+    calls inside the pipeline from blocking the FastAPI event loop.
     """
-    import logging as _log_module  # noqa: PLC0415
-    _logger = _log_module.getLogger(__name__)
+    import asyncio as _aio  # noqa: PLC0415
 
-    try:
+    async def _async_body() -> int:
+        import logging as _log_module  # noqa: PLC0415
         from agent.matching.engine import run_matching_for_pair  # noqa: PLC0415
+        _logger = _log_module.getLogger(__name__)
 
-        # 1. Wipe stale matches so we start with a clean slate.
-        deleted = await asyncio.to_thread(db.delete_matches_for_vc, vc_profile_id)
+        deleted = await _aio.to_thread(db.delete_matches_for_vc, vc_profile_id)
         _logger.info("VC re-matching: deleted %d stale matches for vc=%s", deleted, vc_profile_id)
 
-        # 2. Fetch the fresh VC profile (with updated thesis / thresholds).
-        vc_profile = await asyncio.to_thread(db.get_vc_profile_by_id, vc_profile_id)
+        vc_profile = await _aio.to_thread(db.get_vc_profile_by_id, vc_profile_id)
         if not vc_profile:
             _logger.warning("VC re-matching: vc_profile %s not found", vc_profile_id)
-            return
+            return 0
 
         vc_thesis: str = vc_profile.get("investment_thesis") or ""
         min_strategy: float = float(vc_profile.get("min_strategy_fit") or 0)
         min_team: float = float(vc_profile.get("min_team") or 0)
         min_potential: float = float(vc_profile.get("min_potential") or 0)
 
-        # 3. Loop over all fundraising companies.
-        companies = await asyncio.to_thread(db.get_fundraising_companies)
+        companies = await _aio.to_thread(db.get_fundraising_companies)
         _logger.info(
             "VC re-matching: evaluating %d fundraising companies against vc=%s",
             len(companies), vc_profile_id,
@@ -2705,12 +2727,11 @@ async def _run_vc_rematching_background(vc_profile_id: str) -> None:
             if not company_id:
                 continue
 
-            chunks = await asyncio.to_thread(db.get_company_chunks, company_id)
-            all_qa_pairs = await asyncio.to_thread(db.get_analysis_qa_pairs, company_id)
+            chunks = await _aio.to_thread(db.get_company_chunks, company_id)
+            all_qa_pairs = await _aio.to_thread(db.get_analysis_qa_pairs, company_id)
 
-            # Prefer Stage-8-only path if final_arguments available.
             analysis_final = (
-                await asyncio.to_thread(db.get_analysis_final_state, company_id)
+                await _aio.to_thread(db.get_analysis_final_state, company_id)
                 if hasattr(db, "get_analysis_final_state")
                 else None
             )
@@ -2718,9 +2739,7 @@ async def _run_vc_rematching_background(vc_profile_id: str) -> None:
             final_decision = analysis_final.get("final_decision") if analysis_final else None
 
             if not final_arguments and not all_qa_pairs:
-                _logger.debug(
-                    "VC re-matching: skipping company=%s (no analysis data)", company_id
-                )
+                _logger.debug("VC re-matching: skipping company=%s (no analysis data)", company_id)
                 continue
 
             try:
@@ -2746,9 +2765,9 @@ async def _run_vc_rematching_background(vc_profile_id: str) -> None:
             potential: float = float(scores.get("upside_score") or 0)
 
             if strategy_fit >= min_strategy and team >= min_team and potential >= min_potential:
-                latest = await asyncio.to_thread(db.get_company_latest_analysis, company_id)
+                latest = await _aio.to_thread(db.get_company_latest_analysis, company_id)
                 analysis_id = latest.get("id") if latest else None
-                await asyncio.to_thread(
+                await _aio.to_thread(
                     db.create_match,
                     vc_profile_id=vc_profile_id,
                     company_id=company_id,
@@ -2771,11 +2790,39 @@ async def _run_vc_rematching_background(vc_profile_id: str) -> None:
             "VC re-matching complete for vc=%s: %d matches created from %d companies",
             vc_profile_id, created, len(companies),
         )
+        return created
+
+    loop = _aio.new_event_loop()
+    _aio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_async_body())
+    finally:
+        loop.close()
+        _aio.set_event_loop(None)
+
+
+async def _run_vc_rematching_background(vc_profile_id: str) -> None:
+    """Background task: re-run matching for a VC against all actively fundraising companies.
+
+    Called when a VC updates their investment thesis or score thresholds.  Clears
+    all existing matches for this VC, then re-evaluates every company that currently
+    has fundraising=True so the match list reflects the latest thesis and thresholds.
+
+    Delegates to _blocking_rematch_for_vc() via asyncio.to_thread() so the pipeline
+    runs in an isolated thread and the FastAPI event loop stays responsive.
+    """
+    import logging as _log_module  # noqa: PLC0415
+    _logger = _log_module.getLogger(__name__)
+
+    try:
+        await asyncio.to_thread(_blocking_rematch_for_vc, vc_profile_id)
     except Exception as exc:
-        import logging as _lm  # noqa: PLC0415
-        _lm.getLogger(__name__).error(
+        _logger.error(
             "VC re-matching background task failed for vc=%s: %s", vc_profile_id, exc, exc_info=True
         )
+        return
+
+    # (success logging is inside _blocking_rematch_for_vc / _async_body)
 
 
 # ---------------------------------------------------------------------------
