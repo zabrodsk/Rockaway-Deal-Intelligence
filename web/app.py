@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import collections
 import contextlib
 import gc
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -24,6 +26,61 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+
+
+# ---------------------------------------------------------------------------
+# In-memory log buffer — captures all Python logging for the admin live log.
+# Thread-safe circular buffer; survives for the lifetime of the process.
+# ---------------------------------------------------------------------------
+
+class _InMemoryLogHandler(logging.Handler):
+    """Append log records to a shared deque so the admin portal can poll them."""
+
+    _records: collections.deque = collections.deque(maxlen=500)
+    _lock: threading.Lock = threading.Lock()
+
+    LEVEL_COLOURS = {
+        "DEBUG": "muted",
+        "INFO": "info",
+        "WARNING": "warning",
+        "ERROR": "error",
+        "CRITICAL": "error",
+    }
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            entry = {
+                "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": self.format(record),
+            }
+            with self._lock:
+                self._records.append(entry)
+        except Exception:
+            pass  # never crash the app due to logging
+
+    @classmethod
+    def get_entries(cls, since_ts: str | None = None, level: str | None = None) -> list[dict]:
+        with cls._lock:
+            records = list(cls._records)
+        if since_ts:
+            records = [r for r in records if r["ts"] > since_ts]
+        if level and level != "ALL":
+            lvl = getattr(logging, level, logging.DEBUG)
+            records = [r for r in records if getattr(logging, r["level"], 0) >= lvl]
+        return records
+
+
+# Install the handler on the root logger once at import time.
+_mem_handler = _InMemoryLogHandler()
+_mem_handler.setFormatter(logging.Formatter("%(name)s — %(message)s"))
+_mem_handler.setLevel(logging.DEBUG)
+_root_logger = logging.getLogger()
+if not any(isinstance(h, _InMemoryLogHandler) for h in _root_logger.handlers):
+    _root_logger.addHandler(_mem_handler)
+    if _root_logger.level == logging.NOTSET or _root_logger.level > logging.DEBUG:
+        _root_logger.setLevel(logging.DEBUG)
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Cookie, FastAPI, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
@@ -3128,6 +3185,22 @@ async def admin_matching_debug(
         result["skip_reason"] = None
 
     return result
+
+
+@app.get("/api/admin/logs")
+async def admin_logs(
+    since: str | None = None,
+    level: str | None = None,
+    user: CurrentUser = Depends(_require_admin),
+) -> dict[str, Any]:
+    """Return recent in-process log entries for the admin live log.
+
+    Args:
+        since: ISO-8601 timestamp — only return entries after this time.
+        level: Minimum level to include: DEBUG | INFO | WARNING | ERROR (default ALL).
+    """
+    entries = _InMemoryLogHandler.get_entries(since_ts=since, level=level)
+    return {"entries": entries, "total": len(entries)}
 
 
 # ---------------------------------------------------------------------------

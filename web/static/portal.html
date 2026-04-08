@@ -2463,6 +2463,12 @@ function AdminPortal({ user, onSignOut }) {
   const [tab, setTab] = React.useState("overview");
   const [data, setData] = React.useState({});
   const [loading, setLoading] = React.useState(true);
+  const [logEntries, setLogEntries] = React.useState([]);
+  const [logLevel, setLogLevel] = React.useState("INFO");
+  const [logPaused, setLogPaused] = React.useState(false);
+  const [logAutoScroll, setLogAutoScroll] = React.useState(true);
+  const logSinceRef = React.useRef(null);
+  const logBottomRef = React.useRef(null);
   const [error, setError] = React.useState(null);
   const [actionMsg, setActionMsg] = React.useState(null);
 
@@ -2496,7 +2502,7 @@ function AdminPortal({ user, onSignOut }) {
     finally { setLoading(false); }
   }
 
-  React.useEffect(() => { loadTab(tab); }, [tab]);
+  React.useEffect(() => { if (tab !== "logs") loadTab(tab); }, [tab]);
 
   // Auto-refresh overview every 30s
   React.useEffect(() => {
@@ -2520,6 +2526,36 @@ function AdminPortal({ user, onSignOut }) {
     } catch(e) { setError(e.message); }
   }
 
+  // Live log polling — only runs when Logs tab is active and not paused
+  React.useEffect(() => {
+    if (tab !== "logs" || logPaused) return;
+    async function pollLogs() {
+      try {
+        const params = new URLSearchParams({ level: logLevel });
+        if (logSinceRef.current) params.set("since", logSinceRef.current);
+        const res = await api("GET", `/api/admin/logs?${params}`);
+        const entries = res.entries || [];
+        if (entries.length > 0) {
+          logSinceRef.current = entries[entries.length - 1].ts;
+          setLogEntries(prev => {
+            const combined = [...prev, ...entries].slice(-500); // keep last 500
+            return combined;
+          });
+        }
+      } catch (_) {}
+    }
+    pollLogs(); // immediate first fetch
+    const id = setInterval(pollLogs, 2000);
+    return () => clearInterval(id);
+  }, [tab, logLevel, logPaused]);
+
+  // Auto-scroll log to bottom
+  React.useEffect(() => {
+    if (logAutoScroll && logBottomRef.current) {
+      logBottomRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logEntries, logAutoScroll]);
+
   const TABS = [
     { key: "overview", label: "Overview" },
     { key: "companies", label: "Companies" },
@@ -2527,6 +2563,7 @@ function AdminPortal({ user, onSignOut }) {
     { key: "vcs", label: "VC Profiles" },
     { key: "analyses", label: "Analyses" },
     { key: "users", label: "Users" },
+    { key: "logs", label: "Live Logs" },
   ];
 
   const d = data[tab] || {};
@@ -2784,6 +2821,68 @@ function AdminPortal({ user, onSignOut }) {
     );
   }
 
+  function renderLogs() {
+    const LEVEL_COLOR = { DEBUG:"#6b7280", INFO:"#60a5fa", WARNING:"#f59e0b", ERROR:"#ef4444", CRITICAL:"#ef4444" };
+    const LEVEL_BG   = { DEBUG:"transparent", INFO:"transparent", WARNING:"rgba(245,158,11,.08)", ERROR:"rgba(239,68,68,.08)", CRITICAL:"rgba(239,68,68,.12)" };
+    return (
+      <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 160px)"}}>
+        {/* Toolbar */}
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
+          <span style={{fontSize:".82rem",color:"var(--text-muted)"}}>Level:</span>
+          {["DEBUG","INFO","WARNING","ERROR"].map(l => (
+            <button key={l} onClick={() => { setLogLevel(l); setLogEntries([]); logSinceRef.current = null; }}
+              style={{padding:"3px 10px",borderRadius:4,border:"1px solid var(--border)",cursor:"pointer",fontSize:".78rem",
+                background: logLevel===l ? "var(--accent)" : "var(--bg-card)",
+                color: logLevel===l ? "#000" : LEVEL_COLOR[l] || "var(--text)"}}>
+              {l}
+            </button>
+          ))}
+          <button onClick={() => setLogPaused(p => !p)}
+            style={{padding:"3px 10px",borderRadius:4,border:"1px solid var(--border)",cursor:"pointer",fontSize:".78rem",
+              background: logPaused ? "#f59e0b" : "var(--bg-card)", color: logPaused ? "#000" : "var(--text)"}}>
+            {logPaused ? "▶ Resume" : "⏸ Pause"}
+          </button>
+          <button onClick={() => setLogAutoScroll(a => !a)}
+            style={{padding:"3px 10px",borderRadius:4,border:"1px solid var(--border)",cursor:"pointer",fontSize:".78rem",
+              background: logAutoScroll ? "var(--accent)" : "var(--bg-card)", color: logAutoScroll ? "#000" : "var(--text)"}}>
+            ↓ Auto-scroll
+          </button>
+          <button onClick={() => { setLogEntries([]); logSinceRef.current = null; }}
+            style={{padding:"3px 10px",borderRadius:4,border:"1px solid var(--border)",cursor:"pointer",fontSize:".78rem",
+              background:"var(--bg-card)",color:"var(--text-muted)"}}>
+            🗑 Clear
+          </button>
+          <span style={{marginLeft:"auto",fontSize:".78rem",color:"var(--text-muted)"}}>
+            {logEntries.length} entries{logPaused ? " · PAUSED" : " · polling 2s"}
+          </span>
+        </div>
+
+        {/* Log output */}
+        <div style={{flex:1,overflowY:"auto",fontFamily:"monospace",fontSize:".78rem",lineHeight:1.6,
+          background:"#0d0d0d",borderRadius:8,border:"1px solid var(--border)",padding:"8px 0"}}>
+          {logEntries.length === 0
+            ? <div style={{padding:"24px",color:"#4b5563",textAlign:"center"}}>No log entries yet — waiting for activity…</div>
+            : logEntries.map((e, i) => {
+                const color = LEVEL_COLOR[e.level] || "#9ca3af";
+                const bg = LEVEL_BG[e.level] || "transparent";
+                const time = e.ts.replace("T", " ").replace(/\.\d+Z$/, "Z");
+                return (
+                  <div key={i} style={{padding:"1px 12px",background:bg,borderLeft:`2px solid ${color}`,marginLeft:4,
+                    wordBreak:"break-all",whiteSpace:"pre-wrap"}}>
+                    <span style={{color:"#4b5563",marginRight:8}}>{time}</span>
+                    <span style={{color,fontWeight:600,marginRight:8}}>{e.level}</span>
+                    <span style={{color:"#6b7280",marginRight:8}}>{e.logger}</span>
+                    <span style={{color:"#e5e7eb"}}>{e.msg}</span>
+                  </div>
+                );
+              })
+          }
+          <div ref={logBottomRef} />
+        </div>
+      </div>
+    );
+  }
+
   const tabContent = {
     overview: renderOverview,
     companies: renderCompanies,
@@ -2791,6 +2890,7 @@ function AdminPortal({ user, onSignOut }) {
     vcs: renderVCs,
     analyses: renderAnalyses,
     users: renderUsers,
+    logs: renderLogs,
   };
 
   return (
@@ -2834,9 +2934,11 @@ function AdminPortal({ user, onSignOut }) {
           </div>
         )}
         {error && <Alert type="error">{error}</Alert>}
-        {loading
-          ? <div style={{display:"flex",justifyContent:"center",padding:48}}><Spinner /></div>
-          : (tabContent[tab] || (() => null))()
+        {tab === "logs"
+          ? renderLogs()
+          : loading
+            ? <div style={{display:"flex",justifyContent:"center",padding:48}}><Spinner /></div>
+            : (tabContent[tab] || (() => null))()
         }
       </main>
     </div>
