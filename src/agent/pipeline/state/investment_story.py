@@ -5,7 +5,7 @@ This module defines the state classes for the investment analysis pipeline:
 - IterativeInvestmentStoryState: The full state tracking all pipeline data
 """
 
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -45,6 +45,11 @@ class InputState(BaseModel):
     prompt_overrides: Dict[str, Any] = Field(default_factory=dict)
     vc_context: str = ""
     slug: str = ""
+
+    # VC matching optimisation: pre-computed from a prior full analysis.
+    # When both are provided, the graph skips Stages 1-7 and enters at Stage 8 only.
+    final_arguments: list[Any] = Field(default_factory=list)
+    final_decision: Optional[str] = None
 
 
 class IterativeInvestmentStoryState(BaseModel):
