@@ -149,22 +149,27 @@ async def trigger_matching_for_company(company_id: str, db_module: Any) -> int:
     """Match a fundraising company against all active VC profiles.
 
     Called as a FastAPI background task when a startup toggles fundraising ON.
+    All synchronous DB calls are dispatched via asyncio.to_thread() so the
+    event loop (and thus the web server) is never blocked.
     Returns the number of new match records created.
     """
-    company_row = db_module.get_company_by_id(company_id)
+    import asyncio  # noqa: PLC0415
+
+    company_row = await asyncio.to_thread(db_module.get_company_by_id, company_id)
     if not company_row:
         logger.warning("Company %s not found — matching aborted", company_id)
         return 0
 
-    chunks = db_module.get_company_chunks(company_id)
-    all_qa_pairs = db_module.get_analysis_qa_pairs(company_id)
+    chunks, all_qa_pairs = await asyncio.gather(
+        asyncio.to_thread(db_module.get_company_chunks, company_id),
+        asyncio.to_thread(db_module.get_analysis_qa_pairs, company_id),
+    )
 
     # Attempt Stage-8-only optimisation: load pre-computed final_arguments + decision.
-    analysis_final = (
-        db_module.get_analysis_final_state(company_id)
-        if hasattr(db_module, "get_analysis_final_state")
-        else None
-    )
+    analysis_final: dict[str, Any] | None = None
+    if hasattr(db_module, "get_analysis_final_state"):
+        analysis_final = await asyncio.to_thread(db_module.get_analysis_final_state, company_id)
+
     final_arguments: list[dict[str, Any]] | None = None
     final_decision: str | None = None
     if analysis_final:
@@ -180,12 +185,12 @@ async def trigger_matching_for_company(company_id: str, db_module: Any) -> int:
         )
         return 0
 
-    vc_profiles = db_module.get_active_vc_profiles()
+    vc_profiles = await asyncio.to_thread(db_module.get_active_vc_profiles)
     if not vc_profiles:
         logger.info("No active VC profiles to match against")
         return 0
 
-    latest_analysis = db_module.get_company_latest_analysis(company_id)
+    latest_analysis = await asyncio.to_thread(db_module.get_company_latest_analysis, company_id)
     analysis_id: str | None = latest_analysis.get("id") if latest_analysis else None
 
     created = 0
@@ -194,7 +199,10 @@ async def trigger_matching_for_company(company_id: str, db_module: Any) -> int:
         if not vc_profile_id:
             continue
 
-        if db_module.match_exists(vc_profile_id, company_id):
+        match_already_exists = await asyncio.to_thread(
+            db_module.match_exists, vc_profile_id, company_id
+        )
+        if match_already_exists:
             logger.debug("Match already exists: vc=%s company=%s", vc_profile_id, company_id)
             continue
 
@@ -232,7 +240,8 @@ async def trigger_matching_for_company(company_id: str, db_module: Any) -> int:
         )
 
         if meets_thresholds:
-            db_module.create_match(
+            await asyncio.to_thread(
+                db_module.create_match,
                 vc_profile_id=vc_profile_id,
                 company_id=company_id,
                 analysis_id=analysis_id,
