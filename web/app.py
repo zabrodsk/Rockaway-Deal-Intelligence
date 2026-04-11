@@ -4564,7 +4564,11 @@ async def _run_re_evaluation(
         from agent.dataclasses.company import Company  # noqa: PLC0415
         from agent.dataclasses.config import Config  # noqa: PLC0415
         from agent.dataclasses.question_tree import QuestionTree  # noqa: PLC0415
-        from agent.evidence_answering import answer_all_trees_from_evidence  # noqa: PLC0415
+        from agent.evidence_answering import (  # noqa: PLC0415
+            answer_all_trees_from_evidence,
+            enrich_qa_pairs_with_new_evidence,
+            write_qa_pairs_into_trees,
+        )
         from agent.ingest.store import Chunk, EvidenceStore  # noqa: PLC0415
         from agent.pipeline.graph import graph  # noqa: PLC0415
         from agent.pipeline.state.investment_story import IterativeInvestmentStoryState  # noqa: PLC0415
@@ -4650,6 +4654,46 @@ async def _run_re_evaluation(
             max_iterations=1,
         )
 
+        # 3a. Load previous analysis snapshot for INCREMENTAL ENRICHMENT.
+        # Re-evaluation must preserve good previous answers verbatim when
+        # the newly uploaded evidence is not relevant to a question — and
+        # enrich (not replace) them when it is. See plan file Part B.
+        prev_analysis = await asyncio.to_thread(db.get_latest_analysis_full, company_id)
+        previous_all_qa_pairs: list[dict] | None = None
+        prev_created_at: str | None = None
+        if prev_analysis and isinstance(prev_analysis.get("state"), dict):
+            raw_qa = prev_analysis["state"].get("all_qa_pairs")
+            if isinstance(raw_qa, list) and raw_qa:
+                previous_all_qa_pairs = [dict(p) for p in raw_qa if isinstance(p, dict)]
+            prev_created_at = prev_analysis.get("created_at")
+
+        # 3b. Identify chunks uploaded AFTER the previous analysis.
+        new_chunk_rows: list[dict] = []
+        if prev_created_at:
+            try:
+                new_chunk_rows = await asyncio.to_thread(
+                    db.get_chunks_created_after, company_id, prev_created_at,
+                )
+            except Exception as exc:
+                _logger.warning(
+                    "Re-evaluation: get_chunks_created_after failed: %s", exc,
+                )
+                new_chunk_rows = []
+        new_chunks_list: list[Chunk] = [
+            Chunk(
+                chunk_id=c.get("chunk_id") or f"new_chunk_{i}",
+                text=c.get("text") or "",
+                source_file=c.get("source_file") or "",
+                page_or_slide=c.get("page_or_slide") or "N/A",
+            )
+            for i, c in enumerate(new_chunk_rows)
+        ]
+        _append_progress(
+            job_id,
+            f"Found {len(new_chunks_list)} new evidence chunks since previous analysis"
+            + (f" (prev={prev_created_at})" if prev_created_at else " (no previous analysis)"),
+        )
+
         # Wrap the whole pipeline in a run context so stages read the admin
         # pipeline policy and the collector captures token usage + perplexity.
         # `use_run_context` only takes pipeline_policy / telemetry_collector /
@@ -4661,13 +4705,36 @@ async def _run_re_evaluation(
             telemetry_collector=collector,
         ):
             if question_trees:
-                _append_progress(
-                    job_id,
-                    f"Stage 2: answering {len(question_trees)} trees against {len(store.chunks)} chunks",
-                )
-                all_qa_pairs = await answer_all_trees_from_evidence(
-                    question_trees, company, store, use_web_search=use_web_search,
-                )
+                if previous_all_qa_pairs and new_chunks_list:
+                    _append_progress(
+                        job_id,
+                        f"Stage 2: enriching {len(previous_all_qa_pairs)} previous answers "
+                        f"with {len(new_chunks_list)} new chunks",
+                    )
+                    all_qa_pairs = await enrich_qa_pairs_with_new_evidence(
+                        previous_qa_pairs=previous_all_qa_pairs,
+                        question_trees=question_trees,
+                        new_chunks=new_chunks_list,
+                        company=company,
+                        vc_context="",
+                    )
+                elif previous_all_qa_pairs and not new_chunks_list:
+                    _append_progress(
+                        job_id,
+                        f"Stage 2: no new evidence since previous analysis — reusing "
+                        f"{len(previous_all_qa_pairs)} previous answers verbatim",
+                    )
+                    all_qa_pairs = [dict(p) for p in previous_all_qa_pairs]
+                    write_qa_pairs_into_trees(question_trees, all_qa_pairs)
+                else:
+                    _append_progress(
+                        job_id,
+                        f"Stage 2: no previous answers cached — answering "
+                        f"{len(question_trees)} trees against {len(store.chunks)} chunks",
+                    )
+                    all_qa_pairs = await answer_all_trees_from_evidence(
+                        question_trees, company, store, use_web_search=use_web_search,
+                    )
 
                 _append_progress(job_id, "Stages 3-6: argument generation + critique + evaluation + refinement")
                 final_state = await graph.ainvoke(

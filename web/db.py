@@ -4172,6 +4172,47 @@ def get_all_company_chunks(company_id: str) -> list[dict[str, Any]]:
         return []
 
 
+def get_chunks_created_after(
+    company_id: str, after_iso: str
+) -> list[dict[str, Any]]:
+    """Return chunks for a company whose `created_at` is strictly after `after_iso`.
+
+    Used by re-evaluation to identify newly-uploaded evidence since the last
+    completed analysis so downstream code can target the incremental Q&A
+    enrichment path. Row shape matches `_fetch_chunks_for_pitch_deck_ids`
+    (chunk_id, text, source_file, page_or_slide, sort_order, created_at).
+    """
+    client = _get_client()
+    if not client or not company_id or not after_iso:
+        return []
+    try:
+        decks = (
+            client.table("pitch_decks")
+            .select("id")
+            .eq("company_id", company_id)
+            .execute()
+        )
+        deck_ids = [d["id"] for d in (decks.data or []) if d.get("id")]
+        if not deck_ids:
+            return []
+        rows = (
+            client.table("chunks")
+            .select(
+                "pitch_deck_id, chunk_id, text, source_file, page_or_slide, "
+                "sort_order, created_at"
+            )
+            .in_("pitch_deck_id", deck_ids)
+            .gt("created_at", after_iso)
+            .order("sort_order")
+            .limit(10000)
+            .execute()
+        )
+        return rows.data or []
+    except Exception as exc:
+        _log_supabase_error("get_chunks_created_after", "chunks", exc)
+        return []
+
+
 def get_analysis_question_trees(company_id: str) -> dict[str, Any] | None:
     """Return question_trees from the latest completed analysis state.
 

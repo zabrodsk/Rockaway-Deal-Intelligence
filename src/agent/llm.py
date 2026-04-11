@@ -209,14 +209,20 @@ def _coerce_message_content(content: Any) -> str:
             if isinstance(item, str):
                 parts.append(item)
             elif isinstance(item, dict):
+                # Skip OpenAI Responses API reasoning blocks — they carry
+                # no human-readable text and will otherwise stringify into
+                # user-visible output.
+                if item.get("type") == "reasoning":
+                    continue
                 if isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-                elif item.get("type") == "text" and isinstance(item.get("text"), str):
                     parts.append(item["text"])
                 elif item.get("type") == "text" and isinstance(item.get("content"), str):
                     parts.append(item["content"])
+                # Any other dict shape — drop silently.
             else:
-                parts.append(str(item))
+                # Unknown non-dict, non-str block — drop silently instead
+                # of serialising the repr.
+                continue
         return "\n".join(part for part in parts if part).strip()
     if content is None:
         return ""
