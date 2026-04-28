@@ -2865,6 +2865,68 @@ def save_app_setting(key: str, value: str | None) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# MCP secrets (rotating credentials persisted across worker restarts)
+# ---------------------------------------------------------------------------
+# Specter MCP rotates refresh tokens on every refresh. Storing them only in
+# environment variables means every Railway redeploy invalidates auth — the
+# worker boots with a stale token Specter has already replaced. These helpers
+# back the rotation with a service-role-only Supabase table so the in-memory
+# token chain survives container restarts.
+
+def get_mcp_secret(key: str) -> str | None:
+    """Read an MCP credential persisted in Supabase.
+
+    Returns None when the key isn't found, the DB isn't configured, or the
+    fetch errored. Callers should fall back to env-supplied defaults.
+    """
+    client = _get_client()
+    if not client:
+        return None
+    normalized_key = (key or "").strip()
+    if not normalized_key:
+        return None
+    try:
+        rows = (
+            client.table("mcp_secrets")
+            .select("secret_key, value_text")
+            .eq("secret_key", normalized_key)
+            .limit(1)
+            .execute()
+        )
+        if not rows.data:
+            return None
+        row = rows.data[0] or {}
+        value = str(row.get("value_text") or "")
+        return value or None
+    except Exception as exc:
+        _log_supabase_error("get_mcp_secret", "mcp_secrets", exc)
+        return None
+
+
+def set_mcp_secret(key: str, value: str) -> bool:
+    """Persist an MCP credential. Best-effort — failures don't propagate."""
+    client = _get_client()
+    if not client:
+        return False
+    normalized_key = (key or "").strip()
+    if not normalized_key or not value:
+        return False
+    try:
+        client.table("mcp_secrets").upsert(
+            {
+                "secret_key": normalized_key,
+                "value_text": str(value),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="secret_key",
+        ).execute()
+        return True
+    except Exception as exc:
+        _log_supabase_error("set_mcp_secret", "mcp_secrets", exc)
+        return False
+
+
 def _extract_company_runs_from_payload(
     job_id_legacy: str,
     payload: dict[str, Any],
