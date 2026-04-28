@@ -4673,6 +4673,22 @@
         </label>
       </div>
 
+      <div class="web-search-toggle" id="fetch-full-team-toggle" style="display:none;margin-top:16px;">
+        <label class="toggle-row" for="fetch-full-team-checkbox">
+          <div class="toggle-switch">
+            <input type="checkbox" id="fetch-full-team-checkbox">
+            <span class="toggle-slider"></span>
+          </div>
+          <div class="toggle-label">
+            <span class="toggle-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;vertical-align:middle;margin-right:6px"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              Fetch deep team profiles (Specter)
+            </span>
+            <span class="toggle-desc">Pulls full LinkedIn-grade career history, education, and seniority for every founder and key person. Adds ~60% more MCP calls per company; recommended only when the deck's team data is sparse. Requires Specter MCP augmentation (above) to be on.</span>
+          </div>
+        </label>
+      </div>
+
       <button class="btn-green" id="analyze-btn" style="margin-top:16px">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         Analyze & Rank
@@ -9048,6 +9064,9 @@ function setInputMode(mode) {
   // Specter MCP augmentation toggle is only meaningful in pitch-deck mode.
   const specterMcpToggle = $('#specter-mcp-toggle');
   if (specterMcpToggle) specterMcpToggle.style.display = mode === 'pitchdeck' ? 'block' : 'none';
+  // Deep team profiles toggle — also pitch-deck only; child of specter MCP.
+  const fetchFullTeamToggle = $('#fetch-full-team-toggle');
+  if (fetchFullTeamToggle) fetchFullTeamToggle.style.display = mode === 'pitchdeck' ? 'block' : 'none';
   // URLs only count for Specter mode — re-render input section so the
   // web-search toggle + Analyze button hide when leaving Specter with URLs entered.
   renderFiles();
@@ -9181,6 +9200,7 @@ $('#analyze-btn').addEventListener('click', async () => {
 
     const useWebSearch = !!$('#web-search-checkbox')?.checked;
     const useSpecterMcp = !!$('#specter-mcp-checkbox')?.checked;
+    const fetchFullTeam = !!$('#fetch-full-team-checkbox')?.checked;
     const instructions = ($('#instructions-input')?.value || '').trim();
     if (autoDetectedSpecter) setInputMode('specter');
     try {
@@ -9193,6 +9213,7 @@ $('#analyze-btn').addEventListener('click', async () => {
         body: JSON.stringify({
           use_web_search: useWebSearch,
           use_specter_mcp: useSpecterMcp,
+          fetch_full_team: fetchFullTeam,
           instructions: instructions || undefined,
           input_mode: effectiveInputMode,
           run_name: requestedRunName || undefined,

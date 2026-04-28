@@ -901,6 +901,7 @@ def _ensure_str(val: Any) -> str:
 class AnalyzeRequest(BaseModel):
     use_web_search: bool = False
     use_specter_mcp: bool = True
+    fetch_full_team: bool = False
     instructions: str | None = None
     input_mode: str = "pitchdeck"  # pitchdeck | specter | original
     run_name: str | None = None
@@ -5441,6 +5442,7 @@ async def start_analysis(
     cache["vc_investment_strategy"] = req.vc_investment_strategy
     cache["use_web_search"] = req.use_web_search
     cache["use_specter_mcp"] = req.use_specter_mcp
+    cache["fetch_full_team"] = req.fetch_full_team
     cache["instructions"] = req.instructions
     cache["llm_selection"] = llm_selection
     cache["phase_models"] = phase_models if (req.phase_models or pipeline_policy is not None and quality_tier is None) else None
@@ -5456,6 +5458,7 @@ async def start_analysis(
         "instructions": req.instructions,
         "use_web_search": req.use_web_search,
         "use_specter_mcp": req.use_specter_mcp,
+        "fetch_full_team": req.fetch_full_team,
         "phase_models": phase_models if (req.phase_models or pipeline_policy is not None and quality_tier is None) else None,
         "quality_tier": quality_tier,
         "premium_phase_models": premium_phase_models if quality_tier == "premium" else None,
@@ -5500,6 +5503,7 @@ async def start_analysis(
                 job_id,
                 use_web_search=req.use_web_search,
                 use_specter_mcp=req.use_specter_mcp,
+                fetch_full_team=req.fetch_full_team,
                 instructions=inst,
                 input_mode=req.input_mode,
                 vc_investment_strategy=vc_str,
@@ -6366,6 +6370,7 @@ async def _run_analysis(
     job_id: str,
     use_web_search: bool = False,
     use_specter_mcp: bool = True,
+    fetch_full_team: bool = False,
     instructions: str | None = None,
     input_mode: str = "pitchdeck",
     vc_investment_strategy: str | None = None,
@@ -6422,6 +6427,7 @@ async def _run_analysis(
                     job_id, upload_dir, use_web_search, one_company=False,
                     vc_investment_strategy=vc_investment_strategy,
                     use_specter_mcp=use_specter_mcp,
+                    fetch_full_team=fetch_full_team,
                 )
 
     except _JobStoppedError:
@@ -6537,6 +6543,7 @@ async def _run_document_analysis(
     one_company: bool = False,
     vc_investment_strategy: str | None = None,
     use_specter_mcp: bool = False,
+    fetch_full_team: bool = False,
 ) -> None:
     """Analyze uploaded documents.
 
@@ -6588,7 +6595,7 @@ async def _run_document_analysis(
                 seed_store, seed_company = augment_with_specter(
                     deck_store,
                     slug=upload_dir.name,
-                    fetch_full_team=False,
+                    fetch_full_team=fetch_full_team,
                     on_log=lambda m: (_append_progress(job_id, m), print(m)),
                 )
             except Exception as exc:  # noqa: BLE001 — augmentation is best-effort
@@ -6700,7 +6707,7 @@ async def _run_document_analysis(
                         seed_store, seed_company = augment_with_specter(
                             deck_store,
                             slug=doc_dir.name,
-                            fetch_full_team=False,
+                            fetch_full_team=fetch_full_team,
                             on_log=lambda m: (_append_progress(job_id, m), print(m)),
                         )
                     except Exception as exc:  # noqa: BLE001 — augmentation is best-effort
