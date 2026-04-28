@@ -411,6 +411,134 @@ def test_fetch_specter_company_continues_when_person_profile_fails():
 
 
 # ---------------------------------------------------------------------------
+# Refresh-token persistence (Supabase-backed rotation chain)
+# ---------------------------------------------------------------------------
+
+
+def test_token_manager_prefers_persisted_refresh_token_over_env(monkeypatch):
+    """When Supabase has a rotated refresh token, _TokenManager uses it instead
+    of the env-supplied bootstrap value. This is what saves us across deploys."""
+    from agent.ingest import specter_mcp_client as mcp_mod
+
+    monkeypatch.setattr(
+        mcp_mod, "_load_persisted_refresh_token", lambda: "ROTATED-REFRESH-TOKEN"
+    )
+    creds = mcp_mod._SpecterCredentials(
+        mcp_url="https://example/mcp",
+        token_endpoint="https://example/token",
+        client_id="cid",
+        client_secret="csec",
+        refresh_token="ENV-BOOTSTRAP-TOKEN",
+    )
+    tm = mcp_mod._TokenManager(creds)
+    assert tm._creds.refresh_token == "ROTATED-REFRESH-TOKEN"
+
+
+def test_token_manager_falls_back_to_env_when_supabase_empty(monkeypatch):
+    from agent.ingest import specter_mcp_client as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_load_persisted_refresh_token", lambda: None)
+    creds = mcp_mod._SpecterCredentials(
+        mcp_url="https://example/mcp",
+        token_endpoint="https://example/token",
+        client_id="cid",
+        client_secret="csec",
+        refresh_token="ENV-BOOTSTRAP-TOKEN",
+    )
+    tm = mcp_mod._TokenManager(creds)
+    assert tm._creds.refresh_token == "ENV-BOOTSTRAP-TOKEN"
+
+
+def test_refresh_persists_rotated_token(monkeypatch):
+    """Successful refresh that returns a new refresh_token should call _persist_refresh_token."""
+    from agent.ingest import specter_mcp_client as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_load_persisted_refresh_token", lambda: None)
+
+    persisted: list[str] = []
+    monkeypatch.setattr(
+        mcp_mod, "_persist_refresh_token", lambda v: persisted.append(v)
+    )
+
+    # Stub urllib.request.urlopen to return a token-endpoint payload with a rotated token.
+    class _FakeResp:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def __enter__(self):  # noqa: D401
+            return self
+
+        def __exit__(self, *exc):  # noqa: D401
+            return False
+
+        def read(self) -> bytes:
+            return self._body
+
+    def _fake_urlopen(req, timeout=20):
+        return _FakeResp(
+            b'{"access_token":"new-access","expires_in":600,"refresh_token":"NEW-ROTATED-TOKEN"}'
+        )
+
+    monkeypatch.setattr(mcp_mod.urllib.request, "urlopen", _fake_urlopen)
+
+    creds = mcp_mod._SpecterCredentials(
+        mcp_url="https://example/mcp",
+        token_endpoint="https://example/token",
+        client_id="cid",
+        client_secret="csec",
+        refresh_token="OLD-TOKEN",
+    )
+    tm = mcp_mod._TokenManager(creds)
+    token = tm.get_access_token()
+    assert token == "new-access"
+    assert tm._creds.refresh_token == "NEW-ROTATED-TOKEN"
+    assert persisted == ["NEW-ROTATED-TOKEN"]
+
+
+def test_refresh_does_not_persist_when_token_unchanged(monkeypatch):
+    """Some OAuth servers don't rotate. We should NOT call set_mcp_secret in that case."""
+    from agent.ingest import specter_mcp_client as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "_load_persisted_refresh_token", lambda: None)
+    persisted: list[str] = []
+    monkeypatch.setattr(
+        mcp_mod, "_persist_refresh_token", lambda v: persisted.append(v)
+    )
+
+    class _FakeResp:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self) -> bytes:
+            return self._body
+
+    def _fake_urlopen(req, timeout=20):
+        # Same refresh_token as the bootstrap → no rotation
+        return _FakeResp(
+            b'{"access_token":"new-access","expires_in":600,"refresh_token":"BOOTSTRAP"}'
+        )
+
+    monkeypatch.setattr(mcp_mod.urllib.request, "urlopen", _fake_urlopen)
+
+    creds = mcp_mod._SpecterCredentials(
+        mcp_url="https://example/mcp",
+        token_endpoint="https://example/token",
+        client_id="cid",
+        client_secret="csec",
+        refresh_token="BOOTSTRAP",
+    )
+    tm = mcp_mod._TokenManager(creds)
+    tm.get_access_token()
+    assert persisted == []
+
+
+# ---------------------------------------------------------------------------
 # Live integration test (only runs when refresh token is set)
 # ---------------------------------------------------------------------------
 

@@ -79,11 +79,53 @@ class _SpecterCredentials:
         return cls(url, token_ep, cid, secret, rt)
 
 
+_REFRESH_TOKEN_SECRET_KEY = "specter_mcp_refresh_token"
+
+
+def _load_persisted_refresh_token() -> str | None:
+    """Best-effort load of the rotated refresh token from Supabase.
+
+    Returns None when the DB isn't configured (local dev, tests) or the
+    secret hasn't been seeded yet — callers fall back to env-supplied value.
+    """
+    try:
+        from web import db as _db  # local import to avoid module-level cycle
+    except Exception:
+        return None
+    try:
+        return _db.get_mcp_secret(_REFRESH_TOKEN_SECRET_KEY)
+    except Exception:
+        return None
+
+
+def _persist_refresh_token(value: str) -> None:
+    """Write a freshly-rotated refresh token to Supabase. Failures are swallowed."""
+    try:
+        from web import db as _db
+    except Exception:
+        return
+    try:
+        _db.set_mcp_secret(_REFRESH_TOKEN_SECRET_KEY, value)
+    except Exception:
+        pass
+
+
 class _TokenManager:
-    """Caches a Specter access token in memory, refreshing on demand."""
+    """Caches a Specter access token in memory, refreshing on demand.
+
+    The refresh-token chain is persisted to Supabase via _persist_refresh_token.
+    On boot, we prefer the persisted value (if any) over the env var because
+    Specter rotates refresh tokens on every refresh — env-only storage means
+    every container restart invalidates auth.
+    """
 
     def __init__(self, creds: _SpecterCredentials) -> None:
         self._creds = creds
+        # Prefer the live (rotated) token persisted in Supabase. The env-supplied
+        # value remains the bootstrap default for first run / fresh deploys.
+        persisted = _load_persisted_refresh_token()
+        if persisted:
+            self._creds.refresh_token = persisted
         self._access_token: str | None = None
         self._expires_at: float = 0.0
         self._lock = threading.Lock()
@@ -138,10 +180,11 @@ class _TokenManager:
         self._expires_at = time.time() + expires_in
         new_refresh = payload.get("refresh_token")
         if new_refresh and new_refresh != self._creds.refresh_token:
-            # Specter rotates refresh tokens; keep the latest in-memory but
-            # do NOT persist (operator must rerun the login helper if the
-            # service is restarted past the old refresh-token's lifetime).
+            # Specter rotates refresh tokens. Keep the latest in-memory AND
+            # persist to Supabase so a container restart can resume the chain
+            # instead of falling back to a stale env-supplied bootstrap token.
             self._creds.refresh_token = new_refresh
+            _persist_refresh_token(new_refresh)
 
 
 # ---------------------------------------------------------------------------
