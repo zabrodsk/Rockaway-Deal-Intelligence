@@ -97,6 +97,14 @@ _LABELED_URL_RE = re.compile(
     r"(?i)\b(?:website|visit|web|url|homepage|site)\b[\s:\-–—]+(\S+)"
 )
 
+# Email addresses: ``milan@adspawn.com`` / ``hello@acme.io``. The captured
+# domain part is the strongest signal that THIS is the company's own URL —
+# pitch decks almost always include the founder/contact email of THIS
+# company, not third parties. Treated like labeled (3× score multiplier).
+_EMAIL_DOMAIN_RE = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9][A-Za-z0-9.-]*\.[a-zA-Z]{2,63})\b"
+)
+
 
 # ---------------------------------------------------------------------------
 # Domain root normalization
@@ -147,6 +155,13 @@ def _is_blocked(domain: str) -> bool:
     # Reject ``9m`` / ``9.9m`` / ``25b`` / single-letter TLDs.
     if len(tld) < 2 or not tld.isalpha():
         return True
+    # Real domains have at least one letter in their first label. Money/metric
+    # notations like ``$4.8MM`` (4.8mm), ``$2.2Bn`` (2.2bn), or ``9.9m`` always
+    # have an all-digit first label. Real domains starting with digits
+    # (4chan.org, 99designs.com, 2checkout.com) all contain letters too.
+    first_label = parts[0]
+    if not any(c.isalpha() for c in first_label):
+        return True
     return False
 
 
@@ -155,15 +170,17 @@ def _is_blocked(domain: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _candidates_from_text(text: str) -> tuple[list[str], list[str]]:
-    """Return (general_candidates, labeled_candidates) extracted from ``text``.
+    """Return (general_candidates, high_confidence_candidates) from ``text``.
 
-    Labeled candidates carry a 3× score multiplier downstream (they survived a
-    ``"Website:" / "Visit:"`` prefix that's a strong human signal of intent).
+    High-confidence candidates carry a 3× score multiplier downstream — these
+    are domains found inside a ``"Website:" / "Visit:"`` label OR inside an
+    email address (``founder@company.com``), both of which are strong human
+    signals that this is THIS company's own URL.
     """
     if not text:
         return [], []
     general: list[str] = []
-    labeled: list[str] = []
+    high_confidence: list[str] = []
 
     for m in _SCHEME_URL_RE.finditer(text):
         domain = _domain_root(m.group(0))
@@ -176,18 +193,26 @@ def _candidates_from_text(text: str) -> tuple[list[str], list[str]]:
     for m in _LABELED_URL_RE.finditer(text):
         domain = _domain_root(m.group(1))
         if domain and not _is_blocked(domain):
-            labeled.append(domain)
-    return general, labeled
+            high_confidence.append(domain)
+    for m in _EMAIL_DOMAIN_RE.finditer(text):
+        domain = _domain_root(m.group(1))
+        if domain and not _is_blocked(domain):
+            high_confidence.append(domain)
+    return general, high_confidence
 
 
 def extract_company_url(
-    store: EvidenceStore, max_chunks: int = 10
+    store: EvidenceStore, max_chunks: int = 50
 ) -> str | None:
     """Pick the most-likely company URL from the first ``max_chunks`` chunks.
 
-    Scoring: ``frequency × (3 if labeled else 1) × (2 if in first 3 chunks else 1)``.
-    Returns the highest-scoring registered domain, or ``None`` if no eligible
-    candidate is found.
+    Scoring: ``frequency × (3 if labeled-or-email else 1) × (2 if in first 3
+    chunks else 1)``. Returns the highest-scoring registered domain, or
+    ``None`` if no eligible candidate is found.
+
+    Default ``max_chunks=50`` covers virtually any pitch deck end-to-end so
+    contact-slide emails (``founder@company.com``) on the last slide are
+    found. Cost is negligible (regex over text is microseconds per chunk).
     """
     if not store or not store.chunks:
         return None
