@@ -65,6 +65,31 @@ def test_extract_url_skips_blocklisted():
     assert extract_company_url(store) is None
 
 
+def test_extract_url_skips_money_and_metric_notation():
+    """``$9.9M ARR`` / ``2.5B raised`` / ``1.2k users`` must not be matched as domains.
+
+    Real-world regression: an AdSpawn deck with no URL but multiple money
+    metrics had ``9.9m`` extracted as a "domain" and sent to Specter MCP.
+    The TLD must be alphabetic-only and ≥2 chars.
+    """
+    store = _store(
+        "adspawn",
+        "We hit $9.9M ARR in Q3, with 2.5B impressions and 1.2k advertisers.",
+        "10.5x return on ad spend; 95.5% retention.",
+    )
+    assert extract_company_url(store) is None
+
+
+def test_extract_url_finds_real_domain_alongside_metrics():
+    """A real domain must still win when it co-exists with money metrics."""
+    store = _store(
+        "adspawn",
+        "We hit $9.9M ARR — visit adspawn.io for a demo.",
+        "2.5B impressions per month.",
+    )
+    assert extract_company_url(store) == "adspawn.io"
+
+
 def test_extract_url_handles_labeled_pattern_with_3x_bonus():
     """`Website: foo.com` should beat raw `crunchbase.com` mentions even at higher frequency."""
     store = _store(
