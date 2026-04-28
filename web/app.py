@@ -6530,58 +6530,6 @@ def _build_single_company_specter_overlay(
     return specter_company, merged_store, parsed_count
 
 
-_GENERIC_DECK_STEMS: frozenset[str] = frozenset(
-    {
-        # Deck-type words
-        "deck", "pitch", "pitchdeck", "pitchdeckextended", "pitch_deck",
-        "presentation", "slides", "slidedeck", "slide_deck",
-        # Lifecycle / version words
-        "final", "draft", "latest", "current", "updated",
-        "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
-        # Audience / purpose words
-        "company", "investor", "investors", "memo", "intro", "introduction",
-        "overview", "summary", "executive", "exec",
-        # Variant / scope qualifiers
-        "extended", "extension", "long", "short", "full", "brief",
-        "public", "private", "redacted", "anonymized", "sanitized",
-        "teaser", "teaserdeck", "teaser_deck",
-        "confidential", "nda",
-        # Date-y words
-        "year", "annual", "quarter", "q1", "q2", "q3", "q4",
-    }
-)
-
-
-def _tentative_name_from_filename(fname: str) -> str | None:
-    """Derive a candidate company name from an uploaded deck filename.
-
-    Heuristic: take the file stem, drop generic deck-ish tokens, and return the
-    FIRST remaining alphabetic word (>=3 chars). Brand names lead deck
-    filenames in the overwhelming majority of cases (e.g. ``Zaitra PitchDeck
-    Extended.pdf`` → "Zaitra"), so first-position beats longest-token. Returns
-    None when nothing plausible remains — the MCP client then falls back to
-    the domain-root check alone, which is still a strong disambiguation
-    safeguard.
-    """
-    try:
-        stem = Path(fname).stem
-    except Exception:
-        return None
-    if not stem:
-        return None
-    # Split on common separators; keep alphabetic word-like tokens.
-    tokens = re.split(r"[\s_\-.()\[\]]+", stem)
-    for t in tokens:
-        if (
-            t
-            and t.lower() not in _GENERIC_DECK_STEMS
-            and t.isalpha()
-            and len(t) >= 3
-        ):
-            return t
-    return None
-
-
 async def _run_document_analysis(
     job_id: str,
     upload_dir: Path,
@@ -6630,14 +6578,16 @@ async def _run_document_analysis(
             try:
                 from agent.ingest import ingest_startup_folder
                 from agent.ingest.specter_augmentation import augment_with_specter
-                tentative_name = None
-                if files:
-                    tentative_name = _tentative_name_from_filename(files[0].get("name") or "")
+                # The URL extracted from the deck text is the canonical
+                # company identifier. We deliberately do NOT pass
+                # expected_name: filename-derived names are noisy
+                # (e.g. "Zaitra PitchDeck Extended.pdf") and the MCP
+                # client's domain-root check already catches Specter
+                # cross-resolves like Scribe→Shopscribe.
                 deck_store = ingest_startup_folder(upload_dir)
                 seed_store, seed_company = augment_with_specter(
                     deck_store,
                     slug=upload_dir.name,
-                    expected_name=tentative_name,
                     fetch_full_team=False,
                     on_log=lambda m: (_append_progress(job_id, m), print(m)),
                 )
@@ -6742,11 +6692,14 @@ async def _run_document_analysis(
                         from agent.ingest.specter_augmentation import (
                             augment_with_specter,
                         )
+                        # URL extracted from the deck text is the canonical
+                        # identifier; no expected_name (filename-derived
+                        # names are noisy and the domain-root check is
+                        # already a strong safeguard).
                         deck_store = ingest_startup_folder(doc_dir)
                         seed_store, seed_company = augment_with_specter(
                             deck_store,
                             slug=doc_dir.name,
-                            expected_name=_tentative_name_from_filename(fname),
                             fetch_full_team=False,
                             on_log=lambda m: (_append_progress(job_id, m), print(m)),
                         )
