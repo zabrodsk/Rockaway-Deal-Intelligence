@@ -90,6 +90,54 @@ def test_extract_url_finds_real_domain_alongside_metrics():
     assert extract_company_url(store) == "adspawn.io"
 
 
+def test_extract_url_skips_two_letter_metric_tlds():
+    """``$4.8MM`` and ``$2.2Bn`` survived the earlier fix because ``mm`` and ``bn``
+    are 2 alphabetic chars (and even real ccTLDs). The first-label-must-have-a-letter
+    check kills these — money/metric notation always has an all-digit first label.
+    """
+    store = _store(
+        "x",
+        "SOM $4.8MM, SAM 720MM, TAM 30Bn — $2.2Bn ARR for the leader.",
+        "We hit $79.6M and $24.2M last year, growing 10.5x.",
+    )
+    assert extract_company_url(store) is None
+
+
+def test_extract_url_finds_email_domain_with_3x_bonus():
+    """An email like ``founder@adspawn.com`` is a strong "this is OUR domain"
+    signal and should beat raw competitor mentions even at the same frequency.
+    Mirrors the AdSpawn deck (URL only appears on the last slide as a contact
+    email)."""
+    store = _store(
+        "adspawn",
+        "AdSpawn vs AdCreative.ai — competitive comparison.",
+        "Let's talk! milan@adspawn.com",
+    )
+    # adcreative.ai (general, 1×) vs adspawn.com (email, 3×). Email wins.
+    assert extract_company_url(store) == "adspawn.com"
+
+
+def test_extract_url_scans_late_slides_by_default():
+    """Default max_chunks must be large enough to find URLs on contact slides
+    of long decks. Real regression: the AdSpawn deck has the company URL only
+    on slide 17 (chunk 16 with one-chunk-per-slide chunking)."""
+    chunks = [_chunk(i, f"Slide {i}: marketing copy with no URL.") for i in range(16)]
+    chunks.append(_chunk(16, "Let's talk! milan@adspawn.com"))
+    store = EvidenceStore(startup_slug="adspawn", chunks=chunks)
+    # Default scanning must catch the email-domain on the contact slide.
+    assert extract_company_url(store) == "adspawn.com"
+
+
+def test_extract_url_real_emails_blocklisted_personal_addresses():
+    """``hello@gmail.com`` should not feed the email-domain candidate list
+    because gmail is on the blocklist."""
+    store = _store(
+        "x",
+        "Reach the founder at jane@gmail.com or jane@yahoo.com.",
+    )
+    assert extract_company_url(store) is None
+
+
 def test_extract_url_handles_labeled_pattern_with_3x_bonus():
     """`Website: foo.com` should beat raw `crunchbase.com` mentions even at higher frequency."""
     store = _store(
@@ -112,7 +160,7 @@ def test_extract_url_only_scans_first_n_chunks():
     chunks = [_chunk(i, "irrelevant filler text with no domains") for i in range(10)]
     chunks.append(_chunk(10, "Here is the actual URL: latecomer.com"))
     store = EvidenceStore(startup_slug="x", chunks=chunks)
-    # Default max_chunks=10 means index 10 is excluded.
+    # max_chunks acts as a hard slice — index 10 excluded when max_chunks=10.
     assert extract_company_url(store, max_chunks=10) is None
     # Bumping max_chunks finds it.
     assert extract_company_url(store, max_chunks=11) == "latecomer.com"
