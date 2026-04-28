@@ -549,6 +549,79 @@
       color: var(--text-dim);
       line-height: 1.4;
     }
+    /* Specter URL textarea (Phase 4 hybrid intake) */
+    .specter-urls-section {
+      width: 100%;
+      max-width: 640px;
+      margin-top: 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+    }
+    .specter-urls-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .specter-urls-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-light);
+    }
+    .specter-urls-sublabel {
+      color: var(--text-dim);
+      font-weight: 400;
+      font-size: 12px;
+    }
+    .specter-urls-toggle {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm, 6px);
+      color: var(--text-gray);
+      padding: 4px 10px;
+      font: 600 11px var(--font-body);
+      cursor: pointer;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .specter-urls-toggle:hover {
+      color: var(--text-light);
+      border-color: var(--green-border);
+    }
+    .specter-urls-body {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .specter-urls-textarea {
+      width: 100%;
+      box-sizing: border-box;
+      background: var(--bg-input, #0e1017);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      color: var(--text-light);
+      padding: 10px 12px;
+      font: 400 13px var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+      resize: vertical;
+      min-height: 100px;
+    }
+    .specter-urls-textarea:focus {
+      outline: 2px solid var(--green-border);
+      outline-offset: -1px;
+    }
+    .specter-urls-hint {
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.5;
+    }
+    .specter-urls-counter {
+      font-size: 12px;
+      color: var(--green);
+      font-weight: 600;
+    }
     .input-mode-callout {
       display: none;
       align-items: flex-start;
@@ -4500,6 +4573,23 @@
     </div>
     <input type="file" id="file-input" multiple accept=".pdf,.pptx,.docx,.xlsx,.xls,.csv,.txt,.md">
 
+    <!-- Specter URL list intake (visible only in Specter mode) -->
+    <div id="specter-urls-section" class="specter-urls-section" style="display:none;">
+      <div class="specter-urls-header">
+        <span class="specter-urls-label">Or paste startup URLs <span class="specter-urls-sublabel">— uses Specter MCP, no CSV needed</span></span>
+        <button type="button" class="specter-urls-toggle" id="specter-urls-toggle">Show</button>
+      </div>
+      <div class="specter-urls-body" id="specter-urls-body" style="display:none;">
+        <textarea id="specter-urls-input" class="specter-urls-textarea" rows="5" placeholder="One URL per line, e.g.&#10;anthropic.com&#10;notion.so&#10;https://www.linear.app"></textarea>
+        <div class="specter-urls-hint">
+          <strong>What URLs cover via Specter MCP:</strong> identity, funding rounds + lead investors, 23-month department-level headcount, founders + LinkedIn URLs, reported clients, investor-interest signals, tech-vertical taxonomy.<br>
+          <strong>What's missing — drop the matching CSV exports above to also include:</strong> G2 / Trustpilot / Glassdoor reviews, awards & certifications, multi-period web/social/app-store growth ratios, per-founder role descriptions and skills.<br>
+          Each run uses either the uploaded CSV companies <em>or</em> the URL list (not both at once).
+        </div>
+        <div class="specter-urls-counter" id="specter-urls-counter"></div>
+      </div>
+    </div>
+
     <div class="input-mode-section">
       <span class="input-mode-label">Input mode</span>
       <div class="input-mode-toggle">
@@ -4829,6 +4919,7 @@ let sessionId = localStorage.getItem('session_id');
 let currentJobId = null;
 let currentResults = null;
 let uploadedFiles = [];
+let specterUrls = [];
 let inputMode = 'specter';
 let inputModeTouched = false;
 const APP_STATE_VERSION = '2026-03-15-analysis-state-v2';
@@ -6209,7 +6300,8 @@ function updateAnalyzeButtonState() {
   const button = $('#analyze-btn');
   if (!button) return;
   const identityReady = !isSupabaseAuthRequired() || !!getSupabaseAccessToken();
-  button.disabled = uploadedFiles.length === 0 || !identityReady;
+  const haveInput = uploadedFiles.length > 0 || (inputMode === 'specter' && specterUrls.length > 0);
+  button.disabled = !haveInput || !identityReady;
   button.title = identityReady ? '' : 'Sign in with Supabase before starting an analysis.';
 }
 
@@ -8917,7 +9009,11 @@ function setInputMode(mode) {
   });
   const hint = $('#input-mode-hint');
   if (hint) hint.textContent = MODE_HINTS[mode] || '';
+  // Show the URL textarea section only in Specter mode
+  const urlsSection = $('#specter-urls-section');
+  if (urlsSection) urlsSection.style.display = mode === 'specter' ? 'block' : 'none';
   updateRunNameVisibility();
+  updateAnalyzeButtonState();
 }
 $$('.input-mode-option').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -8925,6 +9021,49 @@ $$('.input-mode-option').forEach((btn) => {
     setInputMode(btn.dataset.mode);
   });
 });
+
+// ── Specter URL textarea (Phase 4 hybrid intake) ──
+function parseSpecterUrls(raw) {
+  return (raw || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => line.replace(/^@/, '').replace(/^['"]|['"]$/g, ''));
+}
+function updateSpecterUrlsCounter() {
+  const counter = $('#specter-urls-counter');
+  if (!counter) return;
+  if (specterUrls.length === 0) {
+    counter.textContent = '';
+  } else {
+    counter.textContent = `${specterUrls.length} URL${specterUrls.length === 1 ? '' : 's'} ready · CSVs above will be ignored when URLs are present.`;
+  }
+}
+const _specterUrlsInput = $('#specter-urls-input');
+if (_specterUrlsInput) {
+  _specterUrlsInput.addEventListener('input', () => {
+    specterUrls = parseSpecterUrls(_specterUrlsInput.value);
+    updateSpecterUrlsCounter();
+    updateAnalyzeButtonState();
+  });
+}
+const _specterUrlsToggle = $('#specter-urls-toggle');
+if (_specterUrlsToggle) {
+  _specterUrlsToggle.addEventListener('click', () => {
+    const body = $('#specter-urls-body');
+    if (!body) return;
+    const isHidden = body.style.display === 'none' || body.style.display === '';
+    body.style.display = isHidden ? 'flex' : 'none';
+    _specterUrlsToggle.textContent = isHidden ? 'Hide' : 'Show';
+    if (isHidden) _specterUrlsInput?.focus();
+  });
+}
+// Initialize URL section visibility based on the default mode (Specter)
+const _initialUrlsSection = $('#specter-urls-section');
+if (_initialUrlsSection) {
+  _initialUrlsSection.style.display = inputMode === 'specter' ? 'block' : 'none';
+}
+
 updateRunNameVisibility();
 $('#llm-model-select')?.addEventListener('change', (event) => {
   selectedLlmKey = event.target.value || null;
@@ -8935,7 +9074,8 @@ $('#llm-model-select')?.addEventListener('change', (event) => {
 
 // ── Analyze ──
 $('#analyze-btn').addEventListener('click', async () => {
-  if (uploadedFiles.length === 0) return;
+  const usingUrls = inputMode === 'specter' && uploadedFiles.length === 0 && specterUrls.length > 0;
+  if (uploadedFiles.length === 0 && !usingUrls) return;
   if (isSupabaseAuthRequired() && !getSupabaseAccessToken()) {
     window.alert('Sign in with Supabase before starting an analysis.');
     return;
@@ -8946,17 +9086,28 @@ $('#analyze-btn').addEventListener('click', async () => {
   const _welcomeBanner = $('#onboarding-welcome');
   if (_welcomeBanner) _welcomeBanner.classList.remove('is-visible');
 
-  const formData = new FormData();
-  for (const f of uploadedFiles) formData.append('files', f);
-
+  let uploadRes;
   try {
-    const uploadResponse = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData,
-      credentials: 'include',
-    });
+    let uploadResponse;
+    if (usingUrls) {
+      // URL-only intake: hit /api/upload-urls instead of /api/upload.
+      uploadResponse = await fetch('/api/upload-urls', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: specterUrls }),
+      });
+    } else {
+      const formData = new FormData();
+      for (const f of uploadedFiles) formData.append('files', f);
+      uploadResponse = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+    }
 
-    const uploadRes = await uploadResponse.json().catch(() => ({}));
+    uploadRes = await uploadResponse.json().catch(() => ({}));
     if (!uploadResponse.ok) {
       throw new Error(uploadRes.detail || 'Upload failed');
     }
@@ -8965,8 +9116,9 @@ $('#analyze-btn').addEventListener('click', async () => {
       throw new Error('Upload did not return a job id.');
     }
     persistActiveJob(uploadRes.job_id);
-    const autoDetectedSpecter = uploadRes.mode === 'specter' && !inputModeTouched;
-    const effectiveInputMode = autoDetectedSpecter ? 'specter' : inputMode;
+    // URL-only runs always use specter mode. CSV uploads keep auto-detection.
+    const autoDetectedSpecter = !usingUrls && uploadRes.mode === 'specter' && !inputModeTouched;
+    const effectiveInputMode = usingUrls ? 'specter' : (autoDetectedSpecter ? 'specter' : inputMode);
     const requestedRunName = (($('#run-name-input')?.value || '').trim() || null);
     const analysisSelection = getAnalysisSelectionPayload();
     upsertRecentRun({
