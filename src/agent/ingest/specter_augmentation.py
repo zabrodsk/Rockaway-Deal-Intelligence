@@ -79,13 +79,15 @@ _FILE_EXTENSION_TLDS: frozenset[str] = frozenset(
 # trailing punctuation/whitespace is trimmed by the consumer.
 _SCHEME_URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+")
 
-# Bare domains: catch ``acme.com`` / ``app.acme.io`` / ``acme.co.uk``. Negative
-# lookbehind avoids matching mid-token (e.g. ``foo.acme.com`` as ``acme.com``);
-# negative lookahead avoids dangling alphanumerics. Allows up to 4 labels total
-# (so ``a.b.c.d`` matches but ``a.b.c.d.e.f`` does not — keeps it scoped).
+# Bare domains: catch ``acme.com`` / ``app.acme.io`` / ``acme.co.uk``. The TLD
+# (last label) is required to be alphabetic-only and at least 2 chars — this
+# rejects pseudo-domains like ``9.9m`` (money/metric notation) or ``2.5b``
+# that would otherwise match a permissive regex. Negative lookbehind avoids
+# matching mid-token (e.g. ``foo.acme.com`` as ``acme.com``); negative
+# lookahead avoids dangling alphanumerics. Allows up to 4 labels total.
 _BARE_DOMAIN_RE = re.compile(
     r"(?<![A-Za-z0-9._-])"
-    r"((?:www\.)?[a-zA-Z0-9][a-zA-Z0-9-]{0,62}(?:\.[a-zA-Z0-9-]{1,63}){1,3})"
+    r"((?:www\.)?[a-zA-Z0-9][a-zA-Z0-9-]{0,62}(?:\.[a-zA-Z0-9-]{1,63}){0,2}\.[a-zA-Z]{2,63})"
     r"(?![A-Za-z0-9-])"
 )
 
@@ -121,7 +123,13 @@ def _domain_root(value: str | None) -> str:
 
 
 def _is_blocked(domain: str) -> bool:
-    """Return True if ``domain`` is on the blocklist or looks like a filename."""
+    """Return True if ``domain`` is on the blocklist or looks like a filename.
+
+    Belt-and-suspenders for the bare-domain regex: also rejects pseudo-domains
+    that survive a permissive regex, e.g. money/metric notation like ``9.9m``
+    or ``2.5b`` (the regex tightening is the primary defense; this is the
+    safety net if a future caller passes us pre-extracted text).
+    """
     if not domain or "." not in domain:
         return True
     if domain in _BLOCKLIST_DOMAINS:
@@ -135,7 +143,9 @@ def _is_blocked(domain: str) -> bool:
     tld = parts[-1]
     if tld in _FILE_EXTENSION_TLDS:
         return True
-    if len(tld) < 2:
+    # Real TLDs are alphabetic-only and ≥2 chars (.io, .com, .co.uk, etc.).
+    # Reject ``9m`` / ``9.9m`` / ``25b`` / single-letter TLDs.
+    if len(tld) < 2 or not tld.isalpha():
         return True
     return False
 
