@@ -12,6 +12,7 @@ import pytest
 
 from agent.dataclasses.company import Company
 from agent.ingest.specter_mcp_client import (
+    SpecterCompanyNotFoundError,
     SpecterDisambiguationError,
     SpecterMCPClient,
     SpecterMCPError,
@@ -27,6 +28,42 @@ from agent.ingest.specter_mcp_client import (
     fetch_specter_company,
 )
 from agent.ingest.store import Chunk, EvidenceStore
+
+
+# ---------------------------------------------------------------------------
+# Tool result unwrapping — definitive errors fast-fail without retry
+# ---------------------------------------------------------------------------
+
+def test_unwrap_tool_result_raises_company_not_found_for_definitive_error():
+    """`No company found` is Specter's definitive 'no match' answer; must
+    raise the dedicated exception so the retry loop in _call_tool fast-fails."""
+    payload = {
+        "isError": True,
+        "content": [
+            {"type": "text", "text": "Error calling tool 'find_company': No company found"}
+        ],
+    }
+    with pytest.raises(SpecterCompanyNotFoundError):
+        SpecterMCPClient._unwrap_tool_result(payload)
+
+
+def test_unwrap_tool_result_raises_generic_for_other_errors():
+    """Other tool errors (rate-limit, internal, etc.) keep the generic
+    SpecterMCPError type so the retry loop can still back off and retry."""
+    payload = {
+        "isError": True,
+        "content": [{"type": "text", "text": "Internal server error"}],
+    }
+    with pytest.raises(SpecterMCPError) as exc_info:
+        SpecterMCPClient._unwrap_tool_result(payload)
+    # Must NOT be the not-found subclass
+    assert not isinstance(exc_info.value, SpecterCompanyNotFoundError)
+
+
+def test_company_not_found_is_subclass_of_mcp_error():
+    """Callers that catch SpecterMCPError still see SpecterCompanyNotFoundError
+    (subclass relationship preserved for backward compat)."""
+    assert issubclass(SpecterCompanyNotFoundError, SpecterMCPError)
 
 
 # ---------------------------------------------------------------------------

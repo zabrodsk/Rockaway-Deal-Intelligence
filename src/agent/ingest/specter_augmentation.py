@@ -24,6 +24,7 @@ from typing import Any, Callable, Iterable
 
 from agent.dataclasses.company import Company
 from agent.ingest.specter_mcp_client import (
+    SpecterCompanyNotFoundError,
     SpecterDisambiguationError,
     SpecterMCPError,
     fetch_specter_company,
@@ -313,6 +314,15 @@ def augment_with_specter(
         _safe_log(
             on_log,
             f"specter-augment: {url!r} resolved to wrong company — skipping ({exc})",
+        )
+        return deck_store, None
+    except SpecterCompanyNotFoundError:
+        # Specter searched its index and confirmed no record. Common for
+        # very early-stage / unfunded companies that aren't tracked. Not an
+        # error — just informational.
+        _safe_log(
+            on_log,
+            f"specter-augment: Specter has no record of {url!r} — proceeding with deck only",
         )
         return deck_store, None
     except SpecterMCPError as exc:
