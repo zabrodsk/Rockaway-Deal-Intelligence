@@ -16,6 +16,7 @@ from agent.ingest.specter_mcp_client import (
     SpecterDisambiguationError,
     SpecterMCPClient,
     SpecterMCPError,
+    _brand_stem,
     _build_funding_chunk,
     _build_growth_chunk,
     _build_overview_chunk,
@@ -64,6 +65,117 @@ def test_company_not_found_is_subclass_of_mcp_error():
     """Callers that catch SpecterMCPError still see SpecterCompanyNotFoundError
     (subclass relationship preserved for backward compat)."""
     assert issubclass(SpecterCompanyNotFoundError, SpecterMCPError)
+
+
+# ---------------------------------------------------------------------------
+# Brand stem extraction
+# ---------------------------------------------------------------------------
+
+
+def test_brand_stem_strips_tld_and_subdomains():
+    assert _brand_stem("adspawn.com") == "adspawn"
+    assert _brand_stem("adspawn.io") == "adspawn"
+    assert _brand_stem("www.adspawn.com") == "adspawn"  # _domain_root strips www
+    assert _brand_stem("https://www.adspawn.com/contact") == "adspawn"
+    assert _brand_stem("acme.co.uk") == "acme"
+    assert _brand_stem("app.acme.com") == "acme"  # app subdomain stripped
+    assert _brand_stem("go.acme.io") == "acme"
+    assert _brand_stem("") == ""
+    assert _brand_stem(None) == ""
+    # Non-domain inputs return as-is (no period)
+    assert _brand_stem("AdSpawn") == "adspawn"
+
+
+# ---------------------------------------------------------------------------
+# Brand-stem fallback in fetch_specter_company
+# ---------------------------------------------------------------------------
+
+
+class _FakeFindCompanyClient:
+    """Mock SpecterMCPClient where find_company can fail-then-succeed."""
+
+    def __init__(self, behaviour: dict[str, Any]) -> None:
+        self.calls: list[str] = []
+        self._behaviour = behaviour
+
+    def find_company(self, identifier: str) -> dict[str, Any]:
+        self.calls.append(identifier)
+        result = self._behaviour.get(identifier)
+        if isinstance(result, Exception):
+            raise result
+        if result is None:
+            raise SpecterCompanyNotFoundError(f"No company found: {identifier}")
+        return result
+
+    def get_company_profile(self, _id: str) -> dict[str, Any]:
+        return {"name": "AdSpawn", "domain": "adspawn.io", "industry": ["AdTech"]}
+
+    def get_company_intelligence(self, _id: str) -> dict[str, Any]:
+        return {"founders": []}
+
+    def get_company_financials(self, _id: str) -> dict[str, Any]:
+        return {}
+
+
+def test_fetch_falls_back_to_brand_stem_when_domain_lookup_fails():
+    """The AdSpawn case: deck has adspawn.com, Specter indexes adspawn.io.
+    find_company('adspawn.com') returns 'No company found' but
+    find_company('adspawn') (the brand stem) finds the company."""
+    client = _FakeFindCompanyClient({
+        "adspawn.com": SpecterCompanyNotFoundError("No company found"),
+        "adspawn": {
+            "external_company_id": "abc123",
+            "name": "AdSpawn",
+            "domain": "adspawn.io",
+        },
+    })
+    company, store = fetch_specter_company(
+        "adspawn.com", fetch_full_team=False, client=client
+    )
+    assert company.name == "AdSpawn"
+    assert company.domain == "adspawn.io"
+    # Two find_company calls: failed domain, then brand stem fallback
+    assert client.calls == ["adspawn.com", "adspawn"]
+
+
+def test_fetch_brand_stem_fallback_rejects_cross_company_match():
+    """If brand-stem search returns a company whose domain has a DIFFERENT
+    brand stem, that's a cross-company collision (different 'AdSpawn'),
+    must raise SpecterDisambiguationError."""
+    client = _FakeFindCompanyClient({
+        "adspawn.com": SpecterCompanyNotFoundError("No company found"),
+        # Brand-stem search returns SOME company called 'AdSpawn' but on
+        # an unrelated domain — likely a different company.
+        "adspawn": {
+            "external_company_id": "xyz",
+            "name": "AdSpawn",
+            "domain": "bigtech.com",  # ← different brand stem
+        },
+    })
+    with pytest.raises(SpecterDisambiguationError):
+        fetch_specter_company("adspawn.com", fetch_full_team=False, client=client)
+
+
+def test_fetch_does_not_attempt_brand_stem_for_non_domain_identifiers():
+    """If the identifier is already a name (no period), don't fall back."""
+    client = _FakeFindCompanyClient({
+        "AdSpawn": SpecterCompanyNotFoundError("No company found"),
+    })
+    with pytest.raises(SpecterCompanyNotFoundError):
+        fetch_specter_company("AdSpawn", fetch_full_team=False, client=client)
+    # Only one attempt — no fallback (already a name)
+    assert client.calls == ["AdSpawn"]
+
+
+def test_fetch_does_not_attempt_brand_stem_for_short_stems():
+    """Brand stems shorter than 3 chars are too generic to safely match."""
+    client = _FakeFindCompanyClient({
+        "ai.com": SpecterCompanyNotFoundError("No company found"),
+    })
+    with pytest.raises(SpecterCompanyNotFoundError):
+        fetch_specter_company("ai.com", fetch_full_team=False, client=client)
+    # Only one attempt — stem 'ai' is < 3 chars
+    assert client.calls == ["ai.com"]
 
 
 # ---------------------------------------------------------------------------

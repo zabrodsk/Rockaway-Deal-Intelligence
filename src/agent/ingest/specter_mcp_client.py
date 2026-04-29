@@ -427,6 +427,29 @@ def _domain_root(value: str | None) -> str:
     return s
 
 
+def _brand_stem(value: str | None) -> str:
+    """Return the brand stem of a domain — the registrable name minus TLD.
+
+    Used for cross-TLD identity matching. Real-world case: a deck references
+    ``adspawn.com`` but Specter indexes the company under ``adspawn.io``;
+    both share brand stem ``adspawn`` (despite different domain roots).
+
+    Strategy: take the domain root, strip subdomains commonly used by
+    companies (``app.``, ``go.``, ``my.``, ``secure.``), then take the
+    first remaining label. Not a public-suffix-list-aware implementation —
+    ``acme.co.uk`` returns ``acme`` (correct) but we accept rare misses on
+    exotic multi-label TLDs in exchange for keeping the helper trivial.
+    """
+    root = _domain_root(value)
+    if not root or "." not in root:
+        return root
+    # Drop common app/portal subdomains so e.g. ``app.acme.com`` → ``acme``.
+    parts = root.split(".")
+    while parts and parts[0] in {"app", "go", "my", "secure", "web", "portal"}:
+        parts.pop(0)
+    return parts[0] if parts else ""
+
+
 def _verify_match(
     requested_identifier: str,
     expected_name: str | None,
@@ -870,8 +893,39 @@ def fetch_specter_company(
         SpecterMCPError: any other MCP transport / auth / tool failure.
     """
     cli = client or get_default_client()
-    base = cli.find_company(identifier)
-    _verify_match(identifier, expected_name, base)
+    try:
+        base = cli.find_company(identifier)
+        _verify_match(identifier, expected_name, base)
+    except SpecterCompanyNotFoundError:
+        # Specter's find_company looks up by primary domain. Companies
+        # often have multiple domains (e.g. AdSpawn: primary adspawn.io,
+        # alternate adspawn.com), and Specter's "Other Domains" field
+        # isn't queried by find_company. If our identifier was a domain,
+        # try the brand stem (the registrable name minus TLD) as a
+        # name-based fallback. Verify the returned company's brand stem
+        # matches to avoid cross-company collisions.
+        looks_like_domain = (
+            "." in identifier
+            and " " not in identifier
+            and not identifier.startswith("linkedin.com")
+        )
+        stem = _brand_stem(identifier) if looks_like_domain else ""
+        if not stem or len(stem) < 3:
+            raise
+        base = cli.find_company(stem)
+        # Brand-stem cross-check: returned domain must share the same stem.
+        returned_domain = base.get("domain") or ""
+        if _brand_stem(returned_domain) != stem:
+            raise SpecterDisambiguationError(
+                f"Specter brand-stem fallback for {identifier!r} (stem={stem!r}) "
+                f"returned {base.get('name')!r} with domain {returned_domain!r} — "
+                f"stem mismatch."
+            )
+        # Skip _verify_match's domain check (would fail since we asked by
+        # stem, not the original domain). The brand-stem cross-check above
+        # is the equivalent guardrail. Still honour expected_name if given.
+        if expected_name:
+            _verify_match(stem, expected_name, base)
     company_id = base.get("external_company_id")
     if not company_id:
         raise SpecterMCPError(f"Specter find_company returned no ID: {base!r}")
