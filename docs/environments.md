@@ -65,6 +65,21 @@ Use one codebase across all environments. Isolate by infrastructure, secrets, an
 - `SUPABASE_SERVICE_ROLE_KEY` must be the production service-role key
 - `SPECTER_WORKER_POLL_SECONDS=10` is the current recommended starting point
 
+### Specter MCP credentials (both web and worker, all stacks)
+
+When the Specter MCP intake / augmentation features are enabled, both the web
+and worker services need the same Specter OAuth credentials:
+
+- `SPECTER_MCP_URL` — defaults to `https://mcp.tryspecter.com/mcp`; only set if pointing at a non-default endpoint
+- `SPECTER_MCP_CLIENT_ID` — minted by `scripts/specter_oauth_login.py`
+- `SPECTER_MCP_REFRESH_TOKEN` — bootstrap token; rotated tokens persist to the `mcp_secrets` Supabase table
+
+Both services must point at the same Supabase project so they share the
+rotated refresh token (otherwise one service may try to refresh against an
+already-rotated token and 401). When the OAuth session reaches its bounded
+maximum lifetime, re-run `scripts/specter_oauth_login.py` and replace the
+bootstrap value in both env vars.
+
 When `APP_ENV=production`, the app now refuses to start if required production secrets are missing or if the web service still uses the local default password or session secret.
 
 ## Production bootstrap checklist
@@ -79,7 +94,8 @@ When `APP_ENV=production`, the app now refuses to start if required production s
    `SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... scripts/railway_set_shared_supabase.sh`
 7. Deploy the web service and verify the healthcheck.
 8. Deploy the worker service and verify it can claim jobs.
-9. Run a smoke test analysis in production and verify persistence in the production Supabase project.
+9. (Optional, when using Specter MCP) On a workstation, run `python scripts/specter_oauth_login.py`, paste the resulting `SPECTER_MCP_CLIENT_ID` and `SPECTER_MCP_REFRESH_TOKEN` into both the production web and worker env vars.
+10. Run a smoke test analysis in production and verify persistence in the production Supabase project.
 
 ## Smoke test after cutover
 
