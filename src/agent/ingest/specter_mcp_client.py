@@ -50,6 +50,17 @@ class SpecterDisambiguationError(SpecterMCPError):
     """Specter MCP returned a company that does not match the requested identifier."""
 
 
+class SpecterCompanyNotFoundError(SpecterMCPError):
+    """Specter explicitly returned 'No company found' — definitive, no retry.
+
+    Distinct from transient ``SpecterMCPError`` so the retry loop in
+    ``_call_tool`` can fast-fail (Specter searched its index and confirmed no
+    match — retrying with the same identifier won't change the answer) and so
+    callers like ``augment_with_specter`` can log it as informational
+    ("company is not in Specter's database") rather than as an outage.
+    """
+
+
 # ---------------------------------------------------------------------------
 # OAuth token manager
 # ---------------------------------------------------------------------------
@@ -267,6 +278,10 @@ class SpecterMCPClient:
                 self._tokens.get_access_token(force_refresh=True)
                 last_exc = None  # don't count auth refresh against retry budget
                 continue
+            except SpecterCompanyNotFoundError:
+                # Definitive 'no match' — Specter searched and found nothing.
+                # Retrying won't change the answer, so don't burn the budget.
+                raise
             except (urllib.error.URLError, TimeoutError, SpecterMCPError) as exc:
                 last_exc = exc
                 if attempt + 1 == _MAX_ATTEMPTS:
@@ -279,6 +294,19 @@ class SpecterMCPClient:
     @staticmethod
     def _unwrap_tool_result(result: Any) -> dict[str, Any]:
         if isinstance(result, dict) and "isError" in result and result["isError"]:
+            # Pull the inline text payload so we can detect definitive errors.
+            error_text = ""
+            content = result.get("content")
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        error_text = item.get("text") or ""
+                        break
+            # "No company found" is Specter's definitive 'no match' answer —
+            # not a transient outage. Raise a distinct exception so the retry
+            # loop fast-fails and callers can log it informatively.
+            if "no company found" in error_text.lower():
+                raise SpecterCompanyNotFoundError(error_text or "No company found")
             raise SpecterMCPError(f"Specter MCP returned tool error: {result!r}")
         # MCP tool calls return a content array. We expect a single text item
         # whose payload is JSON.

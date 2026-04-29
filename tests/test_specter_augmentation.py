@@ -14,6 +14,7 @@ from agent.ingest.specter_augmentation import (
     extract_company_url,
 )
 from agent.ingest.specter_mcp_client import (
+    SpecterCompanyNotFoundError,
     SpecterDisambiguationError,
     SpecterMCPError,
 )
@@ -284,6 +285,30 @@ def test_augment_returns_unchanged_on_disambiguation_error(monkeypatch):
     assert out_store is deck
     assert out_company is None
     assert any("wrong company" in m.lower() for m in logs)
+
+
+def test_augment_returns_unchanged_on_company_not_found(monkeypatch):
+    """Specter explicitly returning 'No company found' must be handled as an
+    informational outcome (small/early-stage company not in their index), not
+    as a generic MCP failure. Mirrors the AdSpawn case: extraction succeeded
+    (adspawn.com), but Specter has no record of this pre-seed startup."""
+    deck = _store("adspawn", "Let's talk! milan@adspawn.com")
+
+    def _raises(*a, **kw):
+        raise SpecterCompanyNotFoundError("No company found")
+
+    monkeypatch.setattr(
+        "agent.ingest.specter_augmentation.fetch_specter_company", _raises
+    )
+    logs: list[str] = []
+    out_store, out_company = augment_with_specter(
+        deck, slug="adspawn", on_log=logs.append
+    )
+    assert out_store is deck
+    assert out_company is None
+    # Friendly, informational log — NOT "MCP failure"
+    assert any("no record" in m.lower() for m in logs)
+    assert not any("mcp failure" in m.lower() for m in logs)
 
 
 def test_augment_returns_unchanged_on_mcp_error(monkeypatch):
