@@ -6,7 +6,136 @@
 
 ## Summary
 
-This document summarizes the main improvements in **v0.0.6**. Key additions: **company-centric history** with `company_runs` table and grouped UI, **stop finalization** (partial results when stopping mid-run), improved **Specter detection** via header sniffing, and **Rockaway Deal Intelligence** branding.
+This document summarizes recent work since v0.0.6. The headline change is the
+**Specter MCP integration** — two new intake paths (URL-list and pitch-deck
+auto-augmentation) that pull structured Specter intelligence (funding, team,
+growth signals, investor highlights) into the analysis pipeline without
+requiring CSV uploads. Earlier v0.0.6 additions (company-centric history,
+stop finalization, Specter header sniffing, Rockaway branding) are preserved
+below.
+
+---
+
+## Specter MCP Integration (New)
+
+Replaces / complements the CSV-only Specter intake with an OAuth-authenticated
+MCP client. Three user-facing surfaces:
+
+### URL-list intake (Specter mode)
+
+Specter mode now accepts a list of URLs in addition to (or instead of) the
+company/people CSVs. The worker pipeline calls Specter MCP per URL to produce
+a `Company` + `EvidenceStore` mirroring the CSV-derived shape.
+
+### Pitch-deck augmentation (Pitch-deck mode)
+
+A toggle "Augment with Specter intelligence" (default ON, visible in
+pitch-deck mode) auto-extracts the company URL from the deck text and merges
+Specter MCP chunks into the deck-derived `EvidenceStore`. Extraction logic:
+
+- **Three regex patterns**: `https?://...`, bare domains
+  (`acme.com`, `app.acme.io`, `acme.co.uk`), labeled prefixes
+  (`Website: foo.com` / `Visit foo.io`).
+- **Email-domain detection**: extracts domain from any
+  `founder@company.com`; emails get a 3× score multiplier (strong
+  "this is OUR domain" signal — pitch decks almost always include
+  the founder/contact email of the company being pitched).
+- **Position weighting**: 2× for the first 3 chunks (cover and intro
+  slides usually carry the URL); full deck scanned by default
+  (`max_chunks=50`).
+- **Blocklist**: linkedin/twitter/facebook/youtube, gmail/outlook/yahoo,
+  vercel/netlify/herokuapp, slack/notion/zoom, crunchbase/wikipedia,
+  file-extension TLDs (png/pdf/etc.), and money/metric notation
+  (`$9.9M` → `9.9m`, `$2.2Bn` → `2.2bn`, `1.2k`, `10.5x`) — rejected
+  because the first label is all-digits or the TLD isn't alphabetic.
+- **Brand-stem fallback**: when `find_company(domain)` returns "No
+  company found", retry with the brand stem (e.g. `adspawn.com` →
+  `adspawn`), then cross-check the returned domain shares the same
+  stem. Real-world case: AdSpawn deck references `adspawn.com` but
+  Specter indexes the company under `adspawn.io`.
+
+On any failure (no URL, MCP error, disambiguation rejection,
+"no record"), the helper falls back to deck-only analysis — never raises.
+
+### Deep-team profiles toggle (both modes)
+
+A second toggle "Fetch deep team profiles (Specter)" (default OFF) flips
+`fetch_full_team`:
+
+- **OFF** — 3 MCP calls per company (find + profile + intelligence +
+  financials). Founders come from the `intelligence.founders` summary
+  list. Recommended for pitch-deck mode (deck usually carries founder
+  bios).
+- **ON** — Same 3 calls + one `get_person_profile` per founder/key
+  person. Adds ~60% more MCP calls but yields full LinkedIn-grade
+  career history, education, and seniority per person. Recommended for
+  URL-list mode where there is no deck context.
+
+### OAuth + persistent refresh tokens
+
+`scripts/specter_oauth_login.py` is a one-shot CLI that runs the
+Authorization Code + PKCE flow, opening a browser, and prints the resulting
+`SPECTER_MCP_CLIENT_ID` and `SPECTER_MCP_REFRESH_TOKEN` for the operator to
+paste into env vars.
+
+Specter rotates the refresh token on every refresh. To survive Railway
+redeploys, the rotated token persists to a new RLS-locked
+**`mcp_secrets`** Supabase table (single row keyed by
+`secret_key='specter_mcp_refresh_token'`). Migration:
+`supabase/migrations/20260428000000_mcp_secrets.sql`.
+
+### Disambiguation safeguards
+
+- **Domain root check** — `find_company('scribe.com')` returning
+  "Shopscribe" is rejected as `SpecterDisambiguationError`.
+- **Cross-company brand-stem check** — When the brand-stem fallback
+  returns a company whose domain doesn't share the same stem, that's a
+  cross-company collision (e.g. brand-stem search for `acme` returning
+  domain `bigtech.com`); raised as `SpecterDisambiguationError`.
+- **Fast-fail on "No company found"** — Specter explicitly saying "no
+  match" raises `SpecterCompanyNotFoundError` (subclass of
+  `SpecterMCPError`), which the retry loop in `_call_tool` does NOT
+  retry. Saves ~6s of wasted backoff per definitively-missing company.
+- The augmentation helper logs `Specter has no record of <url> —
+  proceeding with deck only` on this error (informational, not an
+  outage).
+
+### New env vars
+
+- `SPECTER_MCP_URL` — defaults to `https://mcp.tryspecter.com/mcp`
+- `SPECTER_MCP_CLIENT_ID`
+- `SPECTER_MCP_REFRESH_TOKEN`
+
+See `.env.example` and the README's environment table.
+
+### Critical files
+
+- **NEW** `src/agent/ingest/specter_mcp_client.py` — OAuth token
+  manager, MCP tool wrappers (`find_company`, `get_company_profile`,
+  `get_company_intelligence`, `get_company_financials`,
+  `get_person_profile`), chunk builders, `fetch_specter_company()`
+  with brand-stem fallback.
+- **NEW** `src/agent/ingest/specter_augmentation.py` —
+  `extract_company_url()` and `augment_with_specter()`. Self-contained
+  helper; never raises.
+- **NEW** `scripts/specter_oauth_login.py` — One-shot OAuth helper.
+- **NEW** `supabase/migrations/20260428000000_mcp_secrets.sql` —
+  RLS-locked secrets table.
+- **NEW** `tests/test_specter_mcp_client.py`,
+  `tests/test_specter_augmentation.py` — 49 unit tests; network-free.
+- `web/app.py` — `AnalyzeRequest.use_specter_mcp` (default True),
+  `AnalyzeRequest.fetch_full_team` (default False), threaded through
+  `_run_analysis` → `_run_document_analysis`; augmentation runs in
+  both single-file and multi-file branches of pitch-deck flow.
+- `web/static/index.html` — Two new toggles (parent: "Augment with
+  Specter intelligence"; child: "Fetch deep team profiles") visible in
+  pitch-deck and URL-list modes.
+- `src/agent/specter_company_worker.py` — Accepts new
+  `--fetch-full-team` CLI flag for URL-mode tasks.
+- `src/agent/specter_batch_worker.py` — Reads `fetch_full_team` from
+  `run_config` and forwards it.
+- `web/db.py` — `get_mcp_secret()` / `set_mcp_secret()` for the
+  rotated-token persistence layer.
 
 ---
 

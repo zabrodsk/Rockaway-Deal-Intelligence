@@ -900,6 +900,8 @@ def _ensure_str(val: Any) -> str:
 
 class AnalyzeRequest(BaseModel):
     use_web_search: bool = False
+    use_specter_mcp: bool = True
+    fetch_full_team: bool = False
     instructions: str | None = None
     input_mode: str = "pitchdeck"  # pitchdeck | specter | original
     run_name: str | None = None
@@ -5269,6 +5271,96 @@ async def upload_files(
     }
 
 
+_URL_LIKE_RE = re.compile(r"^(?:https?://)?[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}(?:/.*)?$")
+
+
+def _normalize_url_for_intake(raw: str) -> str | None:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    # Strip leading "@" (from copy-pasted social handles) and surrounding quotes.
+    s = s.lstrip("@").strip("'\"")
+    if not _URL_LIKE_RE.match(s):
+        return None
+    return s
+
+
+@app.post("/api/upload-urls")
+async def upload_urls(
+    body: dict[str, Any] = Body(...),
+    session_id: str | None = Cookie(default=None),
+):
+    """Create a job for URL-based Specter intake (no files).
+
+    Body shape::
+
+        {"urls": ["acme.com", "https://example.io", ...]}
+
+    Each URL becomes a Specter MCP lookup at analyze time. Reviews / Glassdoor /
+    awards / multi-period growth metrics are NOT included via MCP — upload the
+    matching CSVs through /api/upload if you need those signals.
+    """
+    if not _check_session(session_id):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    raw_urls = body.get("urls")
+    if not isinstance(raw_urls, list):
+        raise HTTPException(status_code=400, detail="`urls` must be a list of strings")
+
+    cleaned: list[str] = []
+    invalid: list[str] = []
+    for raw in raw_urls:
+        if not isinstance(raw, str):
+            invalid.append(repr(raw))
+            continue
+        normalized = _normalize_url_for_intake(raw)
+        if normalized is None:
+            invalid.append(raw)
+            continue
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+
+    if not cleaned:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No valid URLs provided. Invalid entries: {invalid[:5]!r}",
+        )
+
+    job_id = str(uuid.uuid4())[:8]
+    upload_dir = Path(tempfile.mkdtemp()) / job_id
+    upload_dir.mkdir(parents=True)
+
+    _jobs[job_id] = AnalysisStatus(
+        job_id=job_id, status="pending", progress="URLs received"
+    )
+    _results_cache[job_id] = {
+        "upload_dir": str(upload_dir),
+        "files": [],
+        "specter": {},
+        "specter_urls": cleaned,
+    }
+    if db and db.is_configured():
+        db.insert_analysis_event(
+            job_id,
+            message=f"Received {len(cleaned)} URLs for Specter MCP intake",
+            event_type="upload",
+            payload={"num_urls": len(cleaned)},
+        )
+        db.insert_job_status_history(
+            job_id,
+            status="pending",
+            progress="URLs received",
+            source="upload",
+        )
+
+    return {
+        "job_id": job_id,
+        "urls": cleaned,
+        "invalid": invalid,
+        "mode": "specter",
+    }
+
+
 @app.post("/api/analyze/{job_id}")
 async def start_analysis(
     job_id: str,
@@ -5349,6 +5441,8 @@ async def start_analysis(
     cache["run_name"] = req.run_name
     cache["vc_investment_strategy"] = req.vc_investment_strategy
     cache["use_web_search"] = req.use_web_search
+    cache["use_specter_mcp"] = req.use_specter_mcp
+    cache["fetch_full_team"] = req.fetch_full_team
     cache["instructions"] = req.instructions
     cache["llm_selection"] = llm_selection
     cache["phase_models"] = phase_models if (req.phase_models or pipeline_policy is not None and quality_tier is None) else None
@@ -5363,6 +5457,8 @@ async def start_analysis(
         "vc_investment_strategy": req.vc_investment_strategy,
         "instructions": req.instructions,
         "use_web_search": req.use_web_search,
+        "use_specter_mcp": req.use_specter_mcp,
+        "fetch_full_team": req.fetch_full_team,
         "phase_models": phase_models if (req.phase_models or pipeline_policy is not None and quality_tier is None) else None,
         "quality_tier": quality_tier,
         "premium_phase_models": premium_phase_models if quality_tier == "premium" else None,
@@ -5406,6 +5502,8 @@ async def start_analysis(
             _run_analysis(
                 job_id,
                 use_web_search=req.use_web_search,
+                use_specter_mcp=req.use_specter_mcp,
+                fetch_full_team=req.fetch_full_team,
                 instructions=inst,
                 input_mode=req.input_mode,
                 vc_investment_strategy=vc_str,
@@ -5790,58 +5888,83 @@ def _queue_worker_backed_specter_job(job_id: str) -> tuple[bool, str | None]:
 
     cache = _results_cache.get(job_id, {})
     specter = cache.get("specter") or {}
+    specter_urls: list[str] = list(cache.get("specter_urls") or [])
     companies_csv = specter.get("companies")
     companies_storage_path = specter.get("companies_storage_path")
-    if not companies_csv:
-        return _failure("Missing Specter company export.")
 
-    source_files = _prepare_worker_source_files(job_id)
-    if not source_files:
-        return _failure("Could not prepare shared Specter source files.")
-
-    companies_storage_path = companies_storage_path or (
-        next(
-            (
-                item.get("storage_path")
-                for item in source_files
-                if item.get("local_path") == companies_csv
-            ),
-            None,
+    if not companies_csv and not specter_urls:
+        return _failure(
+            "Neither Specter CSV exports nor URL list provided for this job."
         )
-    )
-    if not companies_storage_path:
-        return _failure("Could not upload Specter company export to shared storage.")
-    specter["companies_storage_path"] = companies_storage_path
 
-    if specter.get("people"):
-        people_storage_path = specter.get("people_storage_path") or next(
-            (
-                item.get("storage_path")
-                for item in source_files
-                if item.get("local_path") == specter.get("people")
-            ),
-            None,
+    source_files: list[dict[str, Any]] = []
+    if companies_csv:
+        prepared = _prepare_worker_source_files(job_id)
+        if not prepared:
+            return _failure("Could not prepare shared Specter source files.")
+        source_files = prepared
+
+        companies_storage_path = companies_storage_path or (
+            next(
+                (
+                    item.get("storage_path")
+                    for item in source_files
+                    if item.get("local_path") == companies_csv
+                ),
+                None,
+            )
         )
-        if not people_storage_path:
-            return _failure("Could not upload Specter people export to shared storage.")
-        specter["people_storage_path"] = people_storage_path
+        if not companies_storage_path:
+            return _failure(
+                "Could not upload Specter company export to shared storage."
+            )
+        specter["companies_storage_path"] = companies_storage_path
 
-    company_descriptors = list_specter_companies(companies_csv)
+        if specter.get("people"):
+            people_storage_path = specter.get("people_storage_path") or next(
+                (
+                    item.get("storage_path")
+                    for item in source_files
+                    if item.get("local_path") == specter.get("people")
+                ),
+                None,
+            )
+            if not people_storage_path:
+                return _failure(
+                    "Could not upload Specter people export to shared storage."
+                )
+            specter["people_storage_path"] = people_storage_path
+
+    csv_descriptors = list_specter_companies(companies_csv) if companies_csv else []
+    csv_domains = {
+        (d.get("domain") or "").strip().lower()
+        for d in csv_descriptors
+        if d.get("domain")
+    }
+    deduped_urls = [u for u in specter_urls if u.lower() not in csv_domains]
+
     max_startups = _parse_max_startups_from_instructions(cache.get("instructions"))
     if max_startups is not None:
-        company_descriptors = company_descriptors[:max_startups]
-    total_companies = len(company_descriptors)
+        # Apply the cap across the union of CSV + URL companies, prefer CSV.
+        remaining = max(0, max_startups - len(csv_descriptors))
+        deduped_urls = deduped_urls[:remaining]
+        csv_descriptors = csv_descriptors[:max_startups]
+    total_companies = len(csv_descriptors) + len(deduped_urls)
     if total_companies <= 0:
         return _failure("No companies found in Specter data.")
 
     cache["specter"] = specter
     run_config = dict(_run_config_from_cache(job_id))
-    run_config["specter_worker_files"] = {
-        "companies_storage_path": specter.get("companies_storage_path"),
-        "people_storage_path": specter.get("people_storage_path"),
-        "companies_name": Path(companies_csv).name if companies_csv else None,
-        "people_name": Path(str(specter.get("people") or "")).name if specter.get("people") else None,
-    }
+    if companies_csv:
+        run_config["specter_worker_files"] = {
+            "companies_storage_path": specter.get("companies_storage_path"),
+            "people_storage_path": specter.get("people_storage_path"),
+            "companies_name": Path(companies_csv).name if companies_csv else None,
+            "people_name": Path(str(specter.get("people") or "")).name
+            if specter.get("people") else None,
+        }
+    if deduped_urls:
+        run_config["specter_urls"] = deduped_urls
     cache["run_config"] = run_config
     progress = f"Queued for worker — 0/{total_companies} companies completed."
 
@@ -6246,6 +6369,8 @@ def _extract_founders_from_company(company: Any, slug: str) -> list[dict[str, An
 async def _run_analysis(
     job_id: str,
     use_web_search: bool = False,
+    use_specter_mcp: bool = True,
+    fetch_full_team: bool = False,
     instructions: str | None = None,
     input_mode: str = "pitchdeck",
     vc_investment_strategy: str | None = None,
@@ -6301,6 +6426,8 @@ async def _run_analysis(
                 await _run_document_analysis(
                     job_id, upload_dir, use_web_search, one_company=False,
                     vc_investment_strategy=vc_investment_strategy,
+                    use_specter_mcp=use_specter_mcp,
+                    fetch_full_team=fetch_full_team,
                 )
 
     except _JobStoppedError:
@@ -6415,6 +6542,8 @@ async def _run_document_analysis(
     use_web_search: bool,
     one_company: bool = False,
     vc_investment_strategy: str | None = None,
+    use_specter_mcp: bool = False,
+    fetch_full_team: bool = False,
 ) -> None:
     """Analyze uploaded documents.
 
@@ -6443,6 +6572,37 @@ async def _run_document_analysis(
                     job_id,
                     "Multi-file mode stays enabled. Structured Specter overlay was skipped because the export contains multiple companies.",
                 )
+
+        # Pitch-deck single-file path: augment with Specter MCP via the deck's URL.
+        # Skipped when one_company=True (Original mode is out of scope) and when a
+        # CSV Specter overlay already populated seed_store/seed_company above.
+        if (
+            use_specter_mcp
+            and not one_company
+            and seed_store is None
+            and seed_company is None
+        ):
+            try:
+                from agent.ingest import ingest_startup_folder
+                from agent.ingest.specter_augmentation import augment_with_specter
+                # The URL extracted from the deck text is the canonical
+                # company identifier. We deliberately do NOT pass
+                # expected_name: filename-derived names are noisy
+                # (e.g. "Zaitra PitchDeck Extended.pdf") and the MCP
+                # client's domain-root check already catches Specter
+                # cross-resolves like Scribe→Shopscribe.
+                deck_store = ingest_startup_folder(upload_dir)
+                seed_store, seed_company = augment_with_specter(
+                    deck_store,
+                    slug=upload_dir.name,
+                    fetch_full_team=fetch_full_team,
+                    on_log=lambda m: (_append_progress(job_id, m), print(m)),
+                )
+            except Exception as exc:  # noqa: BLE001 — augmentation is best-effort
+                print(f"specter-augment: pre-ingest failed for {upload_dir.name}: {exc}")
+                seed_store = None
+                seed_company = None
+
         result = await evaluate_startup(
             upload_dir, k=8, use_web_search=use_web_search,
             on_progress=_make_progress_callback(job_id),
@@ -6528,12 +6688,41 @@ async def _run_document_analysis(
                     full_msg = f"{prefix} — {msg}"
                     _append_progress(job_id, full_msg)
 
+                # Optional: pre-ingest the deck and augment with Specter MCP
+                # data extracted via the deck's company URL. Helper never
+                # raises — falls back to deck-only on any failure.
+                seed_store = None
+                seed_company = None
+                if use_specter_mcp:
+                    try:
+                        from agent.ingest import ingest_startup_folder
+                        from agent.ingest.specter_augmentation import (
+                            augment_with_specter,
+                        )
+                        # URL extracted from the deck text is the canonical
+                        # identifier; no expected_name (filename-derived
+                        # names are noisy and the domain-root check is
+                        # already a strong safeguard).
+                        deck_store = ingest_startup_folder(doc_dir)
+                        seed_store, seed_company = augment_with_specter(
+                            deck_store,
+                            slug=doc_dir.name,
+                            fetch_full_team=fetch_full_team,
+                            on_log=lambda m: (_append_progress(job_id, m), print(m)),
+                        )
+                    except Exception as exc:  # noqa: BLE001 — augmentation is best-effort
+                        print(f"specter-augment: pre-ingest failed for {fname}: {exc}")
+                        seed_store = None
+                        seed_company = None
+
                 try:
                     result = await evaluate_startup(
                         doc_dir, k=8, use_web_search=use_web_search,
                         on_progress=make_progress,
                         on_cooperate=lambda: _cooperate_with_job_control(job_id),
                         vc_investment_strategy=vc_investment_strategy,
+                        initial_store=seed_store,
+                        initial_company=seed_company,
                     )
                     await _cooperate_with_job_control(job_id)
                     results_list.append(result)
