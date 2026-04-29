@@ -12,7 +12,7 @@
 
 ## Overview
 
-Rockaway Deal Intelligence helps investment teams evaluate and prioritize deal flow. Upload pitch decks, metrics, or Specter CSVs; optionally enable web search for extra context; and get structured scores, executive summaries, key points, and red flags.
+Rockaway Deal Intelligence helps investment teams evaluate and prioritize deal flow. Upload pitch decks, metrics, or Specter CSVs — or paste a list of company URLs — and optionally enable web search and Specter MCP augmentation for extra structured signal. The output is ranked deal lists with structured scores, executive summaries, key points, and red flags.
 
 **Pipeline stages:**
 
@@ -114,8 +114,9 @@ The web UI lets you upload files, run analyses, and review saved results without
 | Feature | Description |
 |---------|-------------|
 | **Upload** | PDF, PPTX, DOCX, XLSX, CSV — single or multi-file |
-| **Input modes** | Pitch Deck (1 file per company), Specter (2 CSVs), Multi-file (all files = 1 company) |
+| **Input modes** | Pitch Deck (1 file per company), Specter (2 CSVs **or** URL list), Multi-file (all files = 1 company) |
 | **Web search** | Optional Perplexity/Brave search for extra evidence |
+| **Specter MCP augmentation** | In Pitch-Deck mode, auto-extracts the company URL from deck text (regex over scheme URLs, bare domains, `Website:` labels, and emails) and pulls structured Specter intelligence — funding, team, growth signals, investor highlights — merging into the deck's evidence store. In Specter URL-list mode, the MCP is the primary intake. Optional "Fetch deep team profiles" sub-toggle adds full LinkedIn-grade career history per founder. |
 | **VC strategy** | Optional investment thesis for tailored scoring |
 | **Results** | Summary table, executive summaries, key points, red flags, pro/contra arguments |
 
@@ -153,6 +154,38 @@ The worker polls the queue on a configurable interval via
 `SPECTER_WORKER_POLL_SECONDS`. The code default is `5` seconds; the current
 Railway production worker overrides this to `10` seconds to reduce idle polling
 noise and network chatter.
+
+### Specter MCP setup (URL-list intake + pitch-deck augmentation)
+
+Specter MCP unlocks two intake paths that don't require uploading CSVs:
+
+1. **URL-list intake** — In Specter mode, paste one URL per line instead
+   of (or alongside) the company/people CSVs.
+2. **Pitch-deck augmentation** — In Pitch-deck mode, the company URL is
+   auto-extracted from the deck text and Specter chunks are merged in.
+   Default ON; toggle off in the UI to skip.
+
+Both paths use the same OAuth-authenticated Specter MCP client.
+
+**One-time auth** — Run the OAuth helper to mint a refresh token:
+
+```bash
+python scripts/specter_oauth_login.py
+```
+
+Paste the resulting `SPECTER_MCP_CLIENT_ID` and `SPECTER_MCP_REFRESH_TOKEN`
+into your `.env` (locally) or Railway env vars (deployed). On every
+subsequent token rotation the new refresh token is persisted to the
+`mcp_secrets` Supabase table — you do not need to re-run the helper unless
+the session reaches its bounded maximum lifetime.
+
+**Cost control** — The deep-team toggle (UI: "Fetch deep team profiles")
+controls per-founder profile fan-out. Default OFF: ~3 MCP calls per
+company (find + profile + intelligence + financials). Default ON: same
+plus one `get_person_profile` per founder/key person — adds ~60% more
+calls and yields full LinkedIn-grade career history. Recommended OFF for
+pitch-deck mode (deck usually carries founder bios) and ON for URL-list
+mode where there is no deck context.
 
 ### Railway deployment layout
 
@@ -270,6 +303,9 @@ Copy `.env.example` to `.env` and set:
 | `SERVICE_ROLE` | Railway only | `web` or `worker`; selects service behavior inside the shared image |
 | `ENABLE_SPECTER_WORKER_SERVICE` | optional | Queue Specter runs for the dedicated worker service instead of executing them in the web process |
 | `SPECTER_WORKER_POLL_SECONDS` | optional | Poll interval for the dedicated Specter worker (code default: `5`; current Railway production override: `10`) |
+| `SPECTER_MCP_URL` | optional | Specter MCP endpoint (default: `https://mcp.tryspecter.com/mcp`) — used for both URL-list intake and pitch-deck augmentation |
+| `SPECTER_MCP_CLIENT_ID` | optional | Specter MCP OAuth client ID minted by `scripts/specter_oauth_login.py` |
+| `SPECTER_MCP_REFRESH_TOKEN` | optional | Specter MCP OAuth refresh token (initial value); rotated tokens persist to the `mcp_secrets` Supabase table on subsequent runs |
 | `RESTART_ON_IDLE_AFTER_ANALYSIS` | optional | When `true`, the web service can restart after completed analyses have been persisted/served so idle memory is reclaimed |
 | `LANGSMITH_API_KEY` | optional | LangSmith tracing |
 
@@ -347,12 +383,14 @@ src/agent/
 ├── retrieval.py             # TF-IDF chunk retrieval
 ├── evidence_answering.py    # Document-grounded QA
 ├── ingest/
-│   ├── pdf_ingest.py        # PDF text extraction
-│   ├── pptx_ingest.py       # PPTX text extraction
-│   ├── tabular_ingest.py    # CSV/XLSX parsing
-│   ├── specter_ingest.py    # Specter company + people CSV parsing
-│   ├── chunking.py          # Text chunking
-│   └── store.py             # Evidence store
+│   ├── pdf_ingest.py            # PDF text extraction
+│   ├── pptx_ingest.py           # PPTX text extraction
+│   ├── tabular_ingest.py        # CSV/XLSX parsing
+│   ├── specter_ingest.py        # Specter company + people CSV parsing
+│   ├── specter_mcp_client.py    # Specter MCP client (OAuth + tool wrappers + chunk builders)
+│   ├── specter_augmentation.py  # Pitch-deck URL extraction + MCP merge
+│   ├── chunking.py              # Text chunking
+│   └── store.py                 # Evidence store
 ├── pipeline/
 │   ├── graph.py             # Main LangGraph definition
 │   ├── stages/              # Decomposition, QA, generation, critique, ranking

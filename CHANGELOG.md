@@ -2,6 +2,87 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added — Specter MCP integration
+
+A major intake-and-enrichment feature: any pitch deck or URL list can now be
+augmented with structured Specter intelligence (funding, team, growth signals,
+investor highlights) without uploading CSVs.
+
+- **URL-list intake mode** — Specter mode now accepts a list of URLs in
+  addition to (or instead of) the company/people CSVs. Worker pipeline
+  fetches each company by URL via the Specter MCP tools `find_company`,
+  `get_company_profile`, `get_company_intelligence`, `get_company_financials`
+  (plus optional `get_person_profile` per founder).
+- **Pitch-deck augmentation** — In pitch-deck mode, a new toggle "Augment
+  with Specter intelligence" (default ON) extracts the company URL from the
+  deck text (regex over scheme URLs, bare domains, labeled patterns
+  `Website:` / `Visit:`, and email addresses), calls the Specter MCP, and
+  merges returned chunks into the deck-derived `EvidenceStore`. Failures
+  fall back gracefully to deck-only analysis.
+- **Deep-team toggle** — New "Fetch deep team profiles (Specter)" toggle
+  (default OFF) flips `fetch_full_team` between the lightweight founders
+  summary list (3 MCP calls per company) and the full
+  `get_person_profile` fan-out (~60% more MCP calls; full LinkedIn-grade
+  career history, education, seniority per person). Visible in both
+  pitch-deck and URL-list modes.
+- **OAuth + persistent refresh tokens** — `scripts/specter_oauth_login.py`
+  one-shot CLI mints refresh tokens via Authorization Code + PKCE.
+  Rotated refresh tokens are persisted in a new RLS-locked
+  `mcp_secrets` Supabase table so they survive Railway redeploys.
+- **Brand-stem fallback** — When `find_company(domain)` returns "No
+  company found" (e.g. deck has `adspawn.com` but Specter indexes
+  `adspawn.io`), automatically retry with the brand stem (`adspawn`).
+  Cross-checks the returned domain shares the same stem before accepting;
+  raises `SpecterDisambiguationError` on cross-company collisions.
+- **Disambiguation safeguards** — `find_company('scribe.com')` returning
+  "Shopscribe" is caught by the domain-root mismatch check;
+  `SpecterCompanyNotFoundError` is a distinct subclass so the retry loop
+  in `_call_tool` fast-fails on definitive "no match" answers (saves
+  ~6 seconds of wasted backoff per missing company).
+- **Email-domain detection in deck text** — `_EMAIL_DOMAIN_RE` extracts
+  the domain part of any `founder@company.com` address; emails get the
+  same 3× score multiplier as labeled patterns since pitch decks almost
+  always include the company's own contact email.
+- **Money/metric notation hardening** — Bare-domain regex requires the
+  TLD to be alphabetic-only and ≥2 chars, and `_is_blocked()` rejects
+  domains whose first label is all-digits — kills false matches on
+  `$9.9M`, `$4.8MM`, `$2.2Bn`, `1.2k`, `10.5x` etc.
+- **Full-deck coverage** — Default `max_chunks` raised from 10 to 50 so
+  contact-slide-only URLs (e.g. on slide 17) are found.
+- **Tests** — 49 new unit tests across
+  `tests/test_specter_mcp_client.py` and
+  `tests/test_specter_augmentation.py`. All network-free; the real MCP
+  server is gated on `SPECTER_MCP_REFRESH_TOKEN` being set.
+
+### Added — schema
+
+- **`mcp_secrets`** — RLS-locked single-row-per-key table (key,
+  value_text, created_at, updated_at). Stores the rotated Specter refresh
+  token. Migration: `supabase/migrations/20260428000000_mcp_secrets.sql`.
+
+### Changed
+
+- `AnalyzeRequest` gains `use_specter_mcp: bool = True` and
+  `fetch_full_team: bool = False` fields (web/app.py).
+- `_run_analysis` and `_run_document_analysis` thread both flags through;
+  augmentation hooks run in **both** the single-file and multi-file
+  branches of the pitch-deck pipeline.
+- `specter_company_worker` accepts new `--fetch-full-team` CLI flag for
+  URL-mode tasks; `specter_batch_worker` reads `fetch_full_team` from
+  `run_config` and forwards it.
+- `_unwrap_tool_result` inspects MCP tool error text and raises
+  `SpecterCompanyNotFoundError` (not generic `SpecterMCPError`) when
+  Specter explicitly returns "No company found".
+
+### Env vars
+
+- New: `SPECTER_MCP_URL`, `SPECTER_MCP_CLIENT_ID`,
+  `SPECTER_MCP_REFRESH_TOKEN`. Required when MCP augmentation is in
+  use; optional otherwise (the augmentation toggle silently no-ops).
+  See `.env.example`.
+
 ## [0.0.6] - 2026-03-07
 
 ### Added
