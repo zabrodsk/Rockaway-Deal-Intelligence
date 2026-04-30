@@ -1,6 +1,6 @@
-"""Rockaway Deal Intelligence web application.
+"""Deal Intelligence web application.
 
-FastAPI backend serving the Rockaway-branded UI with password protection.
+FastAPI backend serving the UI with password protection.
 Provider API keys stay server-side only and are never exposed to the client.
 """
 
@@ -144,7 +144,7 @@ from agent.person_intel.models import (
 )
 from agent.person_intel.service import PersonIntelService
 
-app = FastAPI(title="Rockaway Deal Intelligence", docs_url=None, redoc_url=None)
+app = FastAPI(title="Deal Intelligence", docs_url=None, redoc_url=None)
 
 app.add_middleware(
     CORSMiddleware,
