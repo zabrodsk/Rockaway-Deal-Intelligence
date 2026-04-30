@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed — production persistence (2026-04-30)
+
+- **Missing non-partial UNIQUE constraint on `companies.company_key`** —
+  Production Supabase had only the partial unique index from
+  migration `20260306010000_company_runs.sql`
+  (`WHERE company_key IS NOT NULL`). PostgreSQL's
+  `ON CONFLICT (company_key)` inference doesn't match partial indexes
+  without an explicit predicate, so every prod company upsert raised
+  `42P10 "no unique or exclusion constraint matching"`, which
+  `_upsert_company`'s catch silently swallowed. Net result on prod:
+  zero `companies` / `pitch_decks` / `chunks` / per-company `analyses`
+  rows across all time — only the rollup `analyses` row (with NULL
+  FKs, written by the separate `persist_analysis` rollup function)
+  ever landed.
+- New migration `supabase/migrations/20260430000000_companies_unique_company_key.sql`
+  adds the constraint idempotently. Applied on prod via SQL editor;
+  testing was unaffected (already had a working constraint).
+- **Per-step observability in `web/db.py` persistence path** — a new
+  helper `_record_persist_step_failure` writes failures to BOTH Python
+  logs (Railway) AND the `analysis_errors` SQL-queryable table.
+  `_upsert_company` and every step in `_persist_company_analysis_row`
+  (companies / pitch_decks / chunks / analyses / company_runs) now
+  capture exceptions individually with operation name + table + error
+  type. Per-chunk failures only log the first occurrence to avoid
+  flooding. Future silent persistence bugs are queryable post-hoc via
+  the SQL editor — no need to tail Railway logs in real time.
+- Verified end-to-end on prod 2026-04-30 (job `fae2b416`): Zaitra deck
+  produced 1 company + 1 pitch_deck + 30 chunks + per-company analyses
+  row with populated FKs. Zero `analysis_errors` rows.
+
 ### Added — Specter MCP integration
 
 A major intake-and-enrichment feature: any pitch deck or URL list can now be

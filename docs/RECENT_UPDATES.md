@@ -6,13 +6,85 @@
 
 ## Summary
 
-This document summarizes recent work since v0.0.6. The headline change is the
-**Specter MCP integration** — two new intake paths (URL-list and pitch-deck
-auto-augmentation) that pull structured Specter intelligence (funding, team,
-growth signals, investor highlights) into the analysis pipeline without
-requiring CSV uploads. Earlier v0.0.6 additions (company-centric history,
-stop finalization, Specter header sniffing, Rockaway branding) are preserved
-below.
+This document summarizes recent work since v0.0.6. Two headline changes:
+
+1. **Specter MCP integration** — two new intake paths (URL-list and
+   pitch-deck auto-augmentation) that pull structured Specter intelligence
+   (funding, team, growth signals, investor highlights) into the analysis
+   pipeline without requiring CSV uploads.
+2. **Production persistence fix** (2026-04-30) — production Supabase had a
+   missing non-partial unique constraint on `companies.company_key` that
+   silently broke every per-company persist call. Fixed via SQL editor +
+   new migration + per-step observability so future silent failures land
+   in the `analysis_errors` table.
+
+Earlier v0.0.6 additions (company-centric history, stop finalization,
+Specter header sniffing, Rockaway branding) are preserved below.
+
+---
+
+## Production Persistence Fix (2026-04-30)
+
+A pre-existing production bug surfaced during the Specter MCP cutover and
+got fixed in the same week.
+
+### Symptom
+
+Production had never persisted any `companies`, `pitch_decks`, `chunks`, or
+per-company `analyses` rows across all time. Only the rollup `analyses` row
+(with NULL FKs) ever landed — written by a separate `persist_analysis`
+function. User-facing analyses completed and rendered correctly, but
+downstream surfaces that traverse the FK graph (company-detail,
+chat-with-company, re-evaluation) had nothing to show.
+
+### Root cause
+
+Migration `20260306010000_company_runs.sql` creates a *partial* unique
+index `idx_companies_company_key ... WHERE company_key IS NOT NULL`. Most
+PostgreSQL versions don't match partial indexes for `ON CONFLICT (column)`
+inference unless the predicate is supplied as part of the conflict target.
+The application uses the simple form via supabase-py:
+
+```python
+client.table("companies").upsert(payload, on_conflict="company_key").execute()
+```
+
+→ produces `ON CONFLICT (company_key)` with no predicate → fails on prod
+with `42P10 "there is no unique or exclusion constraint matching the
+ON CONFLICT specification"`.
+
+The exception was swallowed by `_upsert_company`'s catch which logged to
+Python only and returned `None`. With `company_id = None`, the entire
+downstream chain (`pitch_decks`, `chunks`, per-company `analyses`,
+`company_runs`) was skipped. Testing was unaffected because its table
+received a non-partial unique constraint via some earlier setup path.
+
+### Fix
+
+- **SQL editor on prod**: `ALTER TABLE companies ADD CONSTRAINT
+  companies_company_key_key UNIQUE (company_key);` — instant fix.
+- **New migration** `supabase/migrations/20260430000000_companies_unique_company_key.sql`
+  for fresh installs. Idempotent — checks for any existing non-partial
+  unique constraint/index on `company_key` first, only adds if missing.
+- **Per-step observability in `web/db.py`** — new helper
+  `_record_persist_step_failure` writes to both Python logs and the
+  `analysis_errors` table. `_upsert_company` and every step in
+  `_persist_company_analysis_row` (companies / pitch_decks / chunks /
+  analyses / company_runs) now capture exceptions individually with
+  operation name + table + exception type, scoped to the offending job.
+  Per-chunk failures only log the first occurrence to avoid flooding.
+- **Verified end-to-end** on prod 2026-04-30 (job `fae2b416`, Zaitra
+  deck): per-company `analyses` row with FKs populated, 1 company, 1
+  pitch_deck, 30 chunks, zero `analysis_errors`.
+
+### Critical files
+
+- `supabase/migrations/20260430000000_companies_unique_company_key.sql`
+  — the constraint migration
+- `web/db.py:46-94` — new `_record_persist_step_failure` helper
+- `web/db.py:411` — `_upsert_company` (now uses the new helper)
+- `web/db.py:482-590` — `_persist_company_analysis_row` (per-step error
+  capture)
 
 ---
 
