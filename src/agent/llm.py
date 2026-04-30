@@ -47,7 +47,7 @@ _CHAT_PROVIDER = "gemini"
 _CHAT_MODEL = "gemini-3.1-flash-lite-preview"
 _FALLBACK_ENCODING_NAME = "o200k_base"
 _DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-_OPENROUTER_DEFAULT_APP_NAME = "Rockaway Deal Intelligence"
+_OPENROUTER_DEFAULT_APP_NAME = "Deal Intelligence"
 _GPT5_TEMPERATURE_MODE_ENV = "OPENAI_GPT5_TEMPERATURE_MODE"
 _DEFAULT_GPT5_TEMPERATURE_MODE = "respect_requested"
 
