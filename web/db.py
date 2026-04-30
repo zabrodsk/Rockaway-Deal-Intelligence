@@ -50,6 +50,54 @@ def _log_supabase_error(
     )
 
 
+def _record_persist_step_failure(
+    *,
+    operation: str,
+    table: str,
+    exc: Exception,
+    job_id_legacy: str | None,
+    company_slug: str | None = None,
+    stage: str = "persist_company_result",
+) -> None:
+    """Log a Supabase persistence failure to BOTH Python logs and the
+    ``analysis_errors`` table.
+
+    The plain ``_log_supabase_error`` only writes to Python logs (visible in
+    Railway log streams). When the persistence path itself fails — e.g. an
+    RLS policy gap or a missing constraint silently bricks
+    ``_upsert_company`` — operators discover the bug only by tailing logs
+    in real time. This helper additionally inserts a row into
+    ``analysis_errors`` so the failure is queryable from the Supabase SQL
+    editor after the fact, scoped to the offending job.
+
+    The ``analysis_errors`` insert itself is best-effort: if it raises, we
+    fall through silently rather than masking the original exception.
+    """
+    _log_supabase_error(
+        operation,
+        table,
+        exc,
+        job_id_legacy=job_id_legacy,
+        include_traceback=True,
+    )
+    if not job_id_legacy:
+        return
+    try:
+        message = f"{operation} on {table}: {type(exc).__name__}: {exc}"[:1000]
+        insert_analysis_error(
+            job_id_legacy,
+            message=message,
+            stage=stage,
+            error_type=type(exc).__name__,
+            details={"operation": operation, "table": table},
+            company_slug=company_slug,
+        )
+    except Exception:  # noqa: BLE001 — never mask the caller's exception
+        # _log_supabase_error already captured the original failure;
+        # losing the analysis_errors row is acceptable.
+        pass
+
+
 def _normalize_company_key(name: str | None, domain: str | None = None, slug: str | None = None) -> str:
     base = (domain or "").strip().lower()
     if base:
@@ -377,7 +425,17 @@ def _upsert_company(
     team: list[Any] | None,
     domain: str | None,
     company_key: str,
+    job_id_legacy: str | None = None,
+    company_slug: str | None = None,
 ) -> str | None:
+    """Upsert a row into ``companies`` and return its id.
+
+    On failure the function returns ``None`` and records the underlying
+    exception to BOTH Python logs and (when ``job_id_legacy`` is supplied)
+    the ``analysis_errors`` table — so downstream callers and operators
+    can identify which step in the persistence chain failed without
+    tailing live Railway logs.
+    """
     payload = {
         "name": name,
         "industry": industry,
@@ -392,7 +450,13 @@ def _upsert_company(
         if row.data:
             return row.data[0].get("id")
     except Exception as exc:
-        _log_supabase_error("upsert_company", "companies", exc)
+        _record_persist_step_failure(
+            operation="upsert_company",
+            table="companies",
+            exc=exc,
+            job_id_legacy=job_id_legacy,
+            company_slug=company_slug,
+        )
 
     try:
         row = (
@@ -405,7 +469,13 @@ def _upsert_company(
         if row.data:
             return row.data[0].get("id")
     except Exception as exc:
-        _log_supabase_error("select_company_after_upsert", "companies", exc)
+        _record_persist_step_failure(
+            operation="select_company_after_upsert",
+            table="companies",
+            exc=exc,
+            job_id_legacy=job_id_legacy,
+            company_slug=company_slug,
+        )
     return None
 
 
@@ -517,77 +587,130 @@ def _persist_company_analysis_row(
         team=getattr(company, "team", None),
         domain=company_domain,
         company_key=company_key,
+        job_id_legacy=job_id_legacy,
+        company_slug=slug,
     )
 
-    pitch_deck_id = _replace_company_analysis_records(
-        client,
-        job_id_legacy=job_id_legacy,
-        company_id=company_id,
-        replace_documents=replace_documents,
-    )
+    try:
+        pitch_deck_id = _replace_company_analysis_records(
+            client,
+            job_id_legacy=job_id_legacy,
+            company_id=company_id,
+            replace_documents=replace_documents,
+        )
+    except Exception as exc:
+        _record_persist_step_failure(
+            operation="replace_company_analysis_records",
+            table="pitch_decks,chunks,analyses",
+            exc=exc,
+            job_id_legacy=job_id_legacy,
+            company_slug=slug,
+        )
+        pitch_deck_id = None
 
     if store and company_id and (replace_documents or not pitch_deck_id):
-        pd_row = client.table("pitch_decks").insert(
-            {
-                "company_id": company_id,
-                "storage_path": f"jobs/{job_id_legacy}/{slug}",
-                "original_filename": f"{slug}.pdf",
-            }
-        ).execute()
-        if pd_row.data:
-            pitch_deck_id = pd_row.data[0]["id"]
+        try:
+            pd_row = client.table("pitch_decks").insert(
+                {
+                    "company_id": company_id,
+                    "storage_path": f"jobs/{job_id_legacy}/{slug}",
+                    "original_filename": f"{slug}.pdf",
+                }
+            ).execute()
+            if pd_row.data:
+                pitch_deck_id = pd_row.data[0]["id"]
+        except Exception as exc:
+            _record_persist_step_failure(
+                operation="insert_pitch_deck",
+                table="pitch_decks",
+                exc=exc,
+                job_id_legacy=job_id_legacy,
+                company_slug=slug,
+            )
 
         if pitch_deck_id:
+            chunk_failures = 0
             for idx, chunk in enumerate(getattr(store, "chunks", []) or []):
-                client.table("chunks").insert(
-                    {
-                        "pitch_deck_id": pitch_deck_id,
-                        "chunk_id": getattr(chunk, "chunk_id", None),
-                        "text": getattr(chunk, "text", ""),
-                        "source_file": getattr(chunk, "source_file", ""),
-                        "page_or_slide": (
-                            str(getattr(chunk, "page_or_slide", None))
-                            if getattr(chunk, "page_or_slide", None) is not None
-                            else None
-                        ),
-                        "sort_order": idx,
-                    }
-                ).execute()
+                try:
+                    client.table("chunks").insert(
+                        {
+                            "pitch_deck_id": pitch_deck_id,
+                            "chunk_id": getattr(chunk, "chunk_id", None),
+                            "text": getattr(chunk, "text", ""),
+                            "source_file": getattr(chunk, "source_file", ""),
+                            "page_or_slide": (
+                                str(getattr(chunk, "page_or_slide", None))
+                                if getattr(chunk, "page_or_slide", None) is not None
+                                else None
+                            ),
+                            "sort_order": idx,
+                        }
+                    ).execute()
+                except Exception as exc:
+                    chunk_failures += 1
+                    # Only log the first chunk failure per company to avoid
+                    # flooding analysis_errors when every insert fails.
+                    if chunk_failures == 1:
+                        _record_persist_step_failure(
+                            operation=f"insert_chunk[idx={idx}]",
+                            table="chunks",
+                            exc=exc,
+                            job_id_legacy=job_id_legacy,
+                            company_slug=slug,
+                        )
 
-    client.table("analyses").insert(
-        {
-            "pitch_deck_id": pitch_deck_id,
-            "company_id": company_id,
-            "job_id": job_uuid,
-            "job_id_legacy": job_id_legacy,
-            "state": _serialize(final_state),
-            "results_payload": _serialize(company_payload),
-            "status": analysis_status,
-            "run_config": _serialize(run_config),
-            "excel_storage_path": excel_storage_path,
-        }
-    ).execute()
+    try:
+        client.table("analyses").insert(
+            {
+                "pitch_deck_id": pitch_deck_id,
+                "company_id": company_id,
+                "job_id": job_uuid,
+                "job_id_legacy": job_id_legacy,
+                "state": _serialize(final_state),
+                "results_payload": _serialize(company_payload),
+                "status": analysis_status,
+                "run_config": _serialize(run_config),
+                "excel_storage_path": excel_storage_path,
+            }
+        ).execute()
+    except Exception as exc:
+        _record_persist_step_failure(
+            operation="insert_analyses_per_company",
+            table="analyses",
+            exc=exc,
+            job_id_legacy=job_id_legacy,
+            company_slug=slug,
+        )
 
-    client.table("company_runs").upsert(
-        {
-            "company_id": company_id,
-            "job_id": job_uuid,
-            "job_id_legacy": job_id_legacy,
-            "company_key": company_key,
-            "company_name": company_name,
-            "startup_slug": slug,
-            "input_order": summary_row.get("specter_input_order"),
-            "decision": company_payload.get("decision"),
-            "total_score": company_payload.get("total_score"),
-            "composite_score": ranking_result.get("composite_score"),
-            "bucket": ranking_result.get("bucket"),
-            "mode": run_config.get("input_mode", "pitchdeck"),
-            "run_created_at": datetime.now(timezone.utc).isoformat(),
-            "result_payload": _serialize(company_payload),
-            **_extract_started_by_fields(run_config),
-        },
-        on_conflict="job_id_legacy,company_key",
-    ).execute()
+    try:
+        client.table("company_runs").upsert(
+            {
+                "company_id": company_id,
+                "job_id": job_uuid,
+                "job_id_legacy": job_id_legacy,
+                "company_key": company_key,
+                "company_name": company_name,
+                "startup_slug": slug,
+                "input_order": summary_row.get("specter_input_order"),
+                "decision": company_payload.get("decision"),
+                "total_score": company_payload.get("total_score"),
+                "composite_score": ranking_result.get("composite_score"),
+                "bucket": ranking_result.get("bucket"),
+                "mode": run_config.get("input_mode", "pitchdeck"),
+                "run_created_at": datetime.now(timezone.utc).isoformat(),
+                "result_payload": _serialize(company_payload),
+                **_extract_started_by_fields(run_config),
+            },
+            on_conflict="job_id_legacy,company_key",
+        ).execute()
+    except Exception as exc:
+        _record_persist_step_failure(
+            operation="upsert_company_runs",
+            table="company_runs",
+            exc=exc,
+            job_id_legacy=job_id_legacy,
+            company_slug=slug,
+        )
     return True
 
 
