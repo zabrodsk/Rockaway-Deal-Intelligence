@@ -77,7 +77,7 @@ def test_list_company_histories_reconciles_missing_company_runs(monkeypatch) -> 
     monkeypatch.setattr(web_db, "_get_client", lambda: object())
     fetch_calls = {"count": 0}
 
-    def fake_fetch(_client, limit_runs):
+    def fake_fetch(_client, limit_runs, *, include_result_payload=True):
         fetch_calls["count"] += 1
         return [] if fetch_calls["count"] == 1 else expected_rows
 
@@ -135,7 +135,7 @@ def test_list_company_histories_requeries_after_recent_reconcile(monkeypatch) ->
     monkeypatch.setattr(web_db, "_get_client", lambda: object())
     fetch_calls = {"count": 0}
 
-    def fake_fetch(_client, limit_runs):
+    def fake_fetch(_client, limit_runs, *, include_result_payload=True):
         fetch_calls["count"] += 1
         return rows_before if fetch_calls["count"] == 1 else rows_after
 
@@ -245,7 +245,7 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
     ]
 
     monkeypatch.setattr(web_db, "_get_client", lambda: object())
-    monkeypatch.setattr(web_db, "_fetch_company_run_rows", lambda _client, limit_runs: rows)
+    monkeypatch.setattr(web_db, "_fetch_company_run_rows", lambda _client, limit_runs, *, include_result_payload=True: rows)
     monkeypatch.setattr(web_db, "backfill_company_runs_from_analyses", lambda limit_jobs=500: 0)
     monkeypatch.setattr(web_db, "_reconcile_missing_company_runs", lambda client, existing_rows, limit_jobs: 0)
 
@@ -276,6 +276,50 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
             "critical_gaps": [],
         }
     ]
+
+
+def test_list_company_histories_can_skip_heavy_run_payloads(monkeypatch) -> None:
+    import web.db as web_db
+
+    rows = [
+        {
+            "company_key": "slug:apaleo",
+            "company_name": "Apaleo",
+            "startup_slug": "apaleo",
+            "job_id_legacy": "job-28",
+            "decision": "invest",
+            "total_score": 60.1,
+            "composite_score": 60.1,
+            "bucket": "watchlist",
+            "mode": "specter",
+            "input_order": 1,
+            "run_created_at": "2026-03-15T22:58:47Z",
+            "created_at": "2026-03-15T22:58:47Z",
+        }
+    ]
+
+    fetch_kwargs = []
+
+    def fake_fetch(_client, limit_runs, *, include_result_payload=True):
+        fetch_kwargs.append(include_result_payload)
+        return rows
+
+    monkeypatch.setattr(web_db, "_get_client", lambda: object())
+    monkeypatch.setattr(web_db, "_fetch_company_run_rows", fake_fetch)
+
+    histories = web_db.list_company_histories(
+        limit_runs=50,
+        perform_maintenance=False,
+        include_run_details=False,
+    )
+
+    assert fetch_kwargs == [False]
+    assert histories[0]["company_name"] == "Apaleo"
+    run_results = histories[0]["runs"][0]["results"]
+    assert run_results["company_name"] == "Apaleo"
+    assert run_results["qa_provenance_rows"] == []
+    assert run_results["argument_rows"] == []
+    assert run_results["ranking_result"]["composite_score"] == 60.1
 
 
 def test_load_company_chat_context_collects_runs_and_chunks(monkeypatch) -> None:

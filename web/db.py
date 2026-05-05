@@ -2445,12 +2445,33 @@ def list_saved_jobs(limit: int = 200) -> list[dict[str, Any]]:
         return []
 
 
-def _fetch_company_run_rows(client: Client, limit_runs: int) -> list[dict[str, Any]]:
-    select_clause = (
-        "company_key, company_name, startup_slug, job_id_legacy, decision, total_score, "
-        "composite_score, bucket, mode, input_order, run_created_at, created_at, result_payload, "
-        "started_by_user_id, started_by_email, started_by_display_name, started_by_label"
-    )
+def _fetch_company_run_rows(
+    client: Client,
+    limit_runs: int,
+    *,
+    include_result_payload: bool = True,
+) -> list[dict[str, Any]]:
+    select_fields = [
+        "company_key",
+        "company_name",
+        "startup_slug",
+        "job_id_legacy",
+        "decision",
+        "total_score",
+        "composite_score",
+        "bucket",
+        "mode",
+        "input_order",
+        "run_created_at",
+        "created_at",
+        "started_by_user_id",
+        "started_by_email",
+        "started_by_display_name",
+        "started_by_label",
+    ]
+    if include_result_payload:
+        select_fields.insert(12, "result_payload")
+    select_clause = ", ".join(select_fields)
     limits_to_try: list[int] = []
     for candidate in (limit_runs, min(limit_runs, 250), min(limit_runs, 100), 50):
         if candidate > 0 and candidate not in limits_to_try:
@@ -2616,6 +2637,7 @@ def list_company_histories(
     limit_runs: int = 1000,
     *,
     perform_maintenance: bool = True,
+    include_run_details: bool = True,
 ) -> list[dict[str, Any]]:
     """Return grouped company histories with per-run records."""
     client = _get_client()
@@ -2623,11 +2645,19 @@ def list_company_histories(
         return []
 
     try:
-        rows_data = _fetch_company_run_rows(client, limit_runs)
+        rows_data = _fetch_company_run_rows(
+            client,
+            limit_runs,
+            include_result_payload=include_run_details,
+        )
         if perform_maintenance:
             if not rows_data:
                 backfill_company_runs_from_analyses()
-                rows_data = _fetch_company_run_rows(client, limit_runs)
+                rows_data = _fetch_company_run_rows(
+                    client,
+                    limit_runs,
+                    include_result_payload=include_run_details,
+                )
             else:
                 inserted = _reconcile_missing_company_runs(
                     client,
@@ -2635,7 +2665,11 @@ def list_company_histories(
                     limit_jobs=max(limit_runs, 200),
                 )
                 if inserted:
-                    rows_data = _fetch_company_run_rows(client, limit_runs)
+                    rows_data = _fetch_company_run_rows(
+                        client,
+                        limit_runs,
+                        include_result_payload=include_run_details,
+                    )
 
         grouped: dict[str, dict[str, Any]] = {}
         for row in rows_data:
@@ -2658,7 +2692,11 @@ def list_company_histories(
                 "started_by_email": row.get("started_by_email"),
                 "started_by_display_name": row.get("started_by_display_name"),
                 "started_by_label": row.get("started_by_label"),
-                "results": _compact_company_run_payload(row.get("result_payload")),
+                "results": _compact_company_run_payload(
+                    row.get("result_payload"),
+                    include_audit_rows=include_run_details,
+                    fallback_row=row,
+                ),
             }
             entry = grouped.setdefault(
                 group_key,
@@ -2719,32 +2757,36 @@ def list_company_histories(
         return []
 
 
-def _compact_company_run_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+def _compact_company_run_payload(
+    payload: dict[str, Any] | None,
+    *,
+    include_audit_rows: bool = True,
+    fallback_row: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     serialized = _serialize(payload or {})
+    fallback = fallback_row or {}
     summary_row = ((serialized.get("summary_rows") or [{}]) or [{}])[0]
     ranking = _serialize(serialized.get("ranking_result") or {})
-    return {
-        "mode": serialized.get("mode"),
+    compacted = {
+        "mode": serialized.get("mode") or fallback.get("mode"),
         "source_mode": serialized.get("source_mode"),
-        "startup_slug": serialized.get("startup_slug") or summary_row.get("startup_slug"),
-        "company_name": serialized.get("company_name") or summary_row.get("company_name"),
-        "decision": serialized.get("decision") or summary_row.get("decision"),
-        "total_score": serialized.get("total_score") or summary_row.get("total_score"),
+        "startup_slug": serialized.get("startup_slug") or summary_row.get("startup_slug") or fallback.get("startup_slug"),
+        "company_name": serialized.get("company_name") or summary_row.get("company_name") or fallback.get("company_name"),
+        "decision": serialized.get("decision") or summary_row.get("decision") or fallback.get("decision"),
+        "total_score": serialized.get("total_score") or summary_row.get("total_score") or fallback.get("total_score"),
         "avg_pro": serialized.get("avg_pro"),
         "avg_contra": serialized.get("avg_contra"),
         "summary_rows": [summary_row] if summary_row else [],
-        "qa_provenance_rows": _serialize(serialized.get("qa_provenance_rows") or []),
-        "argument_rows": _serialize(serialized.get("argument_rows") or []),
         "founders": serialized.get("founders") or summary_row.get("founders") or [],
         "team_members": serialized.get("team_members") or summary_row.get("team_members") or [],
         "ranking_result": {
             "rank": ranking.get("rank") or summary_row.get("rank"),
             "percentile": ranking.get("percentile") or summary_row.get("percentile"),
-            "composite_score": ranking.get("composite_score") or summary_row.get("composite_score"),
+            "composite_score": ranking.get("composite_score") or summary_row.get("composite_score") or fallback.get("composite_score"),
             "strategy_fit_score": ranking.get("strategy_fit_score") or summary_row.get("strategy_fit_score"),
             "team_score": ranking.get("team_score") or summary_row.get("team_score"),
             "upside_score": ranking.get("upside_score") or summary_row.get("upside_score"),
-            "bucket": ranking.get("bucket") or summary_row.get("bucket"),
+            "bucket": ranking.get("bucket") or summary_row.get("bucket") or fallback.get("bucket"),
             "strategy_fit_summary": ranking.get("strategy_fit_summary") or summary_row.get("strategy_fit_summary"),
             "team_summary": ranking.get("team_summary") or summary_row.get("team_summary"),
             "potential_summary": ranking.get("potential_summary") or summary_row.get("potential_summary"),
@@ -2753,6 +2795,13 @@ def _compact_company_run_payload(payload: dict[str, Any] | None) -> dict[str, An
             "dimension_scores": _serialize(ranking.get("dimension_scores") or summary_row.get("dimension_scores") or []),
         },
     }
+    if include_audit_rows:
+        compacted["qa_provenance_rows"] = _serialize(serialized.get("qa_provenance_rows") or [])
+        compacted["argument_rows"] = _serialize(serialized.get("argument_rows") or [])
+    else:
+        compacted["qa_provenance_rows"] = []
+        compacted["argument_rows"] = []
+    return compacted
 
 
 def load_company_chat_context(company_lookup_key: str) -> dict[str, Any] | None:

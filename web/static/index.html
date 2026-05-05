@@ -4785,9 +4785,22 @@
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;vertical-align:middle;margin-right:6px"><polygon points="12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5 12 2"/></svg>
               Augment with Specter intelligence
             </span>
-            <span class="toggle-desc">Auto-detects the company URL in your deck and pulls funding, team, and growth signals from Specter MCP. Skipped silently if no URL is found.</span>
+            <span class="toggle-desc">Auto-detects the company URL in your deck and pulls funding, team, and growth signals from Specter MCP. If no URL is found, you will be asked to confirm the company website before analysis starts.</span>
           </div>
         </label>
+      </div>
+
+      <div id="identity-confirmation-panel" class="web-search-toggle" style="display:none;margin-top:16px;">
+        <div class="toggle-row" style="align-items:flex-start;">
+          <div class="toggle-label" style="width:100%;">
+            <span class="toggle-title">Confirm company website</span>
+            <span class="toggle-desc" id="identity-confirmation-message">We could not identify the company URL from this pitch deck.</span>
+            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+              <input id="identity-company-url-input" class="instructions-input" style="flex:1;min-width:220px;min-height:40px;" placeholder="company.com" autocomplete="off">
+              <button type="button" class="btn-green" id="identity-confirmation-submit" style="margin-top:0;">Continue</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="web-search-toggle" id="fetch-full-team-toggle" style="display:none;margin-top:16px;">
@@ -5107,6 +5120,7 @@ let currentJobId = null;
 let currentResults = null;
 let uploadedFiles = [];
 let specterUrls = [];
+let pendingIdentityConfirmation = null;
 let inputMode = 'specter';
 let inputModeTouched = false;
 const APP_STATE_VERSION = '2026-03-15-analysis-state-v2';
@@ -8255,10 +8269,19 @@ async function api(path, opts = {}) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-        throw new Error(err.detail || 'Request failed');
+        const message = typeof err.detail === 'string'
+          ? err.detail
+          : (err.message || err.detail?.message || 'Request failed');
+        const error = new Error(message);
+        error.payload = err;
+        if (err.code === 'identity_confirmation_required' || err.detail?.code === 'identity_confirmation_required') {
+          error.noRetry = true;
+        }
+        throw error;
       }
       return res.json();
     } catch (err) {
+      if (err?.noRetry) throw err;
       if (attempt === retries) {
         if (err?.name === 'AbortError') {
           throw new Error('Request timed out. Please try again.');
@@ -9812,6 +9835,20 @@ $('#analyze-btn').addEventListener('click', async () => {
     const fetchFullTeam = !!$('#fetch-full-team-checkbox')?.checked;
     const instructions = ($('#instructions-input')?.value || '').trim();
     if (autoDetectedSpecter) setInputMode('specter');
+    const analysisStartPayload = {
+      use_web_search: useWebSearch,
+      use_specter_mcp: useSpecterMcp,
+      fetch_full_team: fetchFullTeam,
+      instructions: instructions || undefined,
+      input_mode: effectiveInputMode,
+      run_name: requestedRunName || undefined,
+      vc_investment_strategy: vcInvestmentStrategy || undefined,
+      phase_models: analysisSelection.phase_models,
+      quality_tier: analysisSelection.quality_tier,
+      premium_phase_models: analysisSelection.premium_phase_models,
+      llm_provider: analysisSelection.llm_provider,
+      llm_model: analysisSelection.llm_model,
+    };
     try {
       await api(`/api/analyze/${currentJobId}`, {
         method: 'POST',
@@ -9819,24 +9856,30 @@ $('#analyze-btn').addEventListener('click', async () => {
           'Content-Type': 'application/json',
           ...(getSupabaseAccessToken() ? { Authorization: `Bearer ${getSupabaseAccessToken()}` } : {}),
         },
-        body: JSON.stringify({
-          use_web_search: useWebSearch,
-          use_specter_mcp: useSpecterMcp,
-          fetch_full_team: fetchFullTeam,
-          instructions: instructions || undefined,
-          input_mode: effectiveInputMode,
-          run_name: requestedRunName || undefined,
-          vc_investment_strategy: vcInvestmentStrategy || undefined,
-          phase_models: analysisSelection.phase_models,
-          quality_tier: analysisSelection.quality_tier,
-          premium_phase_models: analysisSelection.premium_phase_models,
-          llm_provider: analysisSelection.llm_provider,
-          llm_model: analysisSelection.llm_model,
-        }),
+        body: JSON.stringify(analysisStartPayload),
         timeoutMs: 60000,
         retries: 4,
       });
     } catch (err) {
+      if (isIdentityConfirmationError(err)) {
+        upsertRecentRun({
+          jobId: uploadRes.job_id,
+          status: 'pending',
+          progress: identityConfirmationPayload(err).message || 'Company URL confirmation required.',
+          input_mode: effectiveInputMode,
+          runName: requestedRunName,
+          started_by_user_id: supabaseIdentity?.user_id || null,
+          started_by_email: supabaseIdentity?.email || null,
+          started_by_display_name: supabaseIdentity?.display_name || null,
+          started_by_label: supabaseIdentity?.label || null,
+          llm: analysisSelection.llmLabel || null,
+        });
+        showIdentityConfirmationPanel(err, {
+          jobId: uploadRes.job_id,
+          payload: analysisStartPayload,
+        });
+        return;
+      }
       // The backend may still have accepted the job even if this request timed out.
       // Continue from the Analysis overview instead of failing hard.
       upsertRecentRun({
@@ -10021,6 +10064,74 @@ async function pollStatus() {
         'Network connection is unstable. Retrying automatically...';
     }
     setTimeout(pollStatus, 3000);
+  }
+}
+
+function isIdentityConfirmationError(err) {
+  return err?.payload?.code === 'identity_confirmation_required'
+    || err?.payload?.detail?.code === 'identity_confirmation_required';
+}
+
+function identityConfirmationPayload(err) {
+  return err?.payload?.code === 'identity_confirmation_required'
+    ? err.payload
+    : (err?.payload?.detail || {});
+}
+
+function hideIdentityConfirmationPanel() {
+  const panel = $('#identity-confirmation-panel');
+  if (panel) panel.style.display = 'none';
+  pendingIdentityConfirmation = null;
+}
+
+function showIdentityConfirmationPanel(err, retryState) {
+  const payload = identityConfirmationPayload(err);
+  const panel = $('#identity-confirmation-panel');
+  const input = $('#identity-company-url-input');
+  const message = $('#identity-confirmation-message');
+  if (!panel || !input) return;
+  pendingIdentityConfirmation = retryState;
+  if (message) {
+    message.textContent = payload.message || 'Confirm the company website before analysis starts.';
+  }
+  input.value = payload.candidate_url || '';
+  panel.style.display = 'block';
+  showScreen('upload-screen');
+  input.focus();
+}
+
+async function submitConfirmedCompanyUrl() {
+  if (!pendingIdentityConfirmation) return;
+  const input = $('#identity-company-url-input');
+  const confirmedUrl = (input?.value || '').trim();
+  if (!confirmedUrl) {
+    window.alert('Enter the company website before continuing.');
+    return;
+  }
+  const { jobId, payload } = pendingIdentityConfirmation;
+  const body = { ...payload, confirmed_company_url: confirmedUrl };
+  try {
+    await api(`/api/analyze/${jobId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(getSupabaseAccessToken() ? { Authorization: `Bearer ${getSupabaseAccessToken()}` } : {}),
+      },
+      body: JSON.stringify(body),
+      timeoutMs: 60000,
+      retries: 4,
+    });
+    hideIdentityConfirmationPanel();
+    persistActiveJob(jobId);
+    openAnalysisPage({ focusJobId: jobId });
+    fetchSavedJobs({ silent: false });
+    pollStatus();
+  } catch (err) {
+    if (isIdentityConfirmationError(err)) {
+      showIdentityConfirmationPanel(err, { jobId, payload });
+      return;
+    }
+    window.alert(`Failed to start analysis: ${err.message || 'Unknown error'}`);
   }
 }
 
@@ -10988,6 +11099,10 @@ $('#progress-log-modal-overlay').addEventListener('click', (e) => {
 });
 $('#info-open-how-upload')?.addEventListener('click', () => openInfoPage('how-it-works'));
 $('#info-open-docs-upload')?.addEventListener('click', () => openInfoPage('documentation'));
+$('#identity-confirmation-submit')?.addEventListener('click', submitConfirmedCompanyUrl);
+$('#identity-company-url-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitConfirmedCompanyUrl();
+});
 
 // ── Onboarding: Welcome banner ──
 const ONBOARDING_DISMISSED_KEY = 'onboarding_welcome_dismissed';

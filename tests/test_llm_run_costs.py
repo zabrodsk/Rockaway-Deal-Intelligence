@@ -1137,6 +1137,7 @@ def test_start_analysis_persists_supabase_starter_identity(monkeypatch) -> None:
             headers={"Authorization": "Bearer good-token"},
             json={
                 "input_mode": "pitchdeck",
+                "use_specter_mcp": False,
                 "llm_provider": "anthropic",
                 "llm_model": "claude-haiku-4-5-20251001",
             },
@@ -1185,6 +1186,7 @@ def test_start_analysis_persists_requested_llm_selection(monkeypatch) -> None:
             f"/api/analyze/{job_id}",
             json={
                 "input_mode": "pitchdeck",
+                "use_specter_mcp": False,
                 "llm_provider": "anthropic",
                 "llm_model": "claude-haiku-4-5-20251001",
             },
@@ -1230,6 +1232,7 @@ def test_start_analysis_persists_quality_tier_selection(monkeypatch) -> None:
             f"/api/analyze/{job_id}",
             json={
                 "input_mode": "pitchdeck",
+                "use_specter_mcp": False,
                 "quality_tier": "premium",
                 "premium_phase_models": {
                     "decomposition": "claude",
@@ -1291,6 +1294,7 @@ def test_start_analysis_persists_phase_model_selection(monkeypatch) -> None:
             f"/api/analyze/{job_id}",
             json={
                 "input_mode": "pitchdeck",
+                "use_specter_mcp": False,
                 "phase_models": {
                     "decomposition": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
                     "answering": {
@@ -1372,7 +1376,7 @@ def test_start_analysis_defaults_to_phase_model_policy_when_no_selection_is_prov
 
         analyze = client.post(
             f"/api/analyze/{job_id}",
-            json={"input_mode": "pitchdeck"},
+            json={"input_mode": "pitchdeck", "use_specter_mcp": False},
         )
         assert analyze.status_code == 200
         assert started["called"] is True
@@ -1550,6 +1554,7 @@ def test_start_analysis_normalizes_google_provider_alias(monkeypatch) -> None:
             f"/api/analyze/{job_id}",
             json={
                 "input_mode": "pitchdeck",
+                "use_specter_mcp": False,
                 "llm_provider": "google",
                 "llm_model": "gemini-3.1-flash-lite-preview",
             },
