@@ -1897,6 +1897,7 @@ def _list_company_runs_for_ui() -> list[dict[str, Any]]:
         limit_runs=COMPANY_RUNS_OVERVIEW_LIMIT,
         perform_maintenance=False,
         include_run_details=False,
+        include_result_payload=True,
     )
 
 
