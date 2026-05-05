@@ -278,7 +278,7 @@ def test_list_company_histories_keeps_audit_rows_for_company_detail(monkeypatch)
     ]
 
 
-def test_list_company_histories_can_skip_heavy_run_payloads(monkeypatch) -> None:
+def test_list_company_histories_can_return_display_payload_without_audit_rows(monkeypatch) -> None:
     import web.db as web_db
 
     rows = [
@@ -295,6 +295,23 @@ def test_list_company_histories_can_skip_heavy_run_payloads(monkeypatch) -> None
             "input_order": 1,
             "run_created_at": "2026-03-15T22:58:47Z",
             "created_at": "2026-03-15T22:58:47Z",
+            "result_payload": {
+                "company_name": "Apaleo",
+                "startup_slug": "apaleo",
+                "summary_rows": [{
+                    "company_name": "Apaleo",
+                    "startup_slug": "apaleo",
+                    "team_members": [{"full_name": "Alice Founder"}],
+                    "top_pro_1": "Strong product wedge.",
+                }],
+                "ranking_result": {
+                    "composite_score": 60.1,
+                    "bucket": "watchlist",
+                    "strategy_fit_summary": "Good fit.",
+                },
+                "qa_provenance_rows": [{"question": "Heavy audit row"}],
+                "argument_rows": [{"argument_text": "Heavy audit argument"}],
+            },
         }
     ]
 
@@ -311,15 +328,19 @@ def test_list_company_histories_can_skip_heavy_run_payloads(monkeypatch) -> None
         limit_runs=50,
         perform_maintenance=False,
         include_run_details=False,
+        include_result_payload=True,
     )
 
-    assert fetch_kwargs == [False]
+    assert fetch_kwargs == [True]
     assert histories[0]["company_name"] == "Apaleo"
     run_results = histories[0]["runs"][0]["results"]
     assert run_results["company_name"] == "Apaleo"
+    assert run_results["summary_rows"][0]["team_members"] == [{"full_name": "Alice Founder"}]
+    assert run_results["summary_rows"][0]["top_pro_1"] == "Strong product wedge."
     assert run_results["qa_provenance_rows"] == []
     assert run_results["argument_rows"] == []
     assert run_results["ranking_result"]["composite_score"] == 60.1
+    assert run_results["ranking_result"]["strategy_fit_summary"] == "Good fit."
 
 
 def test_load_company_chat_context_collects_runs_and_chunks(monkeypatch) -> None:

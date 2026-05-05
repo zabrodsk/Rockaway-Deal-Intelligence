@@ -2638,17 +2638,19 @@ def list_company_histories(
     *,
     perform_maintenance: bool = True,
     include_run_details: bool = True,
+    include_result_payload: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Return grouped company histories with per-run records."""
     client = _get_client()
     if not client:
         return []
 
+    fetch_result_payload = include_run_details if include_result_payload is None else include_result_payload
     try:
         rows_data = _fetch_company_run_rows(
             client,
             limit_runs,
-            include_result_payload=include_run_details,
+            include_result_payload=fetch_result_payload,
         )
         if perform_maintenance:
             if not rows_data:
@@ -2656,7 +2658,7 @@ def list_company_histories(
                 rows_data = _fetch_company_run_rows(
                     client,
                     limit_runs,
-                    include_result_payload=include_run_details,
+                    include_result_payload=fetch_result_payload,
                 )
             else:
                 inserted = _reconcile_missing_company_runs(
@@ -2668,7 +2670,7 @@ def list_company_histories(
                     rows_data = _fetch_company_run_rows(
                         client,
                         limit_runs,
-                        include_result_payload=include_run_details,
+                        include_result_payload=fetch_result_payload,
                     )
 
         grouped: dict[str, dict[str, Any]] = {}
