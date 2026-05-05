@@ -14,3 +14,13 @@ def test_companies_sort_uses_latest_instead_of_alphabetical() -> None:
     companies_sort_html = match.group(1)
     assert '<option value="latest">LATEST</option>' in companies_sort_html
     assert '<option value="alphabetical">ALPHABETICAL</option>' not in companies_sort_html
+
+
+def test_pitchdeck_identity_confirmation_ui_is_wired() -> None:
+    html = (Path(__file__).resolve().parents[1] / "web" / "static" / "index.html").read_text()
+
+    assert "Skipped silently if no URL is found" not in html
+    assert 'id="identity-confirmation-panel"' in html
+    assert 'id="identity-company-url-input"' in html
+    assert "identity_confirmation_required" in html
+    assert "confirmed_company_url" in html

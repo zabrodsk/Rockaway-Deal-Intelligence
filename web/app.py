@@ -85,7 +85,7 @@ if not any(isinstance(h, _InMemoryLogHandler) for h in _root_logger.handlers):
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Body, Cookie, FastAPI, File, Form, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -902,6 +902,7 @@ class AnalyzeRequest(BaseModel):
     use_web_search: bool = False
     use_specter_mcp: bool = True
     fetch_full_team: bool = False
+    confirmed_company_url: str | None = None
     instructions: str | None = None
     input_mode: str = "pitchdeck"  # pitchdeck | specter | original
     run_name: str | None = None
@@ -916,6 +917,7 @@ class AnalyzeRequest(BaseModel):
         "instructions",
         "run_name",
         "vc_investment_strategy",
+        "confirmed_company_url",
         "llm_provider",
         "llm_model",
         mode="before",
@@ -1894,6 +1896,7 @@ def _list_company_runs_for_ui() -> list[dict[str, Any]]:
     return db.list_company_histories(
         limit_runs=COMPANY_RUNS_OVERVIEW_LIMIT,
         perform_maintenance=False,
+        include_run_details=False,
     )
 
 
@@ -5272,6 +5275,7 @@ async def upload_files(
 
 
 _URL_LIKE_RE = re.compile(r"^(?:https?://)?[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}(?:/.*)?$")
+IDENTITY_CONFIRMATION_REQUIRED_CODE = "identity_confirmation_required"
 
 
 def _normalize_url_for_intake(raw: str) -> str | None:
@@ -5283,6 +5287,119 @@ def _normalize_url_for_intake(raw: str) -> str | None:
     if not _URL_LIKE_RE.match(s):
         return None
     return s
+
+
+def _normalize_confirmed_company_url(raw: str | None) -> str | None:
+    normalized = _normalize_url_for_intake(raw or "")
+    if not normalized:
+        return None
+    try:
+        from agent.ingest.specter_augmentation import _domain_root
+
+        domain = _domain_root(normalized)
+    except Exception:
+        domain = re.sub(r"^https?://", "", normalized.strip().lower()).split("/", 1)[0]
+    return domain or None
+
+
+def _is_single_pitchdeck_identity_gate_job(cache: dict[str, Any], req: AnalyzeRequest) -> bool:
+    if req.input_mode != "pitchdeck" or not req.use_specter_mcp:
+        return False
+    files = list(cache.get("files") or [])
+    return len(files) == 1
+
+
+def _identity_confirmation_response(job_id: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "code": IDENTITY_CONFIRMATION_REQUIRED_CODE,
+            "job_id": job_id,
+            "candidate_url": None,
+            "message": message,
+        },
+    )
+
+
+def _set_pitchdeck_identity(
+    job_id: str,
+    *,
+    company_url: str,
+    identity_source: str,
+    specter_resolution_status: str = "pending",
+) -> None:
+    cache = _results_cache.setdefault(job_id, {})
+    cache["confirmed_company_url"] = company_url
+    cache["identity_source"] = identity_source
+    cache["specter_resolution_status"] = specter_resolution_status
+    run_config = cache.setdefault("run_config", {})
+    run_config["confirmed_company_url"] = company_url
+    run_config["identity_source"] = identity_source
+    run_config["specter_resolution_status"] = specter_resolution_status
+
+
+def _update_specter_resolution_status(job_id: str, status: str) -> None:
+    cache = _results_cache.setdefault(job_id, {})
+    cache["specter_resolution_status"] = status
+    if isinstance(cache.get("run_config"), dict):
+        cache["run_config"]["specter_resolution_status"] = status
+
+
+def _prepare_pitchdeck_identity_gate(
+    job_id: str,
+    *,
+    req: AnalyzeRequest,
+    upload_dir: Path,
+) -> JSONResponse | None:
+    cache = _results_cache.get(job_id, {})
+    if not _is_single_pitchdeck_identity_gate_job(cache, req):
+        return None
+
+    confirmed_url = _normalize_confirmed_company_url(req.confirmed_company_url)
+    if req.confirmed_company_url and not confirmed_url:
+        raise HTTPException(status_code=400, detail="Confirmed company URL is not valid.")
+
+    if confirmed_url:
+        _set_pitchdeck_identity(
+            job_id,
+            company_url=confirmed_url,
+            identity_source="user_confirmed",
+        )
+        _append_progress_and_log(job_id, f"Company URL confirmed by user: {confirmed_url}")
+        return None
+
+    try:
+        from agent.ingest import ingest_startup_folder
+        from agent.ingest.specter_augmentation import extract_company_url
+
+        deck_store = ingest_startup_folder(upload_dir)
+        cache["pitchdeck_identity_store"] = deck_store
+        detected_url = extract_company_url(deck_store)
+    except Exception as exc:
+        print(f"identity-gate: failed to inspect deck for {job_id}: {exc}")
+        detected_url = None
+
+    if detected_url:
+        _set_pitchdeck_identity(
+            job_id,
+            company_url=detected_url,
+            identity_source="deck_detected",
+        )
+        _append_progress_and_log(job_id, f"Company URL detected from deck: {detected_url}")
+        return None
+
+    message = (
+        "We could not confidently identify the company URL from this pitch deck. "
+        "Confirm the company website before starting analysis."
+    )
+    cache["identity_source"] = "confirmation_required"
+    cache["specter_resolution_status"] = "missing_url"
+    if isinstance(cache.get("run_config"), dict):
+        cache["run_config"]["identity_source"] = "confirmation_required"
+        cache["run_config"]["specter_resolution_status"] = "missing_url"
+    _set_job_status(job_id, "pending", message, source="identity_gate")
+    _append_progress_and_log(job_id, "Company URL confirmation required before analysis.")
+    return _identity_confirmation_response(job_id, message)
 
 
 @app.post("/api/upload-urls")
@@ -5426,8 +5543,6 @@ async def start_analysis(
         effective_phase_models = None
         llm_display = llm_selection["label"]
 
-    _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
-    _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
     cache = _results_cache[job_id]
     _jobs[job_id].started_by_user_id = started_by.get("started_by_user_id")
     _jobs[job_id].started_by_email = started_by.get("started_by_email")
@@ -5459,6 +5574,9 @@ async def start_analysis(
         "use_web_search": req.use_web_search,
         "use_specter_mcp": req.use_specter_mcp,
         "fetch_full_team": req.fetch_full_team,
+        "confirmed_company_url": None,
+        "identity_source": None,
+        "specter_resolution_status": None,
         "phase_models": phase_models if (req.phase_models or pipeline_policy is not None and quality_tier is None) else None,
         "quality_tier": quality_tier,
         "premium_phase_models": premium_phase_models if quality_tier == "premium" else None,
@@ -5472,9 +5590,23 @@ async def start_analysis(
     cache["run_costs_aggregate"] = _empty_run_costs_summary()
     cache["versions"] = _runtime_versions()
 
+    upload_dir = Path(cache["upload_dir"])
+    identity_response = _prepare_pitchdeck_identity_gate(
+        job_id,
+        req=req,
+        upload_dir=upload_dir,
+    )
+    if identity_response is not None:
+        return identity_response
+
     if db and db.is_configured():
         run_config = dict(cache["run_config"])
         db.upsert_job(job_id, run_config=run_config, versions=_runtime_versions())
+
+    _set_job_status(job_id, "running", "Starting analysis...", source="start_analysis")
+    _job_controls[job_id] = {"pause_requested": False, "stop_requested": False}
+
+    if db and db.is_configured():
         db.upsert_job_control(
             job_id,
             pause_requested=False,
@@ -6584,22 +6716,34 @@ async def _run_document_analysis(
         ):
             try:
                 from agent.ingest import ingest_startup_folder
-                from agent.ingest.specter_augmentation import augment_with_specter
+                from agent.ingest.specter_augmentation import augment_with_specter_status
                 # The URL extracted from the deck text is the canonical
                 # company identifier. We deliberately do NOT pass
                 # expected_name: filename-derived names are noisy
                 # (e.g. "Zaitra PitchDeck Extended.pdf") and the MCP
                 # client's domain-root check already catches Specter
                 # cross-resolves like Scribe→Shopscribe.
-                deck_store = ingest_startup_folder(upload_dir)
-                seed_store, seed_company = augment_with_specter(
+                cache = _results_cache.get(job_id, {})
+                confirmed_url = cache.get("confirmed_company_url")
+                deck_store = cache.get("pitchdeck_identity_store") or ingest_startup_folder(upload_dir)
+                augmentation = augment_with_specter_status(
                     deck_store,
                     slug=upload_dir.name,
                     fetch_full_team=fetch_full_team,
+                    url_override=confirmed_url,
                     on_log=lambda m: (_append_progress(job_id, m), print(m)),
                 )
+                seed_store = augmentation["store"]
+                seed_company = augmentation["company"]
+                if augmentation.get("status") == "resolved":
+                    _update_specter_resolution_status(job_id, "resolved")
+                    _append_progress(job_id, "Specter resolved confirmed company URL.")
+                elif augmentation.get("url"):
+                    _update_specter_resolution_status(job_id, "deck_only")
+                    _append_progress(job_id, "Specter could not resolve the company URL; continuing deck-only.")
             except Exception as exc:  # noqa: BLE001 — augmentation is best-effort
                 print(f"specter-augment: pre-ingest failed for {upload_dir.name}: {exc}")
+                _update_specter_resolution_status(job_id, "deck_only")
                 seed_store = None
                 seed_company = None
 
@@ -6621,6 +6765,9 @@ async def _run_document_analysis(
                 source="run_document_analysis",
             )
             return
+        confirmed_url = (_results_cache.get(job_id, {}) or {}).get("confirmed_company_url")
+        if confirmed_url and result.get("company") is not None and not getattr(result["company"], "domain", None):
+            result["company"].domain = confirmed_url
         _persist_company_result_to_db(job_id, result)
         _append_progress(job_id, "Finalizing results...")
         _build_results_payload([result], job_id, upload_dir)
