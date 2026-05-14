@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import os
 import re
@@ -19,6 +21,11 @@ _client: Client | None = None
 _client_config: tuple[str, str] | None = None
 logger = logging.getLogger(__name__)
 SOURCE_FILES_BUCKET = os.getenv("SUPABASE_SOURCE_FILES_BUCKET", "analysis-inputs")
+try:
+    FEEDBACK_MAX_SCREENSHOT_BYTES = int(os.getenv("FEEDBACK_MAX_SCREENSHOT_BYTES", "3000000"))
+except Exception:
+    FEEDBACK_MAX_SCREENSHOT_BYTES = 3_000_000
+FEEDBACK_SCREENSHOT_CONTENT_TYPES = {"image/webp"}
 WORKER_ACTIVE_STATUSES = {"queued", "claimed", "running", "finalizing"}
 WORKER_TERMINAL_STATUSES = {"done", "error", "interrupted", "stopped"}
 WORKER_EXECUTION_STALE_SECONDS = int(os.getenv("SPECTER_WORKER_STALE_SECONDS", "120"))
@@ -4248,3 +4255,585 @@ def get_company_analysis_status(company_id: str) -> str | None:
     except Exception as exc:
         _log_supabase_error("get_company_analysis_status", "analyses", exc)
         return None
+# ---------------------------------------------------------------------------
+# Admin — read-only aggregate views
+# ---------------------------------------------------------------------------
+
+def admin_get_all_companies() -> list[dict[str, Any]]:
+    """Return all companies with latest analysis scores for admin overview."""
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        # Companies
+        rows = (
+            client.table("companies")
+            .select("id, name, industry, tagline, domain, fundraising, fundraising_updated_at, created_at")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        companies = list(rows.data or [])
+        if not companies:
+            return []
+
+        # Latest analysis per company
+        company_ids = [c["id"] for c in companies]
+        # Fetch analyses for all companies
+        analysis_rows = (
+            client.table("analyses")
+            .select("company_id, status, results_payload, created_at, error")
+            .in_("company_id", company_ids)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        # Keep only the most recent analysis per company
+        latest: dict[str, dict] = {}
+        for a in (analysis_rows.data or []):
+            cid = a.get("company_id")
+            if cid and cid not in latest:
+                latest[cid] = a
+
+        for c in companies:
+            a = latest.get(c["id"])
+            if a:
+                payload = a.get("results_payload") or {}
+                ranking = payload.get("ranking_result") or {}
+                c["analysis_status"] = a.get("status")
+                c["analysis_created_at"] = a.get("created_at")
+                c["analysis_error"] = a.get("error")
+                c["composite_score"] = ranking.get("composite_score")
+                c["strategy_fit_score"] = ranking.get("strategy_fit_score")
+                c["team_score"] = ranking.get("team_score")
+                c["upside_score"] = ranking.get("upside_score")
+                c["bucket"] = ranking.get("bucket")
+            else:
+                c["analysis_status"] = None
+                c["analysis_created_at"] = None
+                c["analysis_error"] = None
+                c["composite_score"] = None
+                c["strategy_fit_score"] = None
+                c["team_score"] = None
+                c["upside_score"] = None
+                c["bucket"] = None
+
+        return companies
+    except Exception as exc:
+        _log_supabase_error("admin_get_all_companies", "companies", exc)
+        return []
+
+
+def admin_get_all_vc_profiles() -> list[dict[str, Any]]:
+    """Return all VC profiles with match counts for admin overview."""
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        rows = (
+            client.table("vc_profiles")
+            .select("id, user_id, firm_name, investment_thesis, min_strategy_fit, min_team, min_potential, active, created_at")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        profiles = list(rows.data or [])
+        if not profiles:
+            return []
+
+        # Count matches per VC
+        vc_ids = [p["id"] for p in profiles]
+        match_rows = (
+            client.table("matches")
+            .select("vc_profile_id")
+            .in_("vc_profile_id", vc_ids)
+            .execute()
+        )
+        counts: dict[str, int] = {}
+        for m in (match_rows.data or []):
+            vid = m.get("vc_profile_id")
+            if vid:
+                counts[vid] = counts.get(vid, 0) + 1
+
+        for p in profiles:
+            p["match_count"] = counts.get(p["id"], 0)
+
+        return profiles
+    except Exception as exc:
+        _log_supabase_error("admin_get_all_vc_profiles", "vc_profiles", exc)
+        return []
+
+
+def admin_get_all_matches() -> list[dict[str, Any]]:
+    """Return all matches joined with company and VC names for admin overview."""
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        rows = (
+            client.table("matches")
+            .select(
+                "id, strategy_fit_score, team_score, potential_score, composite_score, "
+                "bucket, status, created_at, "
+                "companies(id, name, industry), "
+                "vc_profiles(id, firm_name)"
+            )
+            .order("created_at", desc=True)
+            .limit(200)
+            .execute()
+        )
+        return list(rows.data or [])
+    except Exception as exc:
+        _log_supabase_error("admin_get_all_matches", "matches", exc)
+        return []
+
+
+def admin_get_recent_analyses(limit: int = 40) -> list[dict[str, Any]]:
+    """Return recent analyses with per-run detail for the admin Analyses tab.
+
+    Each row includes:
+      - ``job_id_legacy`` for joining with ``analysis_events``/``model_executions``
+      - ``run_config`` (+ extracted ``phase_models`` and ``started_by``)
+      - ``cost_summary`` extracted from ``results_payload.run_costs`` or rebuilt
+        from ``model_executions`` when the payload is missing the cost block
+    """
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        rows = (
+            client.table("analyses")
+            .select(
+                "id, company_id, job_id_legacy, status, created_at, error, "
+                "results_payload, run_config, "
+                "companies(id, name)"
+            )
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        results: list[dict[str, Any]] = []
+        for a in (rows.data or []):
+            payload = a.get("results_payload") or {}
+            ranking = payload.get("ranking_result") or {}
+            run_config = a.get("run_config") or {}
+            if not isinstance(run_config, dict):
+                run_config = {}
+
+            phase_models = run_config.get("phase_models") if isinstance(run_config.get("phase_models"), dict) else None
+            started_by = _extract_started_by_fields(run_config)
+
+            # Cost summary: prefer the embedded run_costs block; fall back to
+            # aggregating model_executions rows so in-progress runs still show
+            # a live-ish number.
+            run_costs = payload.get("run_costs") if isinstance(payload.get("run_costs"), dict) else None
+            job_id_legacy = a.get("job_id_legacy")
+            if not run_costs and job_id_legacy and job_id_legacy != "portal":
+                try:
+                    run_costs = load_run_costs(job_id_legacy)
+                except Exception:
+                    run_costs = None
+
+            cost_summary: dict[str, Any] | None = None
+            if isinstance(run_costs, dict):
+                cost_summary = {
+                    "status": run_costs.get("status"),
+                    "currency": run_costs.get("currency") or "USD",
+                    "total_usd": run_costs.get("total_usd"),
+                    "llm_usd": run_costs.get("llm_usd"),
+                    "perplexity_usd": run_costs.get("perplexity_usd"),
+                }
+
+            results.append({
+                "id": a.get("id"),
+                "company_id": a.get("company_id"),
+                "company_name": (a.get("companies") or {}).get("name"),
+                "job_id_legacy": job_id_legacy,
+                "status": a.get("status"),
+                "created_at": a.get("created_at"),
+                "error": a.get("error"),
+                "composite_score": ranking.get("composite_score"),
+                "bucket": ranking.get("bucket"),
+                "run_config": run_config,
+                "phase_models": phase_models,
+                "started_by": started_by or None,
+                "cost_summary": cost_summary,
+            })
+        return results
+    except Exception as exc:
+        _log_supabase_error("admin_get_recent_analyses", "analyses", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Admin settings (generic JSONB key/value store)
+# ---------------------------------------------------------------------------
+
+_PIPELINE_MODEL_DEFAULTS_KEY = "pipeline_model_defaults"
+
+
+def admin_get_pipeline_model_defaults() -> dict[str, Any] | None:
+    """Return the stored pipeline model defaults (or None if none persisted)."""
+    client = _get_client()
+    if not client:
+        return None
+    try:
+        rows = (
+            client.table("admin_settings")
+            .select("value")
+            .eq("key", _PIPELINE_MODEL_DEFAULTS_KEY)
+            .limit(1)
+            .execute()
+        )
+        if not rows.data:
+            return None
+        value = rows.data[0].get("value")
+        return value if isinstance(value, dict) else None
+    except Exception as exc:
+        _log_supabase_error(
+            "admin_get_pipeline_model_defaults", "admin_settings", exc
+        )
+        return None
+
+
+def admin_set_pipeline_model_defaults(
+    value: dict[str, Any],
+    *,
+    updated_by: str | None = None,
+) -> dict[str, Any] | None:
+    """Upsert the singleton ``pipeline_model_defaults`` row. Returns stored value."""
+    client = _get_client()
+    if not client:
+        return None
+    try:
+        row = (
+            client.table("admin_settings")
+            .upsert(
+                {
+                    "key": _PIPELINE_MODEL_DEFAULTS_KEY,
+                    "value": _serialize(value or {}),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_by": updated_by,
+                },
+                on_conflict="key",
+            )
+            .execute()
+        )
+        if row.data:
+            stored = row.data[0].get("value")
+            return stored if isinstance(stored, dict) else value
+        return value
+    except Exception as exc:
+        _log_supabase_error(
+            "admin_set_pipeline_model_defaults", "admin_settings", exc
+        )
+        return None
+
+
+def admin_get_all_users() -> list[dict[str, Any]]:
+    """Return all users_profile rows for admin management."""
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        rows = (
+            client.table("users_profile")
+            .select("id, role, display_name, organization, approved, created_at")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return list(rows.data or [])
+    except Exception as exc:
+        _log_supabase_error("admin_get_all_users", "users_profile", exc)
+        return []
+
+
+def admin_set_user_approved(user_id: str, approved: bool) -> bool:
+    """Approve or unapprove a user. Returns True on success."""
+    client = _get_client()
+    if not client or not user_id:
+        return False
+    try:
+        client.table("users_profile").update({"approved": approved}).eq("id", user_id).execute()
+        return True
+    except Exception as exc:
+        _log_supabase_error("admin_set_user_approved", "users_profile", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Data Room
+# ---------------------------------------------------------------------------
+
+def create_data_room_file(
+    *,
+    company_id: str,
+    storage_path: str,
+    original_filename: str,
+    file_size_bytes: int | None = None,
+    mime_type: str | None = None,
+    category: str = "other",
+    also_evidence: bool = False,
+    pitch_deck_id: str | None = None,
+    uploaded_by: str | None = None,
+) -> dict[str, Any] | None:
+    """Insert a data_room_files row. Returns the created row or None."""
+    client = _get_client()
+    if not client or not company_id:
+        return None
+    payload: dict[str, Any] = {
+        "company_id": company_id,
+        "storage_path": storage_path,
+        "original_filename": original_filename,
+        "file_size_bytes": file_size_bytes,
+        "mime_type": mime_type,
+        "category": category,
+        "also_evidence": also_evidence,
+        "pitch_deck_id": pitch_deck_id,
+        "uploaded_by": uploaded_by,
+    }
+    try:
+        rows = client.table("data_room_files").insert(payload).execute()
+        return rows.data[0] if rows.data else None
+    except Exception as exc:
+        _log_supabase_error("create_data_room_file", "data_room_files", exc)
+        return None
+
+
+def list_data_room_files(company_id: str) -> list[dict[str, Any]]:
+    """List all data room files for a company, newest first."""
+    client = _get_client()
+    if not client or not company_id:
+        return []
+    try:
+        rows = (
+            client.table("data_room_files")
+            .select("id, original_filename, file_size_bytes, mime_type, category, also_evidence, created_at")
+            .eq("company_id", company_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return list(rows.data or [])
+    except Exception as exc:
+        _log_supabase_error("list_data_room_files", "data_room_files", exc)
+        return []
+
+
+def get_data_room_file(file_id: str) -> dict[str, Any] | None:
+    """Fetch a single data room file by ID."""
+    client = _get_client()
+    if not client or not file_id:
+        return None
+    try:
+        rows = (
+            client.table("data_room_files")
+            .select("*")
+            .eq("id", file_id)
+            .limit(1)
+            .execute()
+        )
+        return rows.data[0] if rows.data else None
+    except Exception as exc:
+        _log_supabase_error("get_data_room_file", "data_room_files", exc)
+        return None
+
+
+def delete_data_room_file(file_id: str) -> bool:
+    """Delete a data room file row. Returns True on success."""
+    client = _get_client()
+    if not client or not file_id:
+        return False
+    try:
+        client.table("data_room_files").delete().eq("id", file_id).execute()
+        return True
+    except Exception as exc:
+        _log_supabase_error("delete_data_room_file", "data_room_files", exc)
+        return False
+
+
+def delete_storage_file(storage_path: str) -> bool:
+    """Delete a file from Supabase Storage. Returns True on success."""
+    client = _get_client()
+    if not client or not storage_path:
+        return False
+    try:
+        client.storage.from_(SOURCE_FILES_BUCKET).remove([storage_path])
+        return True
+    except Exception as exc:
+        _log_supabase_error("delete_storage_file", "storage", exc)
+        return False
+
+
+def set_data_room_enabled(company_id: str, enabled: bool) -> bool:
+    """Toggle companies.data_room_enabled. Returns True on success."""
+    client = _get_client()
+    if not client or not company_id:
+        return False
+    try:
+        client.table("companies").update({"data_room_enabled": enabled}).eq("id", company_id).execute()
+        return True
+    except Exception as exc:
+        _log_supabase_error("set_data_room_enabled", "companies", exc)
+        return False
+
+
+def list_data_room_files_for_match(
+    match_id: str,
+    vc_user_id: str,
+) -> list[dict[str, Any]] | None:
+    """Get data room files for a match. Verifies VC owns the match and data_room_enabled.
+
+    Returns list of files on success, or None if access denied / not found.
+    """
+    client = _get_client()
+    if not client or not match_id or not vc_user_id:
+        return None
+    try:
+        # 1. Fetch the match and verify VC ownership
+        match_rows = (
+            client.table("matches")
+            .select("id, company_id, vc_profile_id, vc_profiles(user_id)")
+            .eq("id", match_id)
+            .limit(1)
+            .execute()
+        )
+        if not match_rows.data:
+            return None
+        match = match_rows.data[0]
+        vc_profile = match.get("vc_profiles") or {}
+        if vc_profile.get("user_id") != vc_user_id:
+            return None  # VC doesn't own this match
+
+        company_id = match.get("company_id")
+        if not company_id:
+            return None
+
+        # 2. Check data_room_enabled
+        co_rows = (
+            client.table("companies")
+            .select("data_room_enabled")
+            .eq("id", company_id)
+            .limit(1)
+            .execute()
+        )
+        if not co_rows.data or not co_rows.data[0].get("data_room_enabled"):
+            return None
+
+        # 3. Fetch files
+        file_rows = (
+            client.table("data_room_files")
+            .select("id, original_filename, file_size_bytes, mime_type, category, created_at")
+            .eq("company_id", company_id)
+            .order("category")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return list(file_rows.data or [])
+    except Exception as exc:
+        _log_supabase_error("list_data_room_files_for_match", "data_room_files", exc)
+        return None
+
+
+def create_signed_download_url(storage_path: str, expires_in: int = 3600) -> str | None:
+    """Generate a signed URL for downloading a file from Supabase Storage.
+
+    Args:
+        storage_path: Path within the SOURCE_FILES_BUCKET.
+        expires_in: URL validity in seconds (default 1 hour).
+
+    Returns:
+        Signed URL string, or None on error.
+    """
+    client = _get_client()
+    if not client or not storage_path:
+        return None
+    try:
+        result = client.storage.from_(SOURCE_FILES_BUCKET).create_signed_url(
+            storage_path, expires_in
+        )
+        # supabase-py returns {"signedURL": "..."} or {"signedUrl": "..."}
+        return result.get("signedURL") or result.get("signedUrl") or result.get("signed_url")
+    except Exception as exc:
+        _log_supabase_error("create_signed_download_url", "storage", exc)
+        return None
+
+
+class FeedbackScreenshotError(ValueError):
+    """Validation error for feedback screenshot payloads."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def decode_feedback_screenshot(screenshot: Any) -> tuple[str, bytes] | None:
+    """Decode and validate the optional feedback screenshot payload."""
+    if not screenshot:
+        return None
+    if not isinstance(screenshot, dict):
+        raise FeedbackScreenshotError("screenshot must be an object")
+
+    content_type = str(screenshot.get("content_type") or "").strip().lower()
+    if content_type not in FEEDBACK_SCREENSHOT_CONTENT_TYPES:
+        raise FeedbackScreenshotError("unsupported screenshot content type")
+
+    data_base64 = str(screenshot.get("data_base64") or "")
+    if not data_base64:
+        raise FeedbackScreenshotError("screenshot data_base64 is required")
+
+    try:
+        data = base64.b64decode(data_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise FeedbackScreenshotError("screenshot data_base64 is invalid") from exc
+
+    if len(data) > max(1, FEEDBACK_MAX_SCREENSHOT_BYTES):
+        raise FeedbackScreenshotError("screenshot is too large", status_code=413)
+    return content_type, data
+
+
+def upload_feedback_screenshot(feedback_id: str, content_type: str, data: bytes) -> str | None:
+    """Upload a feedback screenshot to private Supabase Storage."""
+    client = _get_client()
+    if not client or not feedback_id or not data:
+        return None
+
+    storage_path = f"feedback/screenshots/{feedback_id}.webp"
+    try:
+        ensure_source_files_bucket()
+        client.storage.from_(SOURCE_FILES_BUCKET).upload(
+            storage_path,
+            data,
+            {"upsert": "false", "content-type": content_type},
+        )
+        return storage_path
+    except Exception as exc:
+        _log_supabase_error("upload_feedback_screenshot", "storage", exc)
+        return None
+
+
+def create_feedback_item(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Insert a feedback_items row. Returns the created row or None."""
+    client = _get_client()
+    if not client:
+        return None
+    try:
+        rows = client.table("feedback_items").insert(payload).execute()
+        return rows.data[0] if rows.data else None
+    except Exception as exc:
+        _log_supabase_error("create_feedback_item", "feedback_items", exc)
+        return None
+
+
+def count_data_room_files(company_id: str) -> int:
+    """Return the number of data room files for a company."""
+    client = _get_client()
+    if not client or not company_id:
+        return 0
+    try:
+        rows = (
+            client.table("data_room_files")
+            .select("id", count="exact")
+            .eq("company_id", company_id)
+            .execute()
+        )
+        return rows.count or 0
+    except Exception as exc:
+        _log_supabase_error("count_data_room_files", "data_room_files", exc)
+        return 0

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Cookie, FastAPI, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Body, Cookie, FastAPI, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -1890,6 +1890,38 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
     return token or None
 
 
+_FEEDBACK_CATEGORIES = {"bug", "improvement", "confusing", "other"}
+_FEEDBACK_MAX_COMMENT_CHARS = 2000
+_FEEDBACK_MAX_URL_CHARS = 2048
+_FEEDBACK_MAX_ROUTE_CHARS = 512
+_FEEDBACK_MAX_JSON_CHARS = 20000
+
+
+def _trim_optional_text(value: Any, max_chars: int) -> str | None:
+    text = str(value or "").strip()
+    return text[:max_chars] if text else None
+
+
+def _safe_feedback_json(value: Any) -> Any:
+    if value is None:
+        return None
+    if not isinstance(value, (dict, list)):
+        value = {"value": str(value)[:1000]}
+    serialized = json.dumps(value, ensure_ascii=False, default=str)
+    if len(serialized) > _FEEDBACK_MAX_JSON_CHARS:
+        return {"truncated_json": serialized[:_FEEDBACK_MAX_JSON_CHARS]}
+    return json.loads(serialized)
+
+
+def _feedback_environment() -> str:
+    env = (os.getenv("APP_ENV") or "development").strip().lower()
+    if env == "production":
+        return "production"
+    if env in {"staging", "testing", "test"}:
+        return "staging"
+    return "local"
+
+
 def _display_name_from_supabase_user(user: dict[str, Any] | None) -> str | None:
     metadata = user.get("user_metadata") if isinstance(user, dict) else None
     if not isinstance(metadata, dict):
@@ -2054,6 +2086,37 @@ async def get_current_user(
         role=profile["role"],
         approved=bool(profile.get("approved", False)),
         display_name=profile.get("display_name"),
+    )
+
+
+async def get_feedback_user(
+    authorization: str | None = Header(default=None),
+) -> CurrentUser:
+    """Resolve feedback identity from Supabase auth; profile rows are optional."""
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    get_user_fn = getattr(db, "get_authenticated_supabase_user", None) if db else None
+    if not callable(get_user_fn):
+        raise HTTPException(status_code=503, detail="Auth service unavailable.")
+
+    supabase_user = await asyncio.to_thread(get_user_fn, token)
+    user_id = str((supabase_user or {}).get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")
+
+    profile = None
+    get_profile_fn = getattr(db, "get_user_profile", None) if db else None
+    if callable(get_profile_fn):
+        profile = await asyncio.to_thread(get_profile_fn, user_id)
+
+    return CurrentUser(
+        id=user_id,
+        email=(supabase_user or {}).get("email"),
+        role=(profile or {}).get("role") or "authenticated",
+        approved=bool((profile or {}).get("approved", False)),
+        display_name=(profile or {}).get("display_name") or _display_name_from_supabase_user(supabase_user),
     )
 
 
@@ -2385,6 +2448,80 @@ async def auth_me(user: CurrentUser = Depends(get_current_user)) -> dict[str, An
         "display_name": user.display_name,
         "companies": companies,
     }
+
+
+@app.post("/api/feedback", status_code=201)
+async def create_feedback(
+    payload: dict = Body(...),
+    user: CurrentUser = Depends(get_feedback_user),
+) -> dict[str, Any]:
+    """Capture authenticated product feedback with optional screenshot context."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database unavailable.")
+
+    payload = payload if isinstance(payload, dict) else {}
+
+    comment = _trim_optional_text(payload.get("comment"), _FEEDBACK_MAX_COMMENT_CHARS)
+    if not comment:
+        raise HTTPException(status_code=400, detail="comment is required")
+
+    category = str(payload.get("category") or "other").strip().lower()
+    if category not in _FEEDBACK_CATEGORIES:
+        category = "other"
+
+    feedback_id = str(uuid.uuid4())
+    screenshot_storage_path = None
+    screenshot_content_type = None
+    screenshot_size_bytes = None
+
+    try:
+        decoded_screenshot = await asyncio.to_thread(
+            db.decode_feedback_screenshot,
+            payload.get("screenshot"),
+        )
+    except getattr(db, "FeedbackScreenshotError", ValueError) as exc:
+        raise HTTPException(
+            status_code=getattr(exc, "status_code", 400),
+            detail=str(exc),
+        ) from exc
+
+    if decoded_screenshot:
+        screenshot_content_type, screenshot_bytes = decoded_screenshot
+        screenshot_storage_path = await asyncio.to_thread(
+            db.upload_feedback_screenshot,
+            feedback_id,
+            screenshot_content_type,
+            screenshot_bytes,
+        )
+        if not screenshot_storage_path:
+            raise HTTPException(status_code=502, detail="screenshot upload failed")
+        screenshot_size_bytes = len(screenshot_bytes)
+
+    row = await asyncio.to_thread(
+        db.create_feedback_item,
+        {
+            "id": feedback_id,
+            "project_key": "deal-intelligence",
+            "surface": "dealintel",
+            "environment": _feedback_environment(),
+            "user_id": user.id,
+            "user_email": user.email,
+            "user_role": user.role,
+            "user_display_name": user.display_name,
+            "category": category,
+            "comment": comment,
+            "page_url": _trim_optional_text(payload.get("page_url"), _FEEDBACK_MAX_URL_CHARS),
+            "route": _trim_optional_text(payload.get("route"), _FEEDBACK_MAX_ROUTE_CHARS),
+            "element_metadata": _safe_feedback_json(payload.get("element_metadata")) or {},
+            "diagnostics": _safe_feedback_json(payload.get("diagnostics")) or {},
+            "screenshot_storage_path": screenshot_storage_path,
+            "screenshot_content_type": screenshot_content_type,
+            "screenshot_size_bytes": screenshot_size_bytes,
+        },
+    )
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to capture feedback.")
+    return {"ok": True, "id": feedback_id}
 
 
 # ---------------------------------------------------------------------------
