@@ -4438,14 +4438,18 @@ async def start_analysis(
     cache["run_costs_aggregate"] = _empty_run_costs_summary()
     cache["versions"] = _runtime_versions()
 
-    upload_dir = Path(cache["upload_dir"])
-    identity_response = _prepare_pitchdeck_identity_gate(
-        job_id,
-        req=req,
-        upload_dir=upload_dir,
-    )
-    if identity_response is not None:
-        return identity_response
+    upload_dir_raw = cache.get("upload_dir")
+    upload_dir = Path(upload_dir_raw) if upload_dir_raw else None
+    if req.input_mode == "pitchdeck":
+        if upload_dir is None:
+            raise HTTPException(status_code=400, detail="Upload directory is unavailable.")
+        identity_response = _prepare_pitchdeck_identity_gate(
+            job_id,
+            req=req,
+            upload_dir=upload_dir,
+        )
+        if identity_response is not None:
+            return identity_response
 
     if db and db.is_configured():
         run_config = dict(cache["run_config"])
@@ -4474,6 +4478,9 @@ async def start_analysis(
         _set_job_status(job_id, "error", f"Worker queue failed. {queue_error}", source="start_analysis")
         _append_progress_and_log(job_id, f"Worker queue failed — {queue_error}")
         raise HTTPException(status_code=503, detail=f"Specter worker queue failed: {queue_error}")
+
+    if upload_dir is None:
+        raise HTTPException(status_code=400, detail="Upload directory is unavailable.")
 
     # Run the analysis loop in a dedicated thread/event-loop to keep
     # the main FastAPI loop responsive for pause/resume/stop controls.
