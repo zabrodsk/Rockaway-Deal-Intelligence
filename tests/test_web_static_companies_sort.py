@@ -24,3 +24,15 @@ def test_pitchdeck_identity_confirmation_ui_is_wired() -> None:
     assert 'id="identity-company-url-input"' in html
     assert "identity_confirmation_required" in html
     assert "confirmed_company_url" in html
+
+
+def test_specter_url_mode_shows_deep_team_profiles_toggle() -> None:
+    html = (Path(__file__).resolve().parents[1] / "web" / "static" / "index.html").read_text()
+
+    assert 'id="fetch-full-team-toggle"' in html
+    assert "Fetch deep team profiles (Specter)" in html
+    assert "function syncUploadOptionToggles()" in html
+    assert "const haveSpecterUrls = inputMode === 'specter' && specterUrls.length > 0;" in html
+    assert "(inputMode === 'pitchdeck' || haveSpecterUrls) ? 'block' : 'none'" in html
+    assert "syncUploadOptionToggles();\n    updateAnalyzeButtonState();" in html
+    assert "fetch_full_team: fetchFullTeam" in html

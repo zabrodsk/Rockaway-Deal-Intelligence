@@ -1,5 +1,6 @@
 import asyncio
 import io
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +26,7 @@ def _login(client: TestClient) -> None:
 
 
 def _reset_state() -> None:
+    os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
     web_app._jobs.clear()
     web_app._job_controls.clear()
     web_app._results_cache.clear()
