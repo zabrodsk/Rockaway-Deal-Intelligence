@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import os
 import re
@@ -19,6 +21,11 @@ _client: Client | None = None
 _client_config: tuple[str, str] | None = None
 logger = logging.getLogger(__name__)
 SOURCE_FILES_BUCKET = os.getenv("SUPABASE_SOURCE_FILES_BUCKET", "analysis-inputs")
+try:
+    FEEDBACK_MAX_SCREENSHOT_BYTES = int(os.getenv("FEEDBACK_MAX_SCREENSHOT_BYTES", "3000000"))
+except Exception:
+    FEEDBACK_MAX_SCREENSHOT_BYTES = 3_000_000
+FEEDBACK_SCREENSHOT_CONTENT_TYPES = {"image/webp"}
 WORKER_ACTIVE_STATUSES = {"queued", "claimed", "running", "finalizing"}
 WORKER_TERMINAL_STATUSES = {"done", "error", "interrupted", "stopped"}
 WORKER_EXECUTION_STALE_SECONDS = int(os.getenv("SPECTER_WORKER_STALE_SECONDS", "120"))
@@ -5129,6 +5136,72 @@ def create_signed_download_url(storage_path: str, expires_in: int = 3600) -> str
         return result.get("signedURL") or result.get("signedUrl") or result.get("signed_url")
     except Exception as exc:
         _log_supabase_error("create_signed_download_url", "storage", exc)
+        return None
+
+
+class FeedbackScreenshotError(ValueError):
+    """Validation error for feedback screenshot payloads."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def decode_feedback_screenshot(screenshot: Any) -> tuple[str, bytes] | None:
+    """Decode and validate the optional feedback screenshot payload."""
+    if not screenshot:
+        return None
+    if not isinstance(screenshot, dict):
+        raise FeedbackScreenshotError("screenshot must be an object")
+
+    content_type = str(screenshot.get("content_type") or "").strip().lower()
+    if content_type not in FEEDBACK_SCREENSHOT_CONTENT_TYPES:
+        raise FeedbackScreenshotError("unsupported screenshot content type")
+
+    data_base64 = str(screenshot.get("data_base64") or "")
+    if not data_base64:
+        raise FeedbackScreenshotError("screenshot data_base64 is required")
+
+    try:
+        data = base64.b64decode(data_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise FeedbackScreenshotError("screenshot data_base64 is invalid") from exc
+
+    if len(data) > max(1, FEEDBACK_MAX_SCREENSHOT_BYTES):
+        raise FeedbackScreenshotError("screenshot is too large", status_code=413)
+    return content_type, data
+
+
+def upload_feedback_screenshot(feedback_id: str, content_type: str, data: bytes) -> str | None:
+    """Upload a feedback screenshot to private Supabase Storage."""
+    client = _get_client()
+    if not client or not feedback_id or not data:
+        return None
+
+    storage_path = f"feedback/screenshots/{feedback_id}.webp"
+    try:
+        ensure_source_files_bucket()
+        client.storage.from_(SOURCE_FILES_BUCKET).upload(
+            storage_path,
+            data,
+            {"upsert": "false", "content-type": content_type},
+        )
+        return storage_path
+    except Exception as exc:
+        _log_supabase_error("upload_feedback_screenshot", "storage", exc)
+        return None
+
+
+def create_feedback_item(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Insert a feedback_items row. Returns the created row or None."""
+    client = _get_client()
+    if not client:
+        return None
+    try:
+        rows = client.table("feedback_items").insert(payload).execute()
+        return rows.data[0] if rows.data else None
+    except Exception as exc:
+        _log_supabase_error("create_feedback_item", "feedback_items", exc)
         return None
 
 
