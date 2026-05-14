@@ -9556,10 +9556,12 @@ function renderFiles() {
   const haveUrls = inputMode === 'specter' && specterUrls.length > 0;
   if (!haveFiles && !haveUrls) {
     section.style.display = 'none';
+    syncUploadOptionToggles();
     updateAnalyzeButtonState();
     return;
   }
   section.style.display = 'block';
+  syncUploadOptionToggles();
   // URL-only run: hide the file-list and "Uploaded files" header (they only
   // describe file uploads). The web-search toggle + Analyze button remain.
   if (header) header.style.display = haveFiles ? 'flex' : 'none';
@@ -9648,6 +9650,19 @@ const MODE_HINTS = {
   specter: 'Upload a Specter companies export, optionally with a people export. CSV or Excel; filenames do not matter.',
   original: 'All files = one company. Best for a folder of docs (deck, financials, etc.).',
 };
+function syncUploadOptionToggles() {
+  const specterMcpToggle = $('#specter-mcp-toggle');
+  if (specterMcpToggle) {
+    specterMcpToggle.style.display = inputMode === 'pitchdeck' ? 'block' : 'none';
+  }
+
+  const fetchFullTeamToggle = $('#fetch-full-team-toggle');
+  if (fetchFullTeamToggle) {
+    const haveSpecterUrls = inputMode === 'specter' && specterUrls.length > 0;
+    fetchFullTeamToggle.style.display =
+      (inputMode === 'pitchdeck' || haveSpecterUrls) ? 'block' : 'none';
+  }
+}
 function setInputMode(mode) {
   inputMode = mode;
   $$('.input-mode-option').forEach((btn) => {
@@ -9658,17 +9673,7 @@ function setInputMode(mode) {
   // Show the URL textarea section only in Specter mode
   const urlsSection = $('#specter-urls-section');
   if (urlsSection) urlsSection.style.display = mode === 'specter' ? 'block' : 'none';
-  // Specter MCP augmentation toggle is only meaningful in pitch-deck mode.
-  const specterMcpToggle = $('#specter-mcp-toggle');
-  if (specterMcpToggle) specterMcpToggle.style.display = mode === 'pitchdeck' ? 'block' : 'none';
-  // Deep team profiles toggle — applies to any MCP-backed run, so both
-  // pitch-deck (URL extracted from deck) and specter (URL-list) modes.
-  // CSV-only Specter intake ignores it server-side.
-  const fetchFullTeamToggle = $('#fetch-full-team-toggle');
-  if (fetchFullTeamToggle) {
-    fetchFullTeamToggle.style.display =
-      (mode === 'pitchdeck' || mode === 'specter') ? 'block' : 'none';
-  }
+  syncUploadOptionToggles();
   // URLs only count for Specter mode — re-render input section so the
   // web-search toggle + Analyze button hide when leaving Specter with URLs entered.
   renderFiles();
@@ -9727,6 +9732,7 @@ const _initialUrlsSection = $('#specter-urls-section');
 if (_initialUrlsSection) {
   _initialUrlsSection.style.display = inputMode === 'specter' ? 'block' : 'none';
 }
+syncUploadOptionToggles();
 
 updateRunNameVisibility();
 $('#llm-model-select')?.addEventListener('change', (event) => {
